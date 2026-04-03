@@ -10,13 +10,3 @@ includes = ["*.rs"]
 [formatter.alejandra]
 command = "alejandra"
 includes = ["*.nix"]
-
-[formatter.elm-format]
-command = "elm-format"
-options = ["--yes"]
-includes = ["*.elm"]
-
-[formatter.prettier]
-command = "prettier"
-options = ["--write"]
-includes = ["*.css"]

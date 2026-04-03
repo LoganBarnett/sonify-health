@@ -48,7 +48,6 @@
       };
       # CRATE:cli:end
 
-
       # Note: The 'lib' crate is not included here as it doesn't produce a
       # binary.
     };
@@ -70,14 +69,9 @@
       pkgs.pkg-config
       pkgs.openssl
       pkgs.jq
-      # Elm toolchain
-      pkgs.elmPackages.elm
-      pkgs.elmPackages.elm-format
-      pkgs.elm2nix
       # Unified formatter
       pkgs.treefmt
       pkgs.alejandra
-      pkgs.prettier
     ];
   in {
     devShells = forAllSystems (system: let
@@ -86,23 +80,13 @@
       default = pkgs.mkShell {
         buildInputs = devPackages pkgs;
         shellHook = ''
-          echo "Rust Template development environment"
+          echo "sonify-health development environment"
           echo ""
           echo "Available Cargo packages (use 'cargo build -p <name>'):"
           cargo metadata --no-deps --format-version 1 2>/dev/null | \
             jq -r '.packages[].name' | \
             sort | \
             sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
-
-          echo ""
-          echo "Elm frontend (frontend/):"
-          echo "  Build:   cd frontend && elm make src/Main.elm --output public/elm.js"
-          echo "  Format:  treefmt"
-          echo "  After changing elm.json dependency versions, regenerate Nix files:"
-          echo "    cd frontend"
-          echo "    elm2nix convert 2>/dev/null > elm-srcs.nix"
-          echo "    elm2nix snapshot"
-          echo "    git add elm-srcs.nix registry.dat && git commit"
 
           # Symlink cargo-husky hooks into .git/hooks/ using paths relative
           # to .git/hooks/ so the repo stays valid after moves or copies.
@@ -189,14 +173,6 @@
         program = "${self.packages.${system}.${key}}/bin/${crate.binary}";
       })
       workspaceCrates);
-
-    # ============================================================================
-    # NIXOS MODULES
-    # ============================================================================
-    nixosModules = {
-      web = import ./nix/modules/web.nix {inherit self;};
-      default = self.nixosModules.web;
-    };
 
     # ============================================================================
     # OVERLAYS

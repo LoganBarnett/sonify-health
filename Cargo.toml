@@ -8,19 +8,14 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Logan Barnett <logustus@gmail.com>"]
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/yourusername/sonify-health"
+repository = "https://gitea.proton/logan/sonify-health"
 
 [workspace.dependencies]
 # Logging and tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
-tracing-journald = "0.3"
-
-# Systemd integration
-sd-notify = "0.4"
-
 # Utilities
 # tap - Enables method chaining and reduces superfluous local variables
 # that only exist to name intermediate results. Prefer .tap() over temporary
@@ -38,26 +33,8 @@ toml = "0.8"
 # Error handling
 thiserror = "2.0"
 
-# Web framework
-axum = "0.8"
-tokio = { version = "1.41", features = ["full"] }
-tokio-listener = { version = "0.5", features = ["axum08"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "fs", "set-header"] }
-
 # Testing
 tempfile = "3"
-
-# OpenMetrics/Prometheus
-prometheus = "0.13"
-
-# OpenAPI
-aide = { version = "0.15", features = ["axum", "axum-json", "axum-query", "scalar", "macros"] }
-schemars = "0.9"
-
-# Authentication
-openidconnect = { version = "3", features = ["reqwest"] }
-tower-sessions = { version = "0.15", features = ["memory-store"] }
 
 # Shared library
 sonify-health-lib = { path = "crates/lib" }
