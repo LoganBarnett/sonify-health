@@ -1,0 +1,685 @@
+#+title:     Sonification
+#+author:    Logan Barnett
+#+email:     logustus@gmail.com
+#+date:      <2026-04-01 Tue>
+#+language:  en
+#+file_tags:
+#+tags:
+
+* Overview
+
+Sonification is the encoding of system state into sound — a persistent,
+ambient audio layer that communicates health, load, and identity without
+requiring visual attention.  The goal is a Star Trek bridge feel: rhythmic
+pulses and tonal shifts that encode real meaning into peripheral awareness.
+
+Each machine self-reports.  There is no centralized collector scraping metrics.
+A machine starts whining when something breaks, groans under load, and hums
+contentedly when healthy.  Physical speaker placement gives spatial location as
+a free information channel — the NixOS server to your left, the Mac to your
+right.
+
+* First Principles
+
+These axioms constrain all sonification design decisions.
+
+1. *Absence is not information.* — A silent check slot is not a health report.
+   Silence has too many causes (speakers broken, machine powered down, monitoring
+   deconfigured, audio process crashed, sox blocked on a locked screen) to assign
+   deliberate meaning to it.  Every scheduled check must produce sound.  The only
+   inference you can draw from silence is that the monitoring infrastructure
+   itself is not functioning — and even that is uncertain.  Think of a heart
+   monitor: a flatline is a sustained tone, not silence.
+
+* Prior Art
+
+The academic field exists but practical implementations for infrastructure
+monitoring are sparse.
+
+- [[https://sonification.de/handbook/][The Sonification Handbook]] — canonical academic reference.
+- [[https://www.usenix.org/legacyurl/peep-network-auralizer-monitoring-your-network-sound][Peep (The Network Auralizer)]] — USENIX 2000.  Created a "sonic ecology"
+  where normal operation sounds like a healthy environment and anomalies become
+  audible disturbances.
+- [[https://paulvickers.github.io/SoNSTAR/][SoNSTAR]] — modern real-time network sonification.  Introduces the concept of
+  a WISP (Weakly Intrusive Sonic Periphery).
+- [[https://sonification.design/][Data Sonification Archive]] — catalog of sonification projects.
+
+Nobody appears to have built this properly for modern infrastructure with
+NixOS-style declarative configuration.
+
+* Existing Implementation
+
+The current prototype lives in ~derivations/sonification-test/~ and uses sox
+~play~ to synthesize sounds from the command line.  Four samples exist today:
+
+| Sample  | Character                     | Frequency | Use Case              |
+|---------+-------------------------------+-----------+-----------------------|
+| ping    | Brief rising chirp            | 880-1320  | Network services      |
+| chime   | Two-tone descending bell      | 554, 440  | Application services  |
+| thrum   | Slow-beating low tone (2Hz)   | 111       | Storage/infra         |
+| healthy | Three descending-volume boops | 523 (C5)  | All-clear heartbeat   |
+
+The ~host-connectivity-monitor~ runs as a launchd user agent (macOS) and plays
+the healthy sound on successful checks or triggers ~alert-me-locally~ after
+sustained downtime.
+
+* Architecture
+
+** Design Principles
+
+1. *Distributed self-report* — each machine produces its own audio.  No central
+   server.  The machine itself is the source of truth about its state.
+2. *Declarative voice assignment* — NixOS/nix-darwin config declares each
+   machine's voice, time slot, and check set.
+3. *Non-intrusive ambience* — sounds should be pleasant enough for continuous
+   background listening.  Anomalies shift the texture, they don't blast alarms
+   (that's what ~alert-me-locally~ is for).
+4. *Spatial encoding* — physical speaker placement provides machine identity for
+   free.
+
+** Multi-Machine Timing
+
+Multiple machines producing sound simultaneously need a time-division scheme to
+avoid cacophony.
+
+- Each machine gets a *time slot* within a repeating cycle.
+- Default: *14-second cycle*, *2-second slots*, supporting up to 7 machines.
+- Both cycle duration and slot duration are configurable in Nix.
+- Each machine's 3-boop health report (~1.4s) fits within its 2s slot with a
+  ~0.6s silence buffer for clean separation.
+- NTP synchronization gives ~10ms precision, which is sufficient for
+  second-level slots.
+- Slot assignments are declarative in Nix config.
+
+When overlap is unavoidable or intentional, sounds must be harmonically
+compatible — see [[*Music Theory and Harmonic Encoding]].
+
+** Timing Precision
+
+Systemd timers default to ~AccuracySec=1min~.  Setting ~AccuracySec=1us~ gets
+microsecond precision, but each activation spawns a process, making sub-second
+intervals impractical.
+
+For second-level discrete sounds (heartbeat pulses, state-change chimes), a
+systemd timer with ~AccuracySec=1s~ suffices.
+
+For continuous analog representation (load hum, temperature-driven pitch shift),
+a *long-running daemon* is required.  A Rust daemon with an internal timer loop
+avoids all process-spawn overhead and achieves millisecond precision trivially.
+
+* Health Report Structure
+
+** The Three-Boop Model
+
+Each machine's health report is a sequence of three tones ("boops") played
+within its time slot.  Each boop corresponds to an independent subsystem check.
+The rhythm — long, short, shorter — mirrors the existing healthy sound and forms
+the recognizable "heartbeat" pattern.
+
+| Boop | Duration | Role                  | Example (M-CL64PK702X)        |
+|------+----------+-----------------------+--------------------------------|
+|    1 | ~0.5s    | Local connectivity    | Can reach the LAN gateway?     |
+|    2 | ~0.25s   | External connectivity | Internet + VPN reachable?      |
+|    3 | ~0.25s   | Primary purpose       | GPU available (ollama seated)? |
+
+The meaning of each boop is configured per-machine.  Boop 3 for a workstation
+might be GPU availability; for a DNS server it might be query resolution health;
+for a media server it might be disk health.  The rhythm and voice stay the
+same — only the check behind each boop changes.
+
+** Severity Encoding
+
+Health state is encoded through *intensity* — louder and higher pitched means
+worse.  The healthy baseline is the calm, quiet voice; distress raises energy.
+The ambient soundscape literally gets more agitated as things degrade.
+
+| Value | State    | Sound modification                              |
+|-------+----------+-------------------------------------------------|
+|     0 | Healthy  | Baseline voice (current gentle sine boop)       |
+|     1 | Degraded | Moderately louder, pitch raised within register |
+|     2 | Down     | Loudest, highest pitch shift within register    |
+
+Each boop carries its own severity independently.  A report of ~0 1 0~ (local
+OK, external degraded, purpose OK) plays the first and third boops normally with
+a stressed second boop.  ~2 2 2~ is a machine screaming.
+
+This gives 27 distinct states (3^3) per machine — far more information density
+than the current binary healthy/alarm model, and all conveyed in under two
+seconds of audio.
+
+** Composite Checks
+
+A single boop may represent multiple underlying checks.  For example, "external
+connectivity" might cover both VPN and public Internet reachability.  This is
+intentional — the system is designed for passive peripheral awareness, not
+precision diagnostics.  The goal is to call attention and provide enough context
+to know whether immediate action is needed, not to replace a dashboard.
+
+* Ambient Stress Layer
+
+** Overview
+
+The heartbeat is discrete and time-slotted — it answers "is this subsystem up?"
+The ambient stress layer is continuous and overlapping — it answers "how hard is
+this machine working right now?"
+
+Where the heartbeat uses percussive boops separated by silence, the stress layer
+uses *drones*: sustained tones whose timbral qualities shift in real time to
+reflect system metrics.  Multiple drones from different machines (or different
+metrics on the same machine) can occupy the same time space simultaneously,
+distinguished by pitch and timbre rather than by time slot.
+
+** Sound Character
+
+The baseline drone is a harmonically rich waveform (sawtooth or pulse wave)
+passed through a *low-pass filter*.  The filter cutoff controls *spectral
+brightness* — how much harmonic content is audible above the fundamental:
+
+- *Low cutoff* → warm, dark hum.  Only the fundamental and lowest harmonics pass
+  through.  Unobtrusive background texture.
+- *High cutoff* → bright, aggressive buzz.  Upper harmonics come through,
+  creating an edgy, attention-grabbing timbre.
+
+Layered on top of the filter is *amplitude modulation* (tremolo).  The
+modulation rate controls *roughness* — a psychoacoustic quality related to how
+"textured" or "churning" the sound feels:
+
+- *Below ~20 Hz* → perceived as tremolo (gentle pulsing).
+- *~20–70 Hz* → perceived as roughness (growling, churning).
+- *Above ~70 Hz* → perceived as buzz or tonal coloring.
+
+Together, filter cutoff and modulation rate give two independent axes of
+increasing distress.
+
+** Stress-to-Sound Mapping
+
+| Stress level | Filter cutoff | Modulation rate | Character                  |
+|--------------+---------------+-----------------+----------------------------|
+| Idle / low   | Low           | Subtle tremolo  | Warm background hum        |
+| Moderate     | Mid           | Entering rough  | Noticeable but not urgent  |
+| High         | High          | Full roughness   | Aggressive, demands attention |
+| Critical     | Wide open     | Deep roughness  | Angry growl                |
+
+The mapping is continuous, not stepped — the sound transitions smoothly as the
+metric changes.  This is why the stress layer requires the fundsp + cpal daemon;
+smooth real-time parameter control is not possible with per-invocation sox.
+
+** Multi-Metric Layering
+
+Each tracked metric gets its own drone voice at a distinct pitch.  Volume
+reflects current value — when GPU load is high but memory pressure is low, the
+GPU drone is prominent while the memory drone is barely perceptible.  The drones
+weave in and out via *amplitude crossfading* as metric values change.
+
+Example metric assignments for a workstation:
+
+| Metric          | Drone pitch | Rationale                          |
+|-----------------+-------------+------------------------------------|
+| GPU load        | Low         | Heavy, physical feel for compute   |
+| Memory pressure | Mid         | Mid-register, distinct from GPU    |
+| Temperature     | Higher      | Rising pitch = rising heat (intuitive) |
+
+Pitch assignments should use harmonically compatible intervals (see [[*Music
+Theory and Harmonic Encoding]]) so that when multiple drones are audible
+simultaneously, they blend rather than clash.
+
+** Relationship to the Heartbeat
+
+The two layers are complementary and occupy different perceptual roles:
+
+| Property     | Heartbeat (boops)        | Stress layer (drones)         |
+|--------------+--------------------------+-------------------------------|
+| Temporality  | Discrete, periodic       | Continuous                    |
+| Time model   | Slotted (no overlap)     | Overlapping (simultaneous)    |
+| Encodes      | Binary/ternary state     | Continuous analog metrics     |
+| Attention    | Peripheral rhythm        | Timbral texture shift         |
+
+The heartbeat tells you *what* is wrong.  The stress layer tells you *how much*
+something is being pushed.  A machine can have a fully healthy heartbeat (~0 0
+0~) while its stress drone is growling because GPU load is at 95% — which may be
+completely expected for a training run.
+
+* Music Theory and Harmonic Encoding
+
+** Consonance as Health
+
+Use [[https://en.wikipedia.org/wiki/Just_intonation][just intonation]] (whole-number frequency ratios) so overlapping sounds
+blend cleanly without beating artifacts.
+
+| Interval       | Ratio | Consonance       | Mapping         |
+|----------------+-------+------------------+-----------------|
+| Perfect Fifth  |   3:2 | Very consonant   | Healthy         |
+| Major Third    |   5:4 | Consonant        | Nominal         |
+| Minor Third    |   6:5 | Mildly consonant | Degraded        |
+| Minor Second   | 16:15 | Very dissonant   | Warning         |
+| Tritone        | 45:32 | Maximally tense  | Critical        |
+
+If each service gets a frequency register and encodes its health as an interval
+relative to a shared root tone, the *aggregate chord quality* becomes an instant
+gestalt of system health.  Major chord = all good.  Increasing dissonance =
+something is off.  You literally hear the system get tense.
+
+** Analog Parameter Mapping
+
+Continuous system metrics map to continuous sound parameters:
+
+- *Tremolo rate* → CPU load (faster pulsing = higher load).
+- *Pitch* → temperature or memory pressure (rising pitch = hotter).
+- *Volume* → general activity level.
+- *Noise floor* → network traffic (pink noise mixed in, volume proportional to
+  throughput).
+
+* TODO Machine Voice Design
+:PROPERTIES:
+:ID:       voice-design
+:END:
+
+How a machine gets "voiced" is an open design question with significant depth.
+
+** The Problem
+
+Pure sine waves are too sterile and indistinct.  With multiple machines, we need
+voices that are *recognizably different* from each other while remaining
+pleasant and non-distracting.  Critically, the voices must not sound like real
+things we'd respond to — no phone rings, no doorbells, no speech-like formants.
+
+** Dimensions to Explore
+
+*** Timbre Through Waveform Blending
+
+A voice is not a single waveform but a *blend*.  Mixing sine, triangle, saw,
+and square waves at different ratios creates distinct timbres the way different
+instruments do.  A mostly-sine voice with a touch of triangle has a different
+character than one with a hint of saw.
+
+*** Envelope Shaping (Attack, Decay, Sustain, Release)
+
+The ADSR envelope gives each voice its own "feel":
+
+- A sharp attack with fast decay → percussive, clicky.
+- A slow attack with long sustain → pad-like, warm.
+- A medium attack with gentle release → bell-like.
+
+This is independent of pitch and waveform, so it multiplies the available voice
+space.
+
+*** Register Assignment
+
+Bass voices for servers (low, rumbly), mid-range for workstations, higher
+registers for lightweight services or edge devices.  Register provides immediate
+spatial-frequency separation.
+
+*** Harmonic Overtones
+
+Adding specific overtones (2nd, 3rd, 5th harmonics at controlled amplitudes)
+creates richness without changing the perceived fundamental pitch.  This is
+essentially how real instruments differ — a clarinet emphasizes odd harmonics, a
+violin emphasizes even ones.
+
+*** Open Questions
+
+- How many distinct voices do we actually need?  (Current machine count plus
+  growth margin.)
+- Should voices be hand-tuned or algorithmically derived from a seed (e.g.
+  machine hostname hashed to voice parameters)?
+- How do stressed/degraded variants of a voice preserve identity while clearly
+  communicating state change?  The voice should be recognizable as "the same
+  machine, but unhappy."
+- What's the minimum timbral distance between voices for reliable
+  identification?  Probably needs listening tests.
+
+*** Hostname-Hashed Voice Generation
+
+Rather than hand-tuning each machine's voice, hash the hostname to
+deterministically derive voice parameters:
+
+- *Base frequency* — selected within the machine's register range.
+- *Waveform blend* — ratios of sine, triangle, and saw.
+- *Envelope shape* — attack and release characteristics.
+- *Rhythmic proportions* — relative durations of the three boops.
+
+Every machine gets a unique voice for free.  The hash is deterministic, so the
+same hostname always produces the same voice — rebuilding or redeploying a
+machine does not change its sound.  Manual overrides remain available in Nix
+config for cases where the generated voice is unpleasant or too similar to a
+neighbor.
+
+**** Algorithm
+
+Hash the hostname once (e.g. SHA-256 or a fast hash like FNV) and use the
+result as the seed for a deterministic PRNG (xoshiro256 or similar).  Each voice
+parameter draws from the RNG sequentially, with clamped ranges that prevent
+degenerate combinations:
+
+#+begin_example
+  seed = hash("silicon")
+  rng  = Xoshiro256(seed)
+
+  base_freq    = rng.next_in_range(100.0, 600.0)   # Hz
+  sine_ratio   = rng.next_in_range(0.5, 1.0)       # dominant
+  tri_ratio    = rng.next_in_range(0.0, 0.3)
+  saw_ratio    = rng.next_in_range(0.0, 0.15)
+  attack_ms    = rng.next_in_range(20.0, 80.0)
+  release_ms   = rng.next_in_range(80.0, 250.0)
+  boop1_ratio  = rng.next_in_range(0.4, 0.6)       # proportion of slot
+  boop2_ratio  = rng.next_in_range(0.2, 0.3)
+  # boop3 gets the remainder
+#+end_example
+
+The ranges are the guardrails — you cannot get an inaudible or unpleasant voice
+because the parameter space does not allow it.  This is the same technique game
+developers use for procedural generation (Minecraft world seeds, etc.).
+
+**** Draw Order Stability
+
+The draw order is a contract.  If a new parameter is inserted between two
+existing draws, every subsequent parameter shifts and all voices change.  To
+prevent this, the draw order is explicit and append-only.
+
+A derive macro on the ~Voice~ struct enforces this:
+
+#+begin_src rust :exports code
+  #[derive(VoiceGenerate)]
+  struct Voice {
+      #[voice_param(order = 0, range = 100.0..600.0)]
+      base_freq: f64,
+
+      #[voice_param(order = 1, range = 0.5..1.0)]
+      sine_ratio: f64,
+
+      #[voice_param(order = 2, range = 0.0..0.3)]
+      tri_ratio: f64,
+
+      #[voice_param(order = 3, range = 0.0..0.15)]
+      saw_ratio: f64,
+
+      #[voice_param(order = 4, range = 20.0..80.0)]
+      attack_ms: f64,
+
+      #[voice_param(order = 5, range = 80.0..250.0)]
+      release_ms: f64,
+
+      #[voice_param(order = 6, range = 0.4..0.6)]
+      boop1_ratio: f64,
+
+      #[voice_param(order = 7, range = 0.2..0.3)]
+      boop2_ratio: f64,
+  }
+#+end_src
+
+The macro:
+
+1. Collects all ~voice_param~ fields, sorts by ~order~.
+2. Generates ~from_hostname(name: &str) -> Self~ that seeds the RNG from the
+   hostname hash and draws each field in order.
+3. Emits a compile-time error if two fields share an ~order~ value or if the
+   sequence 0..N has gaps.
+
+Field position in the struct is irrelevant — fields can be grouped logically
+(all waveform params together, all envelope params together) while the draw
+order is a separate, explicit concern.  Adding a new parameter is always safe:
+find the highest order number, use N+1.  Existing voices do not change.
+
+* Technology Stack
+
+** Historical: sox
+
+The original prototype (~sonification-test~, ~host-connectivity-monitor~) used
+sox ~play~ to synthesize one-shot sounds from the command line.  Sox was useful
+for initial exploration but is unsuitable as a production backend:
+
+- Batch-oriented — each ~play~ spawns a separate process.
+- Process-spawn latency is noticeable to the ear even on idle machines, and
+  becomes significantly worse under load.
+- No persistent audio graph — cannot smoothly transition between states.
+- No real-time parameter control.
+
+A machine under strain is exactly when reliable audio matters most, and that is
+exactly when process-spawn latency is worst.  Sox is retired in favor of a
+long-running daemon.
+
+** Rust Daemon with fundsp + cpal
+
+All sonification — both heartbeat boops and stress drones — runs in a single
+long-running Rust daemon using [[https://github.com/SamiPerttu/fundsp][fundsp]] (audio DSP graph library) and [[https://github.com/RustAudio/cpal][cpal]]
+(cross-platform audio I/O).  The daemon holds the audio device open and
+maintains a live audio graph at all times.  Both discrete heartbeat events and
+continuous stress drones are nodes in the same graph.
+
+Because the daemon owns the audio pipeline end-to-end, only fundamental system
+breakage or extreme resource deprivation can cause audio hiccups — and that
+itself is information.  A stuttering heartbeat tells you the machine is in
+serious trouble before any health check has a chance to report it.
+
+*** fundsp's Composability
+
+fundsp uses operator overloading to create an inline audio graph DSL:
+
+#+begin_src rust :exports code
+  // A voice: sine with tremolo, envelope, and volume.
+  sine_hz(111.0)
+      * lfo(|t| 0.6 + 0.4 * sin_hz(2.0, t))  // 2Hz tremolo, 80% depth
+      * envelope(|t| {
+          let fade_in = if t < 0.06 { sin(t / 0.06 * PI / 2.0) } else { 1.0 };
+          let fade_out = if t > 0.26 { cos((t - 0.26) / 0.14 * PI / 2.0) } else { 1.0 };
+          fade_in * fade_out
+      })
+      * 0.45
+#+end_src
+
+*** Static vs Dynamic Graphs
+
+fundsp offers two graph systems:
+
+- *AudioNode* (static) — monomorphized at compile time.  Zero-cost but rigid.
+- *Net* (dynamic) — heap-allocated, built at runtime.  Supports hot-swap with
+  crossfade.
+
+*** Live Parameter Control
+
+The ~shared()~ primitive allows any thread to update a parameter that the audio
+graph reads in real time:
+
+#+begin_src rust :exports code
+  let load = shared(0.0);
+  let voice = sine_hz(111.0)
+      * lfo(|t| 0.6 + 0.4 * sin_hz(2.0, t))
+      * (var(&load) >> follow(0.5));
+
+  // From the monitoring thread:
+  load.set_value(get_cpu_load());  // voice shifts smoothly
+#+end_src
+
+*** Hot-Swap with Crossfade
+
+The ~Net~ API supports glitch-free node replacement:
+
+#+begin_src rust :exports code
+  net.crossfade(voice_id, Fade::Smooth, 0.2,
+      Box::new(sine_hz(111.0) * lfo(|t| 0.6 + 0.4 * sin_hz(8.0, t))),
+  );
+  net.commit();  // sends change to audio thread
+#+end_src
+
+** TODO Scripting Layer for Voice Definition
+
+Compiling voice definitions directly into the Rust binary works for initial
+prototyping and for validating the ~shared()~ / live-parameter approach.  But
+for the full vision — where voices are declared in Nix config and loaded without
+recompilation — we need a runtime scripting layer.
+
+Options under consideration:
+
+- *Rhai* — pure Rust embeddable scripting language, designed for exactly this
+  pattern.  Safe sandboxed execution.  Would bind fundsp's ~Net~ API into the
+  scripting layer.
+- *Lua* (via ~mlua~ or ~rlua~) — larger ecosystem and mindshare.  Well-proven
+  embedding story.
+- *[[https://github.com/tomara-x/lapis][Lapis]]* — an existing fundsp-specific interpreter/REPL.  Parses a subset
+  of Rust-like syntax mapping directly to fundsp's API.  May have a headless
+  mode, but this is unconfirmed.  As a purpose-built DSL it might be limited in
+  expressing arbitrary functionality (conditionals, data flow from system
+  metrics, etc.) — needs investigation.
+- *Compiled-in definitions* — acceptable as a first pass.  Voice definitions
+  change rarely once tuned.  This approach has the advantage of validating the
+  core ~shared()~ / ~Net~ architecture before adding scripting complexity.
+
+The first pass should compile voices directly to validate the fundsp + cpal
+pipeline and the experience of feeding live system data into ~shared()~
+variables.  The scripting layer can come later once the sound design stabilizes.
+
+* Command Interface
+
+** ~sonify-health~ — CLI Testing Tool
+
+A command-line tool for previewing what a machine's voice sounds like at various
+health states.  Uses the same fundsp audio graph as the daemon but runs
+one-shot: renders the requested state, plays it, and exits.
+
+#+begin_example
+  sonify-health 0 0 0    # All healthy — baseline voice
+  sonify-health 0 1 0    # External connectivity degraded
+  sonify-health 2 2 2    # Everything down — maximum distress
+#+end_example
+
+The three positional arguments correspond to the three boops.  Values are
+severity levels: ~0~ = healthy, ~1~ = degraded, ~2~ = down.
+
+Voice parameters (pitch, waveform, envelope) come from host configuration.  The
+tool reads the current machine's voice config and renders the requested health
+state as audio.
+
+** Daemon
+
+The production runtime is a long-running daemon that plays audio via a
+persistent fundsp + cpal audio graph.  Both the heartbeat boops and the stress
+drones are nodes in the same graph — see [[*Rust Daemon with fundsp + cpal]].
+
+The daemon and the CLI share the same voice rendering code.  The difference is
+lifecycle: the CLI opens the audio device, plays one health report, and exits.
+The daemon holds the audio device open continuously and updates the graph in
+real time as check results and system metrics change.
+
+** Runtime Architecture
+
+The daemon has three independent subsystems that communicate through shared
+state.  No subsystem ever blocks on another.
+
+*** Check Producers
+
+Two kinds of check run on their own schedules:
+
+- *Heartbeat checks* — one command per boop, run periodically (once per cycle).
+  Each writes a severity value (0/1/2) to shared state.
+- *Drone polls* — one command per tracked metric, run periodically.  Each writes
+  a normalized float (0.0–1.0) to shared state.
+
+Check commands are opaque to the daemon.  It spawns the configured command,
+reads the result, and writes to shared state.  The daemon does not need to know
+what "GPU availability" or "LAN connectivity" means — that logic lives in the
+commands.
+
+*** Shared State
+
+The mailbox between checks and audio.  For heartbeat: three severity values (one
+per boop).  For drone: one float per metric.  fundsp's ~shared()~ primitive is
+built for exactly this — one thread writes, the audio graph reads
+lock-free.
+
+If a check command stalls or is slow, the shared state retains its last written
+value.  Audio continues unchanged.  This is correct behavior — the last known
+state is the best available information until a new check completes.
+
+*** Audio Consumer
+
+The audio thread reads shared state and renders sound.  It never spawns
+processes, never waits on checks, never blocks.
+
+- *Heartbeat*: on the machine's time slot, reads the three severity values and
+  plays the boops accordingly.
+- *Drone*: continuously reads metric values through ~var() >> follow()~ for
+  smooth interpolation.  A new poll result transitions the sound smoothly; a
+  stalled poll holds the current sound with no glitch.
+
+*** Command Result Interpretation
+
+Each check command specifies how its result is interpreted:
+
+- *exit-code* — the process exit code maps directly to the severity/metric
+  value.  Simple and natural for checks that are wrappers around ~ping~ or
+  similar tools.
+- *stdout* — the command prints its result to stdout (a severity integer for
+  heartbeat, a float for drone).  More flexible for checks that need to compute
+  a value.
+
+There is no default — the configuration must specify ~result-mode~ explicitly.
+The daemon must know how to read the result before it can run the command.
+
+* TODO NixOS Module Design
+
+#+begin_src nix :exports code
+  services.sonification = {
+    enable = true;
+
+    # Override hostname-hashed voice defaults.  Any field set here takes
+    # precedence over the generated value.  Omitted fields fall through to
+    # the hash.
+    voice = {
+      base-freq = 523;       # C5 — override the hashed frequency.
+      # sine-ratio = ...;    # Leave unset to use the hash-derived value.
+    };
+
+    heartbeat = {
+      slot = 0;              # This machine's position in the cycle.
+      cycle-sec = 14;        # Total cycle duration (all machines).
+      slot-duration-sec = 2; # Time budget per machine.
+
+      checks = [
+        {
+          name = "local";
+          command = "${check-lan}/bin/check-lan";
+          result-mode = "exit-code";  # 0=healthy, 1=degraded, 2=down
+        }
+        {
+          name = "external";
+          command = "${check-external}/bin/check-external";
+          result-mode = "stdout";     # prints "0", "1", or "2"
+        }
+        {
+          name = "purpose";
+          command = "${check-gpu}/bin/check-gpu";
+          result-mode = "exit-code";
+        }
+      ];
+    };
+
+    drone = {
+      metrics = [
+        {
+          name = "gpu-load";
+          command = "${poll-gpu}/bin/poll-gpu-load";
+          result-mode = "stdout";     # prints 0.0–1.0
+          register = "low";
+        }
+        {
+          name = "memory";
+          command = "${poll-mem}/bin/poll-memory";
+          result-mode = "stdout";
+          register = "mid";
+        }
+      ];
+      poll-interval-sec = 2;
+    };
+  };
+#+end_src
+
+* Resources
+
+- [[https://sonification.de/handbook/][The Sonification Handbook]] — free online textbook.
+- [[https://sonification.de/handbook/chapters/chapter15/][Ch. 15: Parameter Mapping Sonification]] — the technique most applicable here.
+- [[https://sonification.de/handbook/chapters/chapter18/][Ch. 18: Process Monitoring]] — directly relevant use case.
+- [[https://github.com/SamiPerttu/fundsp][fundsp]] — Rust audio DSP library with inline graph notation.
+- [[https://github.com/RustAudio/cpal][cpal]] — cross-platform Rust audio I/O.
+- [[https://github.com/tomara-x/lapis][Lapis]] — fundsp interpreter/REPL.
+- [[https://en.wikipedia.org/wiki/Just_intonation][Just Intonation]] — whole-number frequency ratios for clean harmonic blending.
+- [[https://www.kylegann.com/tuning.html][Kyle Gann — Just Intonation Explained]] — practical guide.
