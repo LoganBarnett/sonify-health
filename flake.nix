@@ -178,6 +178,19 @@
       workspaceCrates);
 
     # ============================================================================
+    # MODULES
+    # ============================================================================
+    nixosModules = {
+      daemon = import ./nix/modules/daemon.nix {inherit self;};
+      default = self.nixosModules.daemon;
+    };
+
+    darwinModules = {
+      daemon = import ./nix/modules/daemon.nix {inherit self;};
+      default = self.darwinModules.daemon;
+    };
+
+    # ============================================================================
     # OVERLAYS
     # ============================================================================
     # Uncomment to expose your packages as an overlay
