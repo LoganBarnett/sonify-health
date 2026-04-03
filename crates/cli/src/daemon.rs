@@ -1,4 +1,5 @@
 use crate::config::DaemonConfig;
+use crate::metrics::Metrics;
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
   check, heartbeat,
@@ -28,6 +29,7 @@ pub fn run_daemon(
   voice: &Voice,
   muted: Arc<AtomicBool>,
   running: Arc<AtomicBool>,
+  metrics: Metrics,
 ) -> Result<(), DaemonError> {
   let state = Arc::new(HeartbeatState::default());
 
@@ -40,6 +42,7 @@ pub fn run_daemon(
       let cfg = check_cfg.clone();
       let st = Arc::clone(&state);
       let run = Arc::clone(&running);
+      let m = metrics.clone();
       let interval = Duration::from_secs_f64(config.timing.cycle_duration_secs);
       thread::spawn(move || {
         while run.load(Ordering::Relaxed) {
@@ -51,6 +54,12 @@ pub fn run_daemon(
                 "Heartbeat check completed"
               );
               st.set(i, severity);
+              m.check_severity
+                .with_label_values(&[&cfg.name])
+                .set(severity as i64);
+              m.check_runs
+                .with_label_values(&[&cfg.name, &severity.to_string()])
+                .inc();
             }
             Err(e) => {
               warn!(
@@ -59,6 +68,7 @@ pub fn run_daemon(
                 "Heartbeat check failed, \
                  retaining previous severity"
               );
+              m.check_runs.with_label_values(&[&cfg.name, "error"]).inc();
             }
           }
           thread::sleep(interval);
@@ -105,6 +115,7 @@ pub fn run_daemon(
 
     if !is_muted {
       play_heartbeat(voice, &state)?;
+      metrics.heartbeats_played.inc();
     }
 
     // Sleep through the rest of the slot to avoid

@@ -1,6 +1,7 @@
 mod config;
 mod daemon;
 mod logging;
+mod metrics;
 mod systemd;
 mod web_base;
 
@@ -166,8 +167,9 @@ async fn main() -> Result<(), ApplicationError> {
 async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let muted = Arc::new(AtomicBool::new(false));
   let running = Arc::new(AtomicBool::new(true));
+  let metrics = metrics::Metrics::new();
 
-  let state = AppState::init(Arc::clone(&muted));
+  let state = AppState::init(Arc::clone(&muted), metrics.clone());
   let app = web_base::base_router(state).layer(TraceLayer::new_for_http());
 
   info!("Binding to {}", config.listen_address);
@@ -194,7 +196,13 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let daemon_muted = Arc::clone(&muted);
   let daemon_running = Arc::clone(&running);
   let daemon_handle = tokio::task::spawn_blocking(move || {
-    daemon::run_daemon(&daemon_config, &voice, daemon_muted, daemon_running)
+    daemon::run_daemon(
+      &daemon_config,
+      &voice,
+      daemon_muted,
+      daemon_running,
+      metrics,
+    )
   });
 
   let running_signal = Arc::clone(&running);

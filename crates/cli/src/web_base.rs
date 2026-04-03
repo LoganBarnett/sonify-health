@@ -1,3 +1,4 @@
+use crate::metrics::Metrics;
 use aide::{
   axum::{routing::get_with, ApiRouter},
   openapi::OpenApi,
@@ -11,7 +12,7 @@ use axum::{
   routing::get,
   Json, Router,
 };
-use prometheus::{Encoder, IntCounter, Registry, TextEncoder};
+use prometheus::{Encoder, TextEncoder};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::json;
@@ -24,27 +25,14 @@ use std::sync::{
 
 #[derive(Clone)]
 pub struct AppState {
-  pub registry: Arc<Registry>,
-  pub request_counter: IntCounter,
+  pub metrics: Metrics,
   pub muted: Arc<AtomicBool>,
 }
 
 impl AppState {
-  /// Construct `AppState` with a Prometheus registry and shared mute flag.
-  pub fn init(muted: Arc<AtomicBool>) -> Self {
-    let registry = Registry::new();
-    let request_counter =
-      IntCounter::new("http_requests_total", "Total HTTP requests")
-        .expect("Failed to create counter");
-    registry
-      .register(Box::new(request_counter.clone()))
-      .expect("Failed to register counter");
-
-    Self {
-      registry: Arc::new(registry),
-      request_counter,
-      muted,
-    }
+  /// Construct `AppState` with pre-built metrics and shared mute flag.
+  pub fn init(muted: Arc<AtomicBool>, metrics: Metrics) -> Self {
+    Self { metrics, muted }
   }
 }
 
@@ -76,11 +64,13 @@ async fn get_mute(State(state): State<AppState>) -> Json<MuteResponse> {
 
 async fn put_mute(State(state): State<AppState>) -> Json<MuteResponse> {
   state.muted.store(true, Ordering::Relaxed);
+  state.metrics.muted.set(1);
   Json(MuteResponse { muted: true })
 }
 
 async fn delete_mute(State(state): State<AppState>) -> Json<MuteResponse> {
   state.muted.store(false, Ordering::Relaxed);
+  state.metrics.muted.set(0);
   Json(MuteResponse { muted: false })
 }
 
@@ -88,7 +78,7 @@ async fn delete_mute(State(state): State<AppState>) -> Json<MuteResponse> {
 
 async fn metrics_endpoint(State(state): State<AppState>) -> Response {
   let encoder = TextEncoder::new();
-  let metric_families = state.registry.gather();
+  let metric_families = state.metrics.registry.gather();
   let mut buffer = Vec::new();
 
   match encoder.encode(&metric_families, &mut buffer) {
