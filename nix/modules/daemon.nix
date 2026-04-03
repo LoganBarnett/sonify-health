@@ -58,6 +58,7 @@
   configFile = tomlFormat.generate "sonify-health.toml" ({
       log_level = cfg.logLevel;
       log_format = cfg.logFormat;
+      listen = cfg.listen;
       heartbeat =
         {
           slot = cfg.heartbeat.slot;
@@ -124,6 +125,15 @@ in {
       description = ''
         Log output format.  "text" for human-readable local logs, "json"
         for structured logs consumed by a log aggregator.
+      '';
+    };
+
+    listen = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1:3000";
+      description = ''
+        Address for the web server to bind to (daemon mode).  Exposes
+        health check, metrics, and mute control endpoints.
       '';
     };
 
@@ -219,11 +229,12 @@ in {
         after = ["network.target"];
 
         serviceConfig = {
-          Type = "simple";
+          Type = "notify";
           ExecStart = "${cfg.package}/bin/sonify-health --config ${configFile} daemon";
           User = cfg.user;
           Group = cfg.group;
           SupplementaryGroups = ["audio"];
+          WatchdogSec = "30s";
           Restart = "on-failure";
           RestartSec = "5s";
 

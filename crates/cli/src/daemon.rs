@@ -18,25 +18,17 @@ use tracing::{info, warn};
 pub enum DaemonError {
   #[error("Audio playback failed: {0}")]
   Audio(#[from] AudioError),
-
-  #[error("Failed to register signal handler: {0}")]
-  SignalHandler(#[from] ctrlc::Error),
 }
 
 /// Run the daemon's main loop: spawn check threads, play
 /// heartbeat boops at the configured time slot, and shut down
-/// on SIGINT/SIGTERM.
+/// when `running` becomes false.
 pub fn run_daemon(
   config: &DaemonConfig,
   voice: &Voice,
+  muted: Arc<AtomicBool>,
+  running: Arc<AtomicBool>,
 ) -> Result<(), DaemonError> {
-  let running = Arc::new(AtomicBool::new(true));
-  let r = running.clone();
-  ctrlc::set_handler(move || {
-    info!("Received shutdown signal");
-    r.store(false, Ordering::Relaxed);
-  })?;
-
   let state = Arc::new(HeartbeatState::default());
 
   // Spawn a check thread for each heartbeat check.
@@ -81,6 +73,9 @@ pub fn run_daemon(
     "Daemon started"
   );
 
+  // Track previous mute state to log transitions.
+  let mut was_muted = muted.load(Ordering::Relaxed);
+
   // Main timing loop: wait for slot, play heartbeat.
   while running.load(Ordering::Relaxed) {
     let wait = config.timing.duration_until_next_slot();
@@ -98,7 +93,19 @@ pub fn run_daemon(
       }
     }
 
-    play_heartbeat(voice, &state)?;
+    let is_muted = muted.load(Ordering::Relaxed);
+    if is_muted != was_muted {
+      if is_muted {
+        info!("Audio muted via API");
+      } else {
+        info!("Audio unmuted via API");
+      }
+      was_muted = is_muted;
+    }
+
+    if !is_muted {
+      play_heartbeat(voice, &state)?;
+    }
 
     // Sleep through the rest of the slot to avoid
     // re-triggering.

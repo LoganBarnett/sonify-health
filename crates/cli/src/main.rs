@@ -1,6 +1,8 @@
 mod config;
 mod daemon;
 mod logging;
+mod systemd;
+mod web_base;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ConfigError};
@@ -11,9 +13,16 @@ use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
   drone, heartbeat, DroneRegister, Severity, Voice,
 };
+use std::sync::{
+  atomic::{AtomicBool, Ordering},
+  Arc,
+};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::signal;
+use tower_http::trace::TraceLayer;
 use tracing::info;
+use web_base::AppState;
 
 #[derive(Debug, Error)]
 enum ApplicationError {
@@ -31,6 +40,15 @@ enum ApplicationError {
 
   #[error("Daemon failed: {0}")]
   Daemon(#[from] DaemonError),
+
+  #[error("Failed to bind listener to {address}: {source}")]
+  ListenerBind {
+    address: String,
+    source: std::io::Error,
+  },
+
+  #[error("Server encountered a runtime error: {0}")]
+  ServerRuntime(#[source] std::io::Error),
 }
 
 #[derive(Parser)]
@@ -46,6 +64,9 @@ struct Cli {
 
   #[arg(long, env = "LOG_FORMAT")]
   log_format: Option<String>,
+
+  #[arg(long, env = "LISTEN")]
+  listen: Option<String>,
 
   #[arg(short, long, env = "CONFIG_FILE")]
   config: Option<std::path::PathBuf>,
@@ -99,11 +120,13 @@ enum Command {
   Daemon,
 }
 
-fn main() -> Result<(), ApplicationError> {
+#[tokio::main]
+async fn main() -> Result<(), ApplicationError> {
   let cli = Cli::parse();
   let config = Config::from_args(
     cli.log_level.as_deref(),
     cli.log_format.as_deref(),
+    cli.listen.as_deref(),
     cli.config.as_deref(),
   )?;
 
@@ -136,12 +159,88 @@ fn main() -> Result<(), ApplicationError> {
       run_voice(hostname.as_deref());
       Ok(())
     }
-    Command::Daemon => {
-      let voice = config.voice();
-      daemon::run_daemon(&config.daemon, &voice)?;
-      Ok(())
-    }
+    Command::Daemon => run_daemon(&config).await,
   }
+}
+
+async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
+  let muted = Arc::new(AtomicBool::new(false));
+  let running = Arc::new(AtomicBool::new(true));
+
+  let state = AppState::init(Arc::clone(&muted));
+  let app = web_base::base_router(state).layer(TraceLayer::new_for_http());
+
+  info!("Binding to {}", config.listen_address);
+
+  let listener = tokio_listener::Listener::bind(
+    &config.listen_address,
+    &tokio_listener::SystemOptions::default(),
+    &tokio_listener::UserOptions::default(),
+  )
+  .await
+  .map_err(|source| ApplicationError::ListenerBind {
+    address: config.listen_address.to_string(),
+    source,
+  })?;
+
+  info!("Server listening on {}", config.listen_address);
+
+  systemd::notify_ready();
+  systemd::spawn_watchdog();
+
+  // Spawn the blocking daemon loop in a separate thread.
+  let daemon_config = config.daemon.clone();
+  let voice = config.voice();
+  let daemon_muted = Arc::clone(&muted);
+  let daemon_running = Arc::clone(&running);
+  let daemon_handle = tokio::task::spawn_blocking(move || {
+    daemon::run_daemon(&daemon_config, &voice, daemon_muted, daemon_running)
+  });
+
+  let running_signal = Arc::clone(&running);
+  axum::serve(listener, app.into_make_service())
+    .with_graceful_shutdown(shutdown_signal(running_signal))
+    .await
+    .map_err(ApplicationError::ServerRuntime)?;
+
+  info!("Web server shut down, waiting for daemon loop");
+  daemon_handle
+    .await
+    .expect("Daemon task panicked")
+    .map_err(ApplicationError::Daemon)?;
+
+  info!("Shutdown complete");
+  Ok(())
+}
+
+async fn shutdown_signal(running: Arc<AtomicBool>) {
+  let ctrl_c = async {
+    signal::ctrl_c()
+      .await
+      .expect("Failed to install Ctrl+C handler");
+  };
+
+  #[cfg(unix)]
+  let terminate = async {
+    signal::unix::signal(signal::unix::SignalKind::terminate())
+      .expect("Failed to install SIGTERM handler")
+      .recv()
+      .await;
+  };
+
+  #[cfg(not(unix))]
+  let terminate = std::future::pending::<()>();
+
+  tokio::select! {
+    _ = ctrl_c => {
+      info!("Received Ctrl+C, shutting down gracefully");
+    },
+    _ = terminate => {
+      info!("Received SIGTERM, shutting down gracefully");
+    },
+  }
+
+  running.store(false, Ordering::Relaxed);
 }
 
 fn run_heartbeat_preview(

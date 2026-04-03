@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[lib]
+name = "sonify_health_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sonify-health"
 path = "src/main.rs"
@@ -18,7 +22,20 @@ fundsp = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-tap = { workspace = true }  # For method chaining, reduces superfluous locals
+tap = { workspace = true }
 ctrlc = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tokio-listener = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+prometheus = { workspace = true }
+aide = { workspace = true }
+schemars = { workspace = true }
+sd-notify = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+tracing-journald = "0.3"

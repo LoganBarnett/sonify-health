@@ -51,6 +51,23 @@ gethostname = "0.4"
 # Signal handling
 ctrlc = "3.4"
 
+# Web server
+axum = "0.8"
+tokio = { version = "1.41", features = ["full"] }
+tokio-listener = { version = "0.5", features = ["axum08"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# Observability
+prometheus = "0.13"
+
+# OpenAPI
+aide = { version = "0.15", features = ["axum", "axum-json", "axum-query", "scalar", "macros"] }
+schemars = "0.9"
+
+# Systemd integration
+sd-notify = "0.4"
+
 # Proc-macro support
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 quote = "1.0"

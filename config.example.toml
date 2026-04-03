@@ -3,6 +3,7 @@
 
 log_level = "info"   # trace, debug, info, warn, error
 log_format = "text"  # text, json
+listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 
 # Override hostname-derived voice parameters.
 # Omitted fields use the hash-derived default.

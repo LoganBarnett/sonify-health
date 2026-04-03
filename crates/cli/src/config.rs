@@ -5,6 +5,7 @@ use sonify_health_lib::{
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use tokio_listener::ListenerAddress;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -33,9 +34,10 @@ pub enum ConfigError {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct ConfigFileRaw {
+pub(crate) struct ConfigFileRaw {
   log_level: Option<String>,
   log_format: Option<String>,
+  listen: Option<String>,
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
 }
@@ -68,6 +70,7 @@ impl ConfigFileRaw {
 pub struct Config {
   pub log_level: LogLevel,
   pub log_format: LogFormat,
+  pub listen_address: ListenerAddress,
   voice_overrides: VoiceOverrides,
   pub daemon: DaemonConfig,
 }
@@ -85,6 +88,7 @@ impl Config {
   pub fn from_args(
     log_level: Option<&str>,
     log_format: Option<&str>,
+    listen: Option<&str>,
     config_path: Option<&Path>,
   ) -> Result<Self, ConfigError> {
     let file = match config_path {
@@ -111,6 +115,12 @@ impl Config {
       .parse::<LogFormat>()
       .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
+    let listen_address = listen
+      .or(file.listen.as_deref())
+      .unwrap_or("127.0.0.1:3000")
+      .parse::<ListenerAddress>()
+      .map_err(|e| ConfigError::Validation(e.to_string()))?;
+
     let daemon = file
       .heartbeat
       .map(|hb| DaemonConfig {
@@ -122,6 +132,7 @@ impl Config {
     Ok(Config {
       log_level,
       log_format,
+      listen_address,
       voice_overrides: file.voice.unwrap_or_default(),
       daemon,
     })
