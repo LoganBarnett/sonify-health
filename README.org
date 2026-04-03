@@ -46,7 +46,7 @@ Play three boops at the given severity levels (0 = healthy, 1 = degraded,
 #+begin_src sh :results none :exports code
 sonify-health preview 0 0 0             # all healthy
 sonify-health preview 0 1 0             # external connectivity degraded
-sonify-health preview --health 2 2 2    # explicit --health flag
+sonify-health preview --heartbeat 2 2 2  # explicit --heartbeat flag
 #+end_src
 
 *** Drone

@@ -56,7 +56,7 @@ struct Cli {
 
 #[derive(Clone, Debug, ValueEnum)]
 enum SoundType {
-  Health,
+  Heartbeat,
   Drone,
 }
 
@@ -65,15 +65,15 @@ enum Command {
   /// Preview a sound layer (heartbeat or drone).
   Preview {
     /// Sound type to preview.
-    #[arg(long, value_enum, default_value_t = SoundType::Health)]
+    #[arg(long, value_enum, default_value_t = SoundType::Heartbeat)]
     sound_type: SoundType,
 
-    /// Sugar: equivalent to --sound-type health.
+    /// Sugar: equivalent to --sound-type heartbeat.
     #[arg(long, conflicts_with_all = ["sound_type", "drone"])]
-    health: bool,
+    heartbeat: bool,
 
     /// Sugar: equivalent to --sound-type drone.
-    #[arg(long, conflicts_with_all = ["sound_type", "health"])]
+    #[arg(long, conflicts_with_all = ["sound_type", "heartbeat"])]
     drone: bool,
 
     /// Drone register (low/mid/high). Only used with drone mode.
@@ -84,7 +84,7 @@ enum Command {
     #[arg(long, default_value_t = 5.0)]
     duration: f64,
 
-    /// Positional values: 3 severities for health, 1 metric for drone.
+    /// Positional values: 3 severities for heartbeat, 1 metric for drone.
     values: Vec<String>,
   },
 
@@ -112,7 +112,7 @@ fn main() -> Result<(), ApplicationError> {
   match cli.command {
     Command::Preview {
       sound_type,
-      health,
+      heartbeat,
       drone,
       register,
       duration,
@@ -120,13 +120,13 @@ fn main() -> Result<(), ApplicationError> {
     } => {
       let effective = if drone {
         SoundType::Drone
-      } else if health {
-        SoundType::Health
+      } else if heartbeat {
+        SoundType::Heartbeat
       } else {
         sound_type
       };
       match effective {
-        SoundType::Health => run_health_preview(&config, &values),
+        SoundType::Heartbeat => run_heartbeat_preview(&config, &values),
         SoundType::Drone => {
           run_drone_preview(&config, register, duration, &values)
         }
@@ -144,7 +144,7 @@ fn main() -> Result<(), ApplicationError> {
   }
 }
 
-fn run_health_preview(
+fn run_heartbeat_preview(
   config: &Config,
   values: &[String],
 ) -> Result<(), ApplicationError> {
