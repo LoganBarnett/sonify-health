@@ -1,13 +1,16 @@
-use clap::Parser;
-use sonify_health_lib::{LogFormat, LogLevel};
 use serde::Deserialize;
-use std::path::PathBuf;
+use sonify_health_lib::{
+  check::HeartbeatCheckConfig, timing::TimingConfig, LogFormat, LogLevel,
+  Voice, VoiceOverrides,
+};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
   #[error(
-    "Failed to read configuration file at {path:?} during startup: {source}"
+    "Failed to read configuration file at {path:?}: \
+     {source}"
   )]
   FileRead {
     path: PathBuf,
@@ -15,7 +18,10 @@ pub enum ConfigError {
     source: std::io::Error,
   },
 
-  #[error("Failed to parse configuration file at {path:?}: {source}")]
+  #[error(
+    "Failed to parse configuration file at {path:?}: \
+     {source}"
+  )]
   Parse {
     path: PathBuf,
     #[source]
@@ -26,49 +32,35 @@ pub enum ConfigError {
   Validation(String),
 }
 
-#[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
-pub struct CliRaw {
-  /// Log level (trace, debug, info, warn, error)
-  #[arg(long, env = "LOG_LEVEL")]
-  pub log_level: Option<String>,
-
-  /// Log format (text, json)
-  #[arg(long, env = "LOG_FORMAT")]
-  pub log_format: Option<String>,
-
-  /// Path to configuration file
-  #[arg(short, long, env = "CONFIG_FILE")]
-  pub config: Option<PathBuf>,
-
-  /// Example: Name to greet
-  #[arg(short, long)]
-  pub name: Option<String>,
+#[derive(Debug, Deserialize, Default)]
+struct ConfigFileRaw {
+  log_level: Option<String>,
+  log_format: Option<String>,
+  voice: Option<VoiceOverrides>,
+  heartbeat: Option<HeartbeatSectionRaw>,
 }
 
 #[derive(Debug, Deserialize, Default)]
-pub struct ConfigFileRaw {
-  pub log_level: Option<String>,
-  pub log_format: Option<String>,
-  pub name: Option<String>,
+struct HeartbeatSectionRaw {
+  #[serde(flatten)]
+  timing: Option<TimingConfig>,
+  #[serde(default)]
+  checks: Vec<HeartbeatCheckConfig>,
 }
 
 impl ConfigFileRaw {
-  pub fn from_file(path: &PathBuf) -> Result<Self, ConfigError> {
+  fn from_file(path: &Path) -> Result<Self, ConfigError> {
     let contents = std::fs::read_to_string(path).map_err(|source| {
       ConfigError::FileRead {
-        path: path.clone(),
+        path: path.to_path_buf(),
         source,
       }
     })?;
 
-    let config: ConfigFileRaw =
-      toml::from_str(&contents).map_err(|source| ConfigError::Parse {
-        path: path.clone(),
-        source,
-      })?;
-
-    Ok(config)
+    toml::from_str(&contents).map_err(|source| ConfigError::Parse {
+      path: path.to_path_buf(),
+      source,
+    })
   }
 }
 
@@ -76,49 +68,68 @@ impl ConfigFileRaw {
 pub struct Config {
   pub log_level: LogLevel,
   pub log_format: LogFormat,
-  pub name: String,
+  voice_overrides: VoiceOverrides,
+  pub daemon: DaemonConfig,
+}
+
+/// Configuration specific to daemon mode.
+#[derive(Debug, Clone, Default)]
+pub struct DaemonConfig {
+  pub timing: TimingConfig,
+  pub heartbeat_checks: Vec<HeartbeatCheckConfig>,
 }
 
 impl Config {
-  pub fn from_cli_and_file(cli: CliRaw) -> Result<Self, ConfigError> {
-    let config_file = if let Some(config_path) = &cli.config {
-      ConfigFileRaw::from_file(config_path)?
-    } else {
-      let default_config_path = PathBuf::from("config.toml");
-      if default_config_path.exists() {
-        ConfigFileRaw::from_file(&default_config_path)?
-      } else {
-        ConfigFileRaw::default()
+  /// Build a validated configuration by merging CLI
+  /// arguments with an optional config file.
+  pub fn from_args(
+    log_level: Option<&str>,
+    log_format: Option<&str>,
+    config_path: Option<&Path>,
+  ) -> Result<Self, ConfigError> {
+    let file = match config_path {
+      Some(p) => ConfigFileRaw::from_file(p)?,
+      None => {
+        let default = PathBuf::from("config.toml");
+        if default.exists() {
+          ConfigFileRaw::from_file(&default)?
+        } else {
+          ConfigFileRaw::default()
+        }
       }
     };
 
-    let log_level_str = cli
-      .log_level
-      .or(config_file.log_level)
-      .unwrap_or_else(|| "info".to_string());
-
-    let log_level = log_level_str
+    let log_level = log_level
+      .or(file.log_level.as_deref())
+      .unwrap_or("info")
       .parse::<LogLevel>()
       .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
-    let log_format_str = cli
-      .log_format
-      .or(config_file.log_format)
-      .unwrap_or_else(|| "text".to_string());
-
-    let log_format = log_format_str
+    let log_format = log_format
+      .or(file.log_format.as_deref())
+      .unwrap_or("text")
       .parse::<LogFormat>()
       .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
-    let name = cli
-      .name
-      .or(config_file.name)
-      .unwrap_or_else(|| "World".to_string());
+    let daemon = file
+      .heartbeat
+      .map(|hb| DaemonConfig {
+        timing: hb.timing.unwrap_or_default(),
+        heartbeat_checks: hb.checks,
+      })
+      .unwrap_or_default();
 
     Ok(Config {
       log_level,
       log_format,
-      name,
+      voice_overrides: file.voice.unwrap_or_default(),
+      daemon,
     })
+  }
+
+  /// Resolve the machine's voice: hostname-derived defaults
+  /// with any configured overrides applied.
+  pub fn voice(&self) -> Voice {
+    Voice::from_current_host().with_overrides(&self.voice_overrides)
   }
 }

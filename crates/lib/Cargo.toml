@@ -12,6 +12,14 @@ tracing = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tap = { workspace = true }  # For method chaining, reduces superfluous locals
+clap = { workspace = true }
+fundsp = { workspace = true }
+cpal = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+rand_xoshiro = { workspace = true }
+gethostname = { workspace = true }
+sonify-health-voice-derive = { workspace = true }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }

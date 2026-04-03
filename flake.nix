@@ -43,8 +43,8 @@
       # CLI application
       cli = {
         name = "sonify-health-cli";
-        binary = "sonify-health-cli";
-        description = "CLI application";
+        binary = "sonify-health";
+        description = "Infrastructure sonification CLI and daemon";
       };
       # CRATE:cli:end
 
@@ -122,6 +122,9 @@
         buildInputs = with pkgs;
           [
             openssl
+          ]
+          ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            pkgs.alsa-lib
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs.darwin; [
             libiconv

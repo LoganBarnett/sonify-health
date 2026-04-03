@@ -1,0 +1,7 @@
+error: voice_param order 1 is missing — orders must be contiguous 0..2
+ --> tests/compile_fail/gap_in_order.rs:3:10
+  |
+3 | #[derive(VoiceGenerate)]
+  |          ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `VoiceGenerate` (in Nightly builds, run with -Z macro-backtrace for more info)

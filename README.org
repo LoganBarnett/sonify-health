@@ -1,64 +1,120 @@
-#+title:     <project-name>
+#+title:     sonify-health
 #+language:  en
 
 * Introduction
 
-Briefly describe the problem this project solves and how it solves it.
-Cover:
+sonify-health turns infrastructure health into ambient sound.  Each machine
+self-reports via a two-layer audio model:
 
-- What pain point or workflow does this address?
-- How does this project fit into a user's existing toolchain?
-- What are the two or three things a reader should know immediately?
+- *Heartbeat* — three percussive boops played in a time-slotted cycle.  Each
+  boop encodes one subsystem check as healthy (baseline), degraded (minor third
+  shift), or down (tritone shift).
+- *Drone* — a continuous stress layer whose timbre, roughness, and volume shift
+  in real time with system metrics like GPU load or memory pressure.
 
-Keep this section short — two or three paragraphs at most.
+The result is a Star Trek bridge feel: rhythmic pulses and tonal shifts that
+encode real meaning into peripheral awareness without requiring visual
+attention.  Physical speaker placement gives spatial location for free.
+
+See [[file:sonification.org][sonification.org]] for the full design rationale.
 
 * Installation
 
-Explain how to install the project.  Cover at minimum:
+** From source (inside Nix devshell)
 
-- Installing from source (include any toolchain or system prerequisites).
-- Installing a pre-built release artifact, if applicable.
-- Installing the library crate via ~Cargo.toml~, if the project ships
-  one.
+#+begin_src sh :results none :exports code
+nix develop --command cargo build --release --workspace
+#+end_src
+
+The binary is at =target/release/sonify-health=.
+
+** Nix build
+
+#+begin_src sh :results none :exports code
+nix build
+#+end_src
 
 * Usage
 
-Show the most common invocations with concrete, copy-pasteable
-examples.  Prefer real-looking inputs and outputs over abstract
-placeholders.
+** Preview sounds
 
-Organize sub-sections around the features a user is most likely to
-reach for first.  Avoid exhaustively listing every flag here — the
-~--help~ output covers that.
+*** Heartbeat
 
-* Gotchas and Tradeoffs
+Play three boops at the given severity levels (0 = healthy, 1 = degraded,
+2 = down):
 
-Document the non-obvious behaviors and design decisions that a user
-is likely to trip over:
+#+begin_src sh :results none :exports code
+sonify-health preview 0 0 0             # all healthy
+sonify-health preview 0 1 0             # external connectivity degraded
+sonify-health preview --health 2 2 2    # explicit --health flag
+#+end_src
 
-- Default behaviors that differ from what users might expect.
-- Known limitations (finite color palette, heuristic detection, etc.).
-- Performance or correctness tradeoffs made deliberately.
-- Anything where "it depends" or "by design" is the honest answer.
+*** Drone
 
-* How to Exercise Various Features
+Play a continuous stress drone at a given metric value (0.0–1.0):
 
-Provide a brief tour of less-obvious knobs:
+#+begin_src sh :results none :exports code
+sonify-health preview --drone 0.8
+sonify-health preview --drone --register low 0.5
+sonify-health preview --drone --register high --duration 8 0.5
+#+end_src
 
-- Environment variables that mirror CLI flags.
-- Flags that interact non-trivially with each other.
-- Edge cases worth demonstrating (empty input, special characters,
-  large input, etc.).
+** Inspect a machine's voice
 
-This section can be more terse than the main Usage section — its
-purpose is discoverability, not a tutorial.
+Print the hostname-derived voice parameters:
+
+#+begin_src sh :results none :exports code
+sonify-health voice
+sonify-health voice --hostname silicon
+#+end_src
+
+** Run the daemon
+
+Long-running mode that spawns check commands, updates shared state, and plays
+the heartbeat at the configured time slot:
+
+#+begin_src sh :results none :exports code
+sonify-health daemon --config config.toml
+#+end_src
+
+Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
+
+* Configuration
+
+Copy =config.example.toml= to =config.toml=.  All fields are optional; the
+daemon runs with sensible defaults (slot 0, 14-second cycle, no checks).
+
+Key sections:
+
+- =log_level= / =log_format= — logging control.
+- =[voice]= — override any hostname-derived voice parameter.
+- =[heartbeat]= — timing slot and check commands.
+
+Each =[[heartbeat.checks]]= entry maps to one of the three boops.  The
+=result_mode= field determines how the command result is read:
+
+- =exit-code= — exit code 0/1/2 maps to healthy/degraded/down.
+- =stdout= — command prints the severity value to stdout.
+
+* Gotchas
+
+- *Audio device access* — the daemon opens the default audio output.  On Linux
+  this requires ALSA or PipeWire.  On macOS, CoreAudio is used directly.
+- *NTP precision* — multi-machine timing relies on wall-clock synchronization.
+  NTP provides ~10 ms accuracy, sufficient for 2-second slots.
+- *Nix sandbox* — =nix build= runs tests in a sandbox without audio hardware.
+  Integration tests that play sound are skipped in the sandbox build.
 
 * Contributing
 
-Summarize the contribution workflow and link to the full guide:
+#+begin_src sh :results none :exports code
+nix develop --command cargo test --workspace
+nix develop --command cargo clippy --workspace
+#+end_src
 
-- How to run the test suite.
-- Code formatting and lint requirements.
-- Where to open issues or send patches.
+The pre-commit hook runs =rustfmt=.  Commits must go through the Nix devshell
+so the correct toolchain is in =PATH=:
 
-See [[file:CONTRIBUTING.org][CONTRIBUTING.org]] for details.
+#+begin_src sh :results none :exports code
+nix develop --command git commit -m "your message"
+#+end_src

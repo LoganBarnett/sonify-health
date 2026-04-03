@@ -1,48 +1,40 @@
 use std::{path::PathBuf, process::Command};
 
-fn get_binary_path() -> PathBuf {
+fn binary_path() -> PathBuf {
   let mut path =
     std::env::current_exe().expect("Failed to get current executable path");
+  path.pop(); // test executable name
+  path.pop(); // deps dir
+  path.push("sonify-health");
 
-  // Navigate from the test executable to the binary
-  path.pop(); // remove test executable name
-  path.pop(); // remove deps dir
-  path.push("sonify-health-cli");
-
-  // If the binary doesn't exist in release, try debug
   if !path.exists() {
     path.pop();
     path.pop();
     path.push("debug");
-    path.push("sonify-health-cli");
+    path.push("sonify-health");
   }
-
   path
 }
 
 #[test]
-fn test_help_flag() {
-  let output = Command::new(get_binary_path()).arg("--help").output();
-
+fn help_flag() {
+  let output = Command::new(binary_path()).arg("--help").output();
   match output {
     Ok(output) => {
       assert!(
         output.status.success(),
-        "Expected success exit code, got: {:?}",
+        "Expected success, got: {:?}",
         output.status.code()
       );
       let stdout = String::from_utf8_lossy(&output.stdout);
-      assert!(
-        stdout.contains("Usage:"),
-        "Expected help text to contain 'Usage:', got: {}",
-        stdout
-      );
+      assert!(stdout.contains("Usage:"), "Expected help text, got: {}", stdout);
     }
     Err(e) => {
       if e.kind() == std::io::ErrorKind::NotFound {
         eprintln!(
-                    "Binary not found. Please build the project first with: cargo build -p sonify-health-cli"
-                );
+          "Binary not found. Build first with: \
+           cargo build -p sonify-health-cli"
+        );
       }
       panic!("Failed to execute binary: {}", e);
     }
@@ -50,80 +42,78 @@ fn test_help_flag() {
 }
 
 #[test]
-fn test_version_flag() {
-  let output = Command::new(get_binary_path()).arg("--version").output();
-
+fn version_flag() {
+  let output = Command::new(binary_path()).arg("--version").output();
   match output {
     Ok(output) => {
-      assert!(
-        output.status.success(),
-        "Expected success exit code, got: {:?}",
-        output.status.code()
-      );
+      assert!(output.status.success());
       let stdout = String::from_utf8_lossy(&output.stdout);
       assert!(
-        stdout.contains("sonify-health-cli"),
-        "Expected version text to contain 'sonify-health-cli', got: {}",
+        stdout.contains("sonify-health"),
+        "Expected version text, got: {}",
         stdout
       );
     }
     Err(e) => {
-      if e.kind() == std::io::ErrorKind::NotFound {
-        eprintln!(
-                    "Binary not found. Please build the project first with: cargo build -p sonify-health-cli"
-                );
-      }
       panic!("Failed to execute binary: {}", e);
     }
   }
 }
 
 #[test]
-fn test_basic_execution() {
-  let output = Command::new(get_binary_path()).output();
-
+fn voice_subcommand() {
+  let output = Command::new(binary_path()).arg("voice").output();
   match output {
     Ok(output) => {
       assert!(
         output.status.success(),
-        "Expected success exit code, got: {:?}\nstderr: {}",
-        output.status.code(),
+        "voice subcommand failed: {}",
         String::from_utf8_lossy(&output.stderr)
       );
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      assert!(
+        stdout.contains("base_freq:"),
+        "Expected voice output, got: {}",
+        stdout
+      );
     }
     Err(e) => {
-      if e.kind() == std::io::ErrorKind::NotFound {
-        eprintln!(
-                    "Binary not found. Please build the project first with: cargo build -p sonify-health-cli"
-                );
-      }
       panic!("Failed to execute binary: {}", e);
     }
   }
 }
 
 #[test]
-fn test_with_name_argument() {
-  let output = Command::new(get_binary_path())
-    .arg("--name")
-    .arg("Rust")
+fn voice_with_hostname_flag() {
+  let output = Command::new(binary_path())
+    .args(["voice", "--hostname", "silicon"])
     .output();
-
   match output {
     Ok(output) => {
       assert!(
         output.status.success(),
-        "Expected success exit code, got: {:?}\nstderr: {}",
-        output.status.code(),
+        "voice --hostname failed: {}",
         String::from_utf8_lossy(&output.stderr)
       );
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      assert!(stdout.contains("silicon"));
     }
     Err(e) => {
-      if e.kind() == std::io::ErrorKind::NotFound {
-        eprintln!(
-                    "Binary not found. Please build the project first with: cargo build -p sonify-health-cli"
-                );
-      }
+      panic!("Failed to execute binary: {}", e);
+    }
+  }
+}
+
+#[test]
+fn preview_requires_three_severities() {
+  let output = Command::new(binary_path())
+    .args(["preview", "0", "0"])
+    .output();
+  match output {
+    Ok(output) => {
+      assert!(!output.status.success(), "preview with 2 args should fail");
+    }
+    Err(e) => {
       panic!("Failed to execute binary: {}", e);
     }
   }

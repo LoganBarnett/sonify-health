@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cli",
     "crates/lib",
+    "crates/voice-derive",
 ]
 
 [workspace.package]
@@ -35,9 +36,29 @@ thiserror = "2.0"
 
 # Testing
 tempfile = "3"
+trybuild = "1.0"
+
+# Audio
+fundsp = "0.23"
+cpal = "0.15"
+
+# Voice generation
+sha2 = "0.10"
+rand = "0.8"
+rand_xoshiro = "0.6"
+gethostname = "0.4"
+
+# Signal handling
+ctrlc = "3.4"
+
+# Proc-macro support
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
 
 # Shared library
 sonify-health-lib = { path = "crates/lib" }
+sonify-health-voice-derive = { path = "crates/voice-derive" }
 
 # ============================================================================
 # BUILD PROFILES

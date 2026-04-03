@@ -1,0 +1,5 @@
+error: duplicate voice_param order 0: already used by `a`
+ --> tests/compile_fail/duplicate_order.rs:8:5
+  |
+8 |     b: f64,
+  |     ^
