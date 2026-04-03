@@ -1,5 +1,5 @@
 error: voice_param fields must be f64
- --> tests/compile_fail/wrong_type.rs:6:8
+ --> tests/compile_fail/wrong_type.rs:6:6
   |
-6 |     a: f32,
-  |        ^^^
+6 |   a: f32,
+  |      ^^^
