@@ -352,7 +352,7 @@ in {
       + lib.optionalString (sockDir != null) ''
         ${pkgs.coreutils}/bin/mkdir --parents ${sockDir}
         chown ${cfg.user}:${cfg.group} ${sockDir}
-        chmod 0750 ${sockDir}
+        chmod 0755 ${sockDir}
       '';
 
     launchd.daemons.sonify-health = {
