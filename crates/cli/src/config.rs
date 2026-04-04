@@ -38,6 +38,7 @@ pub(crate) struct ConfigFileRaw {
   log_level: Option<String>,
   log_format: Option<String>,
   listen: Option<String>,
+  audio_device: Option<String>,
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
@@ -79,6 +80,7 @@ pub struct Config {
   pub log_level: LogLevel,
   pub log_format: LogFormat,
   pub listen_address: ListenerAddress,
+  pub audio_device: Option<String>,
   voice_overrides: VoiceOverrides,
   pub daemon: DaemonConfig,
 }
@@ -165,6 +167,7 @@ impl Config {
       log_level,
       log_format,
       listen_address,
+      audio_device: file.audio_device,
       voice_overrides: file.voice.unwrap_or_default(),
       daemon,
     })

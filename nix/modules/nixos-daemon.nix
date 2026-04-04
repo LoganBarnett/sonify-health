@@ -40,10 +40,29 @@
   cfg = config.services.sonify-health;
   tomlFormat = pkgs.formats.toml {};
 
+  # Detect whether the listen address looks like a Unix socket path (starts
+  # with /).  When it does, we auto-create the parent directory via
+  # RuntimeDirectory so users don't have to.
+  # RuntimeDirectory is relative to /run/, so strip the leading /run/ prefix.
+  # Only set when listen looks like a socket path under /run/.
+  runtimeDir =
+    if lib.hasPrefix "/run/" cfg.listen
+    then lib.removePrefix "/run/" (dirOf cfg.listen)
+    else null;
+
+  # Detect PipeWire so we can add the service user to the pipewire group
+  # automatically, giving ALSA clients access to the PipeWire socket.
+  pipewireEnabled = config.services.pipewire.enable or false;
+
   configFile = tomlFormat.generate "sonify-health.toml" ({
       log_level = cfg.logLevel;
       log_format = cfg.logFormat;
       listen = cfg.listen;
+    }
+    // lib.optionalAttrs (cfg.audioDevice != null) {
+      audio_device = cfg.audioDevice;
+    }
+    // {
       heartbeat =
         {
           slot = cfg.heartbeat.slot;
@@ -163,7 +182,20 @@ in {
       default = "127.0.0.1:3000";
       description = ''
         Address for the web server to bind to (daemon mode).  Exposes
-        health check, metrics, and mute control endpoints.
+        health check, metrics, and mute control endpoints.  Can be a
+        Unix socket path (starting with /) or a host:port string.
+        When a socket path under /run/ is used, the parent directory
+        is created automatically via RuntimeDirectory.
+      '';
+    };
+
+    audioDevice = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "speakers";
+      description = ''
+        Audio output device name (case-insensitive substring match).
+        When null, the system default output device is used.
       '';
     };
 
@@ -291,22 +323,29 @@ in {
       # reachable.
       path = ["/bin" pkgs.bash];
 
-      serviceConfig = {
-        Type = "notify";
-        ExecStart = "${cfg.package}/bin/sonify-health --config ${configFile} daemon";
-        User = cfg.user;
-        Group = cfg.group;
-        SupplementaryGroups = ["audio"];
-        WatchdogSec = "30s";
-        Restart = "on-failure";
-        RestartSec = "5s";
+      serviceConfig =
+        {
+          Type = "notify";
+          ExecStart = "${cfg.package}/bin/sonify-health --config ${configFile} daemon";
+          User = cfg.user;
+          Group = cfg.group;
+          SupplementaryGroups = lib.mkDefault (
+            ["audio"]
+            ++ lib.optional pipewireEnabled "pipewire"
+          );
+          WatchdogSec = "30s";
+          Restart = "on-failure";
+          RestartSec = "5s";
 
-        # Hardening.
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-      };
+          # Hardening.
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+        }
+        // lib.optionalAttrs (runtimeDir != null) {
+          RuntimeDirectory = runtimeDir;
+        };
     };
   };
 }

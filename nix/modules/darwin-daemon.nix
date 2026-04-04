@@ -31,6 +31,11 @@
       log_level = cfg.logLevel;
       log_format = cfg.logFormat;
       listen = cfg.listen;
+    }
+    // lib.optionalAttrs (cfg.audioDevice != null) {
+      audio_device = cfg.audioDevice;
+    }
+    // {
       heartbeat =
         {
           slot = cfg.heartbeat.slot;
@@ -152,6 +157,16 @@ in {
         Address for the web server to bind to (daemon mode).  Exposes
         health check, metrics, and mute control endpoints.  Can be a
         Unix socket path or a host:port string.
+      '';
+    };
+
+    audioDevice = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "speakers";
+      description = ''
+        Audio output device name (case-insensitive substring match).
+        When null, the system default output device is used.
       '';
     };
 

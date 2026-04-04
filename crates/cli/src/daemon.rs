@@ -28,6 +28,7 @@ pub enum DaemonError {
 pub fn run_daemon(
   config: &DaemonConfig,
   voice: &Voice,
+  audio_device: Option<&str>,
   muted: Arc<AtomicBool>,
   running: Arc<AtomicBool>,
   metrics: Metrics,
@@ -98,7 +99,7 @@ pub fn run_daemon(
         &drone_state.metrics[i],
         Some(&mute_volume),
       );
-      match AudioOutput::play(graph) {
+      match AudioOutput::play(graph, audio_device) {
         Ok(output) => {
           info!(metric = cfg.name, "Drone audio stream started");
           Some(output)
@@ -192,7 +193,7 @@ pub fn run_daemon(
     }
 
     if !is_muted {
-      play_heartbeat(voice, &heartbeat_state)?;
+      play_heartbeat(voice, &heartbeat_state, audio_device)?;
       metrics.heartbeats_played.inc();
     }
 
@@ -223,6 +224,7 @@ pub fn run_daemon(
 fn play_heartbeat(
   voice: &Voice,
   state: &HeartbeatState,
+  audio_device: Option<&str>,
 ) -> Result<(), AudioError> {
   // Read current severity values from shared state.
   let severities = [
@@ -244,7 +246,11 @@ fn play_heartbeat(
   for (i, &severity) in severities.iter().enumerate() {
     let dur = durations[i];
     let graph = heartbeat::boop_graph(voice, severity, dur);
-    AudioOutput::play_for(graph, Duration::from_secs_f64(dur + 0.05))?;
+    AudioOutput::play_for(
+      graph,
+      Duration::from_secs_f64(dur + 0.05),
+      audio_device,
+    )?;
     if i < 2 {
       thread::sleep(gap);
     }

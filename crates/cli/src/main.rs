@@ -193,12 +193,14 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   // Spawn the blocking daemon loop in a separate thread.
   let daemon_config = config.daemon.clone();
   let voice = config.voice();
+  let audio_device = config.audio_device.clone();
   let daemon_muted = Arc::clone(&muted);
   let daemon_running = Arc::clone(&running);
   let daemon_handle = tokio::task::spawn_blocking(move || {
     daemon::run_daemon(
       &daemon_config,
       &voice,
+      audio_device.as_deref(),
       daemon_muted,
       daemon_running,
       metrics,
@@ -286,7 +288,11 @@ fn run_heartbeat_preview(
   for (i, &severity) in severities.iter().enumerate() {
     let dur = durations[i];
     let graph = heartbeat::boop_graph(&voice, severity, dur);
-    AudioOutput::play_for(graph, Duration::from_secs_f64(dur + 0.05))?;
+    AudioOutput::play_for(
+      graph,
+      Duration::from_secs_f64(dur + 0.05),
+      config.audio_device.as_deref(),
+    )?;
     if i < 2 {
       std::thread::sleep(gap);
     }
@@ -331,7 +337,11 @@ fn run_drone_preview(
 
   let metric_shared = shared(metric as f32);
   let graph = drone::drone_graph(&voice, register, &metric_shared);
-  AudioOutput::play_for(graph, Duration::from_secs_f64(duration))?;
+  AudioOutput::play_for(
+    graph,
+    Duration::from_secs_f64(duration),
+    config.audio_device.as_deref(),
+  )?;
 
   Ok(())
 }

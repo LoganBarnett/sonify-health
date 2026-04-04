@@ -7,6 +7,12 @@ pub enum AudioError {
   #[error("No audio output device available")]
   NoOutputDevice,
 
+  #[error("Audio device not found: {0}")]
+  DeviceNotFound(String),
+
+  #[error("Failed to enumerate audio output devices: {0}")]
+  DeviceEnumeration(#[source] cpal::DevicesError),
+
   #[error("Cannot determine default audio output format: {0}")]
   OutputConfigUnavailable(#[source] cpal::DefaultStreamConfigError),
 
@@ -24,12 +30,33 @@ pub struct AudioOutput {
 }
 
 impl AudioOutput {
-  /// Open the default audio device and play the given graph.
-  pub fn play(mut graph: Box<dyn AudioUnit>) -> Result<Self, AudioError> {
+  /// Open an audio device and play the given graph.
+  ///
+  /// When `device_name` is `Some`, the named output device is used
+  /// (substring match, case-insensitive).  When `None`, the system
+  /// default output device is used.
+  pub fn play(
+    mut graph: Box<dyn AudioUnit>,
+    device_name: Option<&str>,
+  ) -> Result<Self, AudioError> {
     let host = cpal::default_host();
-    let device = host
-      .default_output_device()
-      .ok_or(AudioError::NoOutputDevice)?;
+    let device = match device_name {
+      Some(name) => {
+        let lower = name.to_lowercase();
+        host
+          .output_devices()
+          .map_err(AudioError::DeviceEnumeration)?
+          .find(|d| {
+            d.name()
+              .map(|n| n.to_lowercase().contains(&lower))
+              .unwrap_or(false)
+          })
+          .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
+      }
+      None => host
+        .default_output_device()
+        .ok_or(AudioError::NoOutputDevice)?,
+    };
     let supported = device
       .default_output_config()
       .map_err(AudioError::OutputConfigUnavailable)?;
@@ -63,12 +90,13 @@ impl AudioOutput {
     Ok(AudioOutput { _stream: stream })
   }
 
-  /// Play a graph for the given duration, then stop.
+  /// Play a graph on the given device for the given duration, then stop.
   pub fn play_for(
     graph: Box<dyn AudioUnit>,
     duration: std::time::Duration,
+    device_name: Option<&str>,
   ) -> Result<(), AudioError> {
-    let _output = Self::play(graph)?;
+    let _output = Self::play(graph, device_name)?;
     std::thread::sleep(duration);
     Ok(())
   }
