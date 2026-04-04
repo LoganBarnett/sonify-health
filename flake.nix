@@ -181,12 +181,12 @@
     # MODULES
     # ============================================================================
     nixosModules = {
-      daemon = import ./nix/modules/daemon.nix {inherit self;};
+      daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
       default = self.nixosModules.daemon;
     };
 
     darwinModules = {
-      daemon = import ./nix/modules/daemon.nix {inherit self;};
+      daemon = import ./nix/modules/darwin-daemon.nix {inherit self;};
       default = self.darwinModules.daemon;
     };
 
