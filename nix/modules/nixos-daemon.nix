@@ -333,6 +333,10 @@ in {
             ["audio"]
             ++ lib.optional pipewireEnabled "pipewire"
           );
+          # Unix socket connections require write permission on the
+          # socket file.  Set UMask to 0000 so the socket is created
+          # with 0777, allowing any local user/service to connect.
+          UMask = "0000";
           WatchdogSec = "30s";
           Restart = "on-failure";
           RestartSec = "5s";
