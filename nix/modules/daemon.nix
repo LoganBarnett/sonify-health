@@ -77,7 +77,52 @@
     }
     // lib.optionalAttrs (cfg.voice != {}) {
       voice = cfg.voice;
+    }
+    // lib.optionalAttrs (cfg.drone.metrics != []) {
+      drone = {
+        poll_interval_secs = cfg.drone.pollIntervalSecs;
+        metrics =
+          map (m: {
+            name = m.name;
+            command = m.command;
+            result_mode = m.resultMode;
+            register = m.register;
+          })
+          cfg.drone.metrics;
+      };
     });
+
+  droneMetricSubmodule = lib.types.submodule {
+    options = {
+      name = lib.mkOption {
+        type = lib.types.str;
+        description = "Human-readable name for this drone metric.";
+      };
+
+      command = lib.mkOption {
+        type = lib.types.str;
+        description = "Shell command that outputs a 0.0..1.0 metric value.";
+      };
+
+      resultMode = lib.mkOption {
+        type = lib.types.enum ["exit-code" "stdout"];
+        default = "stdout";
+        description = ''
+          How to read the command result.  "exit-code" maps the exit code
+          (0..255) linearly to 0.0..1.0.  "stdout" reads a float from stdout.
+        '';
+      };
+
+      register = lib.mkOption {
+        type = lib.types.enum ["low" "mid" "high"];
+        default = "mid";
+        description = ''
+          Pitch register for the drone voice.  "low" = half base frequency,
+          "mid" = base frequency, "high" = double base frequency.
+        '';
+      };
+    };
+  };
 
   checkSubmodule = lib.types.submodule {
     options = {
@@ -195,6 +240,37 @@ in {
           the heartbeat pattern.  fping is a good fit — its exit codes
           (0/1/2 = all/some/none reachable) map directly to the
           healthy/degraded/down severities.
+        '';
+      };
+    };
+
+    drone = {
+      pollIntervalSecs = lib.mkOption {
+        type = lib.types.number;
+        default = 5;
+        description = "How often to run drone metric commands (seconds).";
+      };
+
+      metrics = lib.mkOption {
+        type = lib.types.listOf droneMetricSubmodule;
+        default = [];
+        example = lib.literalExpression ''
+          [
+            {
+              name = "gpu";
+              command = "/path/to/gpu-load";
+              register = "low";
+            }
+            {
+              name = "memory";
+              command = "/path/to/mem-pressure";
+              register = "mid";
+            }
+          ]
+        '';
+        description = ''
+          Drone metric commands.  Each metric drives a continuous audio
+          stream whose timbre and volume shift with the reported value.
         '';
       };
     };

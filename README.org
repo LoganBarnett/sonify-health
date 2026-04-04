@@ -89,6 +89,7 @@ Key sections:
 - =log_level= / =log_format= — logging control.
 - =[voice]= — override any hostname-derived voice parameter.
 - =[heartbeat]= — timing slot and check commands.
+- =[drone]= — continuous stress sonification metrics (see =config.example.toml=).
 
 Each =[[heartbeat.checks]]= entry maps to one of the three boops.  The
 =result_mode= field determines how the command result is read:

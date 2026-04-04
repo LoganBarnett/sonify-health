@@ -1,10 +1,11 @@
 use crate::config::DaemonConfig;
 use crate::metrics::Metrics;
+use fundsp::prelude32::shared;
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  check, heartbeat,
+  check, drone, heartbeat,
   state::HeartbeatState,
-  Voice,
+  DroneState, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -31,7 +32,7 @@ pub fn run_daemon(
   running: Arc<AtomicBool>,
   metrics: Metrics,
 ) -> Result<(), DaemonError> {
-  let state = Arc::new(HeartbeatState::default());
+  let heartbeat_state = Arc::new(HeartbeatState::default());
 
   // Spawn a check thread for each heartbeat check.
   let check_handles: Vec<_> = config
@@ -40,7 +41,7 @@ pub fn run_daemon(
     .enumerate()
     .map(|(i, check_cfg)| {
       let cfg = check_cfg.clone();
-      let st = Arc::clone(&state);
+      let st = Arc::clone(&heartbeat_state);
       let run = Arc::clone(&running);
       let m = metrics.clone();
       let interval = Duration::from_secs_f64(config.timing.cycle_duration_secs);
@@ -77,9 +78,84 @@ pub fn run_daemon(
     })
     .collect();
 
+  // Drone layer: continuous audio driven by metric polls.
+  let drone_state = Arc::new(DroneState::new(config.drone_metrics.len()));
+  let mute_volume = shared(if muted.load(Ordering::Relaxed) {
+    0.0
+  } else {
+    1.0
+  });
+
+  // Start a persistent audio stream for each drone metric.
+  let _drone_outputs: Vec<AudioOutput> = config
+    .drone_metrics
+    .iter()
+    .enumerate()
+    .filter_map(|(i, cfg)| {
+      let graph = drone::drone_graph_with_volume(
+        voice,
+        cfg.register,
+        &drone_state.metrics[i],
+        Some(&mute_volume),
+      );
+      match AudioOutput::play(graph) {
+        Ok(output) => {
+          info!(metric = cfg.name, "Drone audio stream started");
+          Some(output)
+        }
+        Err(e) => {
+          warn!(
+            metric = cfg.name,
+            error = %e,
+            "Failed to start drone audio stream"
+          );
+          None
+        }
+      }
+    })
+    .collect();
+
+  // Spawn a poll thread for each drone metric.
+  let drone_handles: Vec<_> = config
+    .drone_metrics
+    .iter()
+    .enumerate()
+    .map(|(i, drone_cfg)| {
+      let cfg = drone_cfg.clone();
+      let st = Arc::clone(&drone_state);
+      let run = Arc::clone(&running);
+      let m = metrics.clone();
+      let interval = Duration::from_secs_f64(config.drone_poll_interval_secs);
+      thread::spawn(move || {
+        while run.load(Ordering::Relaxed) {
+          match check::run_drone_poll(&cfg) {
+            Ok(value) => {
+              info!(metric = cfg.name, value, "Drone poll completed");
+              st.set(i, value);
+              m.drone_metric_value
+                .with_label_values(&[&cfg.name])
+                .set(value as f64);
+              m.drone_polls.with_label_values(&[&cfg.name, "ok"]).inc();
+            }
+            Err(e) => {
+              warn!(
+                metric = cfg.name,
+                error = %e,
+                "Drone poll failed, retaining previous value"
+              );
+              m.drone_polls.with_label_values(&[&cfg.name, "error"]).inc();
+            }
+          }
+          thread::sleep(interval);
+        }
+      })
+    })
+    .collect();
+
   info!(
     slot = config.timing.slot,
     cycle_secs = config.timing.cycle_duration_secs,
+    drone_metrics = config.drone_metrics.len(),
     "Daemon started"
   );
 
@@ -107,14 +183,16 @@ pub fn run_daemon(
     if is_muted != was_muted {
       if is_muted {
         info!("Audio muted via API");
+        mute_volume.set_value(0.0);
       } else {
         info!("Audio unmuted via API");
+        mute_volume.set_value(1.0);
       }
       was_muted = is_muted;
     }
 
     if !is_muted {
-      play_heartbeat(voice, &state)?;
+      play_heartbeat(voice, &heartbeat_state)?;
       metrics.heartbeats_played.inc();
     }
 
@@ -132,6 +210,9 @@ pub fn run_daemon(
 
   info!("Waiting for check threads to finish");
   for h in check_handles {
+    let _ = h.join();
+  }
+  for h in drone_handles {
     let _ = h.join();
   }
 

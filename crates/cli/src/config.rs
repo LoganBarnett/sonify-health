@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use sonify_health_lib::{
-  check::HeartbeatCheckConfig, timing::TimingConfig, LogFormat, LogLevel,
-  Voice, VoiceOverrides,
+  check::HeartbeatCheckConfig, timing::TimingConfig, DroneMetricConfig,
+  LogFormat, LogLevel, Voice, VoiceOverrides,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -40,6 +40,7 @@ pub(crate) struct ConfigFileRaw {
   listen: Option<String>,
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
+  drone: Option<DroneSectionRaw>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -48,6 +49,13 @@ struct HeartbeatSectionRaw {
   timing: Option<TimingConfig>,
   #[serde(default)]
   checks: Vec<HeartbeatCheckConfig>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DroneSectionRaw {
+  poll_interval_secs: Option<f64>,
+  #[serde(default)]
+  metrics: Vec<DroneMetricConfig>,
 }
 
 impl ConfigFileRaw {
@@ -76,10 +84,23 @@ pub struct Config {
 }
 
 /// Configuration specific to daemon mode.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DaemonConfig {
   pub timing: TimingConfig,
   pub heartbeat_checks: Vec<HeartbeatCheckConfig>,
+  pub drone_poll_interval_secs: f64,
+  pub drone_metrics: Vec<DroneMetricConfig>,
+}
+
+impl Default for DaemonConfig {
+  fn default() -> Self {
+    Self {
+      timing: TimingConfig::default(),
+      heartbeat_checks: Vec::new(),
+      drone_poll_interval_secs: 5.0,
+      drone_metrics: Vec::new(),
+    }
+  }
 }
 
 impl Config {
@@ -121,13 +142,24 @@ impl Config {
       .parse::<ListenerAddress>()
       .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
+    let (drone_poll_interval_secs, drone_metrics) = file
+      .drone
+      .map(|d| (d.poll_interval_secs.unwrap_or(5.0), d.metrics))
+      .unwrap_or((5.0, Vec::new()));
+
     let daemon = file
       .heartbeat
       .map(|hb| DaemonConfig {
         timing: hb.timing.unwrap_or_default(),
         heartbeat_checks: hb.checks,
+        drone_poll_interval_secs,
+        drone_metrics: drone_metrics.clone(),
       })
-      .unwrap_or_default();
+      .unwrap_or(DaemonConfig {
+        drone_poll_interval_secs,
+        drone_metrics,
+        ..DaemonConfig::default()
+      });
 
     Ok(Config {
       log_level,
@@ -142,5 +174,65 @@ impl Config {
   /// with any configured overrides applied.
   pub fn voice(&self) -> Voice {
     Voice::from_current_host().with_overrides(&self.voice_overrides)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use sonify_health_lib::DroneRegister;
+
+  #[test]
+  fn drone_section_parses() {
+    let toml = r#"
+      [drone]
+      poll_interval_secs = 10
+
+      [[drone.metrics]]
+      name = "gpu"
+      command = "echo 0.5"
+      result_mode = "stdout"
+      register = "low"
+
+      [[drone.metrics]]
+      name = "mem"
+      command = "echo 0.3"
+      result_mode = "exit-code"
+      register = "high"
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let drone = raw.drone.unwrap();
+    assert_eq!(drone.poll_interval_secs, Some(10.0));
+    assert_eq!(drone.metrics.len(), 2);
+    assert_eq!(drone.metrics[0].name, "gpu");
+    assert_eq!(drone.metrics[0].register, DroneRegister::Low);
+    assert_eq!(drone.metrics[1].name, "mem");
+    assert_eq!(drone.metrics[1].register, DroneRegister::High);
+  }
+
+  #[test]
+  fn missing_drone_section_defaults() {
+    let config = Config::from_args(None, None, None, None).unwrap();
+    assert!(config.daemon.drone_metrics.is_empty());
+    assert!(
+      (config.daemon.drone_poll_interval_secs - 5.0).abs() < f64::EPSILON
+    );
+  }
+
+  #[test]
+  fn drone_register_deserializes() {
+    #[derive(Deserialize)]
+    struct Wrapper {
+      register: DroneRegister,
+    }
+    for (input, expected) in [
+      ("register = \"low\"", DroneRegister::Low),
+      ("register = \"mid\"", DroneRegister::Mid),
+      ("register = \"high\"", DroneRegister::High),
+    ] {
+      let w: Wrapper = toml::from_str(input).unwrap();
+      assert_eq!(w.register, expected);
+    }
   }
 }

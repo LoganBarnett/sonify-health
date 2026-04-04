@@ -40,3 +40,19 @@ slot_duration_secs = 2    # Time budget per machine.
 # name = "purpose"
 # command = "/path/to/check-gpu"
 # result_mode = "exit-code"
+
+# Drone layer: continuous stress sonification.
+# [drone]
+# poll_interval_secs = 5  # How often to run metric commands.
+#
+# [[drone.metrics]]
+# name = "gpu"
+# command = "/path/to/gpu-load"
+# result_mode = "stdout"
+# register = "low"
+#
+# [[drone.metrics]]
+# name = "memory"
+# command = "/path/to/mem-pressure"
+# result_mode = "stdout"
+# register = "mid"

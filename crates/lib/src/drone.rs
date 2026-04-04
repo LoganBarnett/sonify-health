@@ -33,10 +33,25 @@ impl DroneRegister {
 /// Filter cutoff:  metric 0.0..1.0 → 200..8000 Hz
 /// AM rate:        metric 0.0..1.0 → 1..60 Hz
 /// Volume:         directly proportional to metric value
+///
+/// When `external_volume` is provided, the output is further
+/// multiplied by it (smoothed with a 0.5s follow filter).
+/// The daemon uses this for mute control.
 pub fn drone_graph(
   voice: &Voice,
   register: DroneRegister,
   metric: &Shared,
+) -> Box<dyn AudioUnit> {
+  drone_graph_with_volume(voice, register, metric, None)
+}
+
+/// Like `drone_graph` but with an optional external volume
+/// multiplier (used for daemon mute control).
+pub fn drone_graph_with_volume(
+  voice: &Voice,
+  register: DroneRegister,
+  metric: &Shared,
+  external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
   let base = voice.base_freq as f32 * register.multiplier();
   let metric_val = metric.clone();
@@ -74,7 +89,13 @@ pub fn drone_graph(
   // inputs.  We supply a moderate Q of 0.7.
   let filter_input = (osc | cutoff | dc(0.7)) >> lowpass();
 
-  Box::new(filter_input * am * vol)
+  match external_volume {
+    Some(ext) => {
+      let ext_vol = var(ext) >> follow(0.5);
+      Box::new(filter_input * am * vol * ext_vol)
+    }
+    None => Box::new(filter_input * am * vol),
+  }
 }
 
 #[cfg(test)]

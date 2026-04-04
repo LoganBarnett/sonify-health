@@ -118,3 +118,47 @@ fn preview_requires_three_severities() {
     }
   }
 }
+
+#[test]
+fn preview_drone_requires_one_metric() {
+  let output = Command::new(binary_path())
+    .args(["preview", "--drone", "0.5", "0.8"])
+    .output();
+  match output {
+    Ok(output) => {
+      assert!(
+        !output.status.success(),
+        "drone preview with 2 values should fail"
+      );
+    }
+    Err(e) => {
+      panic!("Failed to execute binary: {}", e);
+    }
+  }
+}
+
+#[test]
+fn preview_drone_help_shows_register() {
+  let output = Command::new(binary_path())
+    .args(["preview", "--help"])
+    .output();
+  match output {
+    Ok(output) => {
+      assert!(output.status.success());
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      assert!(
+        stdout.contains("--register"),
+        "Expected --register in help, got: {}",
+        stdout
+      );
+      assert!(
+        stdout.contains("drone"),
+        "Expected 'drone' in help, got: {}",
+        stdout
+      );
+    }
+    Err(e) => {
+      panic!("Failed to execute binary: {}", e);
+    }
+  }
+}
