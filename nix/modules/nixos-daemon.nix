@@ -286,6 +286,10 @@ in {
       description = "sonify-health sonification daemon";
       wantedBy = ["multi-user.target"];
       after = ["network.target"];
+      # Check commands are executed via "sh -c".  The default systemd PATH
+      # on NixOS does not include /bin, so we must ensure a shell is
+      # reachable.
+      path = ["/bin" pkgs.bash];
 
       serviceConfig = {
         Type = "notify";
