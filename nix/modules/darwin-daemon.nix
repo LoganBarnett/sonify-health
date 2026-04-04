@@ -369,6 +369,10 @@ in {
           Crashed = true;
           SuccessfulExit = false;
         };
+        # Unix socket connections require write permission on the socket
+        # file.  Set umask to 0000 so the socket is created with 0777,
+        # allowing any local user/service to connect to the API.
+        Umask = 0;
         ThrottleInterval = 30;
         ProcessType = "Background";
         StandardOutPath = "/var/log/sonify-health/stdout.log";
