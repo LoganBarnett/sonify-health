@@ -345,12 +345,12 @@ in {
         else null;
     in
       ''
-        mkdir --parents ${logDir}
+        ${pkgs.coreutils}/bin/mkdir --parents ${logDir}
         chown ${cfg.user}:${cfg.group} ${logDir}
         chmod 0750 ${logDir}
       ''
       + lib.optionalString (sockDir != null) ''
-        mkdir --parents ${sockDir}
+        ${pkgs.coreutils}/bin/mkdir --parents ${sockDir}
         chown ${cfg.user}:${cfg.group} ${sockDir}
         chmod 0750 ${sockDir}
       '';
