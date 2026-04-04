@@ -174,6 +174,18 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
 
   info!("Binding to {}", config.listen_address);
 
+  // Remove stale Unix socket file from a previous run so we can
+  // re-bind.  This is safe because launchd/systemd guarantees only
+  // one instance is running at a time.
+  let addr_str = config.listen_address.to_string();
+  if addr_str.starts_with('/') {
+    let path = std::path::Path::new(&addr_str);
+    if path.exists() {
+      info!("Removing stale socket {}", addr_str);
+      std::fs::remove_file(path).ok();
+    }
+  }
+
   let listener = tokio_listener::Listener::bind(
     &config.listen_address,
     &tokio_listener::SystemOptions::default(),
