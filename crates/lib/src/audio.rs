@@ -43,15 +43,31 @@ impl AudioOutput {
     let device = match device_name {
       Some(name) => {
         let lower = name.to_lowercase();
-        host
+        let devices: Vec<_> = host
           .output_devices()
           .map_err(AudioError::DeviceEnumeration)?
-          .find(|d| {
-            d.name()
-              .map(|n| n.to_lowercase().contains(&lower))
-              .unwrap_or(false)
-          })
-          .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
+          .collect();
+        let matched = devices.into_iter().find(|d| {
+          d.name()
+            .map(|n| n.to_lowercase().contains(&lower))
+            .unwrap_or(false)
+        });
+        match matched {
+          Some(d) => d,
+          None => {
+            let available: Vec<String> = host
+              .output_devices()
+              .map_err(AudioError::DeviceEnumeration)?
+              .filter_map(|d| d.name().ok())
+              .collect();
+            tracing::warn!(
+              requested = name,
+              ?available,
+              "Audio device not found"
+            );
+            return Err(AudioError::DeviceNotFound(name.to_string()));
+          }
+        }
       }
       None => host
         .default_output_device()
