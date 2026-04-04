@@ -290,7 +290,7 @@ in {
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     # NixOS: systemd service with audio group access.
-    (lib.optionalAttrs isLinux {
+    (lib.mkIf isLinux {
       users.users.${cfg.user} = {
         isSystemUser = true;
         group = cfg.group;
@@ -324,7 +324,7 @@ in {
     })
 
     # nix-darwin: launchd daemon.
-    (lib.optionalAttrs isDarwin {
+    (lib.mkIf isDarwin {
       launchd.daemons.sonify-health = {
         serviceConfig = {
           Label = "com.sonify-health.daemon";
