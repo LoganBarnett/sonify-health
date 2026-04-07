@@ -141,7 +141,9 @@ pub fn heartbeat_graph(
 
   let waveform = (sine() * sine_w) & (triangle() * tri_w) & (saw() * saw_w);
   let mix = (freq_env >> waveform) * amp_env;
-  let stereo = mix >> pan(0.0) >> reverb_stereo(0.3, 0.8, 0.6);
+  let stereo = mix
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.3, 0.8, voice.reverb_mix as f32);
   Box::new(stereo)
 }
 
