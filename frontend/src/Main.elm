@@ -623,10 +623,10 @@ viewDrone index drone =
                 [ text (formatFloat drone.value) ]
             , if drone.overridden then
                 button
-                    [ class "btn btn-sm btn-danger"
+                    [ class "btn btn-sm btn-live"
                     , onClick (ClearDroneOverride index)
                     ]
-                    [ text "Clear" ]
+                    [ text "Live" ]
 
               else
                 text ""
