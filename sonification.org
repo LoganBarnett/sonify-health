@@ -361,9 +361,6 @@ degenerate combinations:
   saw_ratio    = rng.next_in_range(0.0, 0.15)
   attack_ms    = rng.next_in_range(20.0, 80.0)
   release_ms   = rng.next_in_range(80.0, 250.0)
-  boop1_ratio  = rng.next_in_range(0.4, 0.6)       # proportion of slot
-  boop2_ratio  = rng.next_in_range(0.2, 0.3)
-  # boop3 gets the remainder
 #+end_example
 
 The ranges are the guardrails — you cannot get an inaudible or unpleasant voice
@@ -398,12 +395,6 @@ A derive macro on the ~Voice~ struct enforces this:
 
       #[voice_param(order = 5, range = 80.0..250.0)]
       release_ms: f64,
-
-      #[voice_param(order = 6, range = 0.4..0.6)]
-      boop1_ratio: f64,
-
-      #[voice_param(order = 7, range = 0.2..0.3)]
-      boop2_ratio: f64,
   }
 #+end_src
 

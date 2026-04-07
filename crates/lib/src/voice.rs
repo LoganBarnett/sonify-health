@@ -39,22 +39,16 @@ pub struct Voice {
   #[voice_param(order = 5, range = 80.0..250.0)]
   pub release_ms: f64,
 
-  #[voice_param(order = 6, range = 0.4..0.6)]
-  pub boop1_ratio: f64,
-
-  #[voice_param(order = 7, range = 0.2..0.3)]
-  pub boop2_ratio: f64,
-
-  #[voice_param(order = 8, range = 1.0..1.5)]
+  #[voice_param(order = 6, range = 1.0..1.5)]
   pub chirp_ratio: f64,
 
-  #[voice_param(order = 9, range = -0.3..0.3)]
+  #[voice_param(order = 7, range = -0.3..0.3)]
   pub stereo_pan: f64,
 
-  #[voice_param(order = 10, range = 0.3..0.6)]
+  #[voice_param(order = 8, range = 0.3..0.6)]
   pub reverb_mix: f64,
 
-  #[voice_param(order = 11, range = 0.0..1.0)]
+  #[voice_param(order = 9, range = 0.0..1.0)]
   pub note_seed: f64,
 }
 
@@ -99,12 +93,6 @@ impl Voice {
     }
     if let Some(v) = o.release_ms {
       self.release_ms = v;
-    }
-    if let Some(v) = o.boop1_ratio {
-      self.boop1_ratio = v;
-    }
-    if let Some(v) = o.boop2_ratio {
-      self.boop2_ratio = v;
     }
     if let Some(v) = o.chirp_ratio {
       self.chirp_ratio = v;
@@ -247,8 +235,6 @@ pub struct VoiceOverrides {
   pub saw_ratio: Option<f64>,
   pub attack_ms: Option<f64>,
   pub release_ms: Option<f64>,
-  pub boop1_ratio: Option<f64>,
-  pub boop2_ratio: Option<f64>,
   pub chirp_ratio: Option<f64>,
   pub stereo_pan: Option<f64>,
   pub reverb_mix: Option<f64>,
@@ -305,8 +291,6 @@ mod tests {
       assert!((0.0..0.15).contains(&v.saw_ratio));
       assert!((20.0..80.0).contains(&v.attack_ms));
       assert!((80.0..250.0).contains(&v.release_ms));
-      assert!((0.4..0.6).contains(&v.boop1_ratio));
-      assert!((0.2..0.3).contains(&v.boop2_ratio));
       assert!((1.0..1.5).contains(&v.chirp_ratio));
       assert!((-0.3..0.3).contains(&v.stereo_pan));
       assert!((0.3..0.6).contains(&v.reverb_mix));

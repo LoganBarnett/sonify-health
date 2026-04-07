@@ -187,11 +187,21 @@ impl Config {
     sonify_health_lib::PentatonicScale::from_key(&self.scale_key())
   }
 
-  fn scale_key(&self) -> String {
+  /// Return the config file's voice overrides.
+  pub fn voice_overrides_ref(&self) -> &VoiceOverrides {
+    &self.voice_overrides
+  }
+
+  /// Determine the scale key for a given hostname: config override if
+  /// set, otherwise the domain extracted from the hostname.
+  pub fn scale_key_for(&self, hostname: &str) -> String {
     self.voice_overrides.scale_key.clone().unwrap_or_else(|| {
-      let hostname = gethostname::gethostname().to_string_lossy().to_string();
-      sonify_health_lib::scale::domain_from_hostname(&hostname)
+      sonify_health_lib::scale::domain_from_hostname(hostname)
     })
+  }
+
+  fn scale_key(&self) -> String {
+    self.scale_key_for(&gethostname::gethostname().to_string_lossy())
   }
 }
 

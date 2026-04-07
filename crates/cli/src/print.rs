@@ -1,0 +1,71 @@
+use sonify_health_lib::Voice;
+
+/// Ensure a float string contains a decimal point so TOML and Nix
+/// parse it as a float, not an integer.
+fn float_lit(v: f64) -> String {
+  let s = v.to_string();
+  if s.contains('.') || s.contains('e') || s.contains('E') {
+    s
+  } else {
+    format!("{s}.0")
+  }
+}
+
+/// Format voice parameters as a TOML `[voice]` block suitable for
+/// pasting into `config.toml`.
+pub(crate) fn format_toml(voice: &Voice, scale_key: &str) -> String {
+  [
+    "[voice]".to_string(),
+    format!("scale_key = \"{scale_key}\""),
+    format!("base_freq = {}", float_lit(voice.base_freq)),
+    format!("sine_ratio = {}", float_lit(voice.sine_ratio)),
+    format!("tri_ratio = {}", float_lit(voice.tri_ratio)),
+    format!("saw_ratio = {}", float_lit(voice.saw_ratio)),
+    format!("attack_ms = {}", float_lit(voice.attack_ms)),
+    format!("release_ms = {}", float_lit(voice.release_ms)),
+    format!("chirp_ratio = {}", float_lit(voice.chirp_ratio)),
+    format!("stereo_pan = {}", float_lit(voice.stereo_pan)),
+    format!("reverb_mix = {}", float_lit(voice.reverb_mix)),
+    format!("note_seed = {}", float_lit(voice.note_seed)),
+  ]
+  .join("\n")
+}
+
+/// Format voice parameters as a Nix attribute set.
+pub(crate) fn format_nix(voice: &Voice, scale_key: &str) -> String {
+  [
+    "voice = {".to_string(),
+    format!("  scale_key = \"{scale_key}\";"),
+    format!("  base_freq = {};", float_lit(voice.base_freq)),
+    format!("  sine_ratio = {};", float_lit(voice.sine_ratio)),
+    format!("  tri_ratio = {};", float_lit(voice.tri_ratio)),
+    format!("  saw_ratio = {};", float_lit(voice.saw_ratio)),
+    format!("  attack_ms = {};", float_lit(voice.attack_ms)),
+    format!("  release_ms = {};", float_lit(voice.release_ms)),
+    format!("  chirp_ratio = {};", float_lit(voice.chirp_ratio)),
+    format!("  stereo_pan = {};", float_lit(voice.stereo_pan)),
+    format!("  reverb_mix = {};", float_lit(voice.reverb_mix)),
+    format!("  note_seed = {};", float_lit(voice.note_seed)),
+    "};".to_string(),
+  ]
+  .join("\n")
+}
+
+/// Format voice parameters as CLI flags for round-tripping into
+/// `preview` or `print`.
+pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
+  [
+    format!("--scale-key {scale_key}"),
+    format!("--base-freq {}", voice.base_freq),
+    format!("--sine-ratio {}", voice.sine_ratio),
+    format!("--tri-ratio {}", voice.tri_ratio),
+    format!("--saw-ratio {}", voice.saw_ratio),
+    format!("--attack-ms {}", voice.attack_ms),
+    format!("--release-ms {}", voice.release_ms),
+    format!("--chirp-ratio {}", voice.chirp_ratio),
+    format!("--stereo-pan {}", voice.stereo_pan),
+    format!("--reverb-mix {}", voice.reverb_mix),
+    format!("--note-seed {}", voice.note_seed),
+  ]
+  .join(" ")
+}

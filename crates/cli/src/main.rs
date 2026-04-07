@@ -2,7 +2,9 @@ mod config;
 mod daemon;
 mod logging;
 mod metrics;
+mod print;
 mod systemd;
+mod voice_args;
 mod web_base;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -24,6 +26,7 @@ use thiserror::Error;
 use tokio::signal;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, info};
+use voice_args::CliVoiceOverrides;
 use web_base::AppState;
 
 #[derive(Debug, Error)]
@@ -83,6 +86,13 @@ enum SoundType {
   Drone,
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+enum PrintFormat {
+  Toml,
+  Nix,
+  Cli,
+}
+
 #[derive(Subcommand)]
 enum Command {
   /// Preview a sound layer (heartbeat or drone).
@@ -117,9 +127,23 @@ enum Command {
     #[arg(long)]
     continuous: bool,
 
+    #[command(flatten)]
+    voice: CliVoiceOverrides,
+
     /// Positional values: 1 or more severities for heartbeat,
     /// 1 metric for drone.
     values: Vec<String>,
+  },
+
+  /// Print the fully-resolved voice configuration in a paste-ready
+  /// format (TOML, Nix, or CLI flags).
+  Print {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = PrintFormat::Toml)]
+    format: PrintFormat,
+
+    #[command(flatten)]
+    voice: CliVoiceOverrides,
   },
 
   /// Display the machine's voice parameters.
@@ -162,6 +186,7 @@ async fn main() -> Result<(), ApplicationError> {
       texture,
       duration,
       continuous,
+      voice,
       values,
     } => {
       let effective = if drone {
@@ -172,11 +197,15 @@ async fn main() -> Result<(), ApplicationError> {
         sound_type
       };
       match effective {
-        SoundType::Heartbeat => run_heartbeat_preview(&config, &values),
+        SoundType::Heartbeat => run_heartbeat_preview(&config, &voice, &values),
         SoundType::Drone => run_drone_preview(
-          &config, register, texture, duration, continuous, &values,
+          &config, &voice, register, texture, duration, continuous, &values,
         ),
       }
+    }
+    Command::Print { format, voice } => {
+      run_print(&config, &voice, format);
+      Ok(())
     }
     Command::Voice { hostname } => {
       run_voice(hostname.as_deref());
@@ -291,6 +320,7 @@ async fn shutdown_signal(running: Arc<AtomicBool>) {
 
 fn run_heartbeat_preview(
   config: &Config,
+  voice_args: &CliVoiceOverrides,
   values: &[String],
 ) -> Result<(), ApplicationError> {
   if values.is_empty() {
@@ -313,8 +343,8 @@ fn run_heartbeat_preview(
     .map(|v| parse_severity(v))
     .collect::<Result<_, _>>()?;
 
-  let voice = config.voice();
-  let scale = config.scale();
+  let voice = voice_args.resolve_voice(config);
+  let scale = voice_args.resolve_scale(config);
   debug!(?voice, "Resolved voice");
   let specs =
     voice.boop_specs(&scale, severities.len(), heartbeat::TOTAL_BOOP_TIME);
@@ -344,6 +374,7 @@ fn run_heartbeat_preview(
 
 fn run_drone_preview(
   config: &Config,
+  voice_args: &CliVoiceOverrides,
   register: DroneRegister,
   texture: Option<DroneTexture>,
   duration: f64,
@@ -369,8 +400,8 @@ fn run_drone_preview(
     )));
   }
 
-  let voice = config.voice();
-  let scale = config.scale();
+  let voice = voice_args.resolve_voice(config);
+  let scale = voice_args.resolve_scale(config);
   let texture = texture.unwrap_or_else(|| voice.drone_texture(0));
   let notes = if texture == DroneTexture::Arpeggio {
     voice.drone_notes(&scale, 4)
@@ -378,20 +409,6 @@ fn run_drone_preview(
     vec![]
   };
   debug!(?voice, "Resolved voice");
-
-  let hostname = gethostname::gethostname().to_string_lossy().to_string();
-  let domain = scale::domain_from_hostname(&hostname);
-  let host_hash = Sha256::digest(hostname.as_bytes());
-  let domain_hash = Sha256::digest(domain.as_bytes());
-  debug!(
-    hostname = %hostname,
-    hostname_sha256_prefix = %host_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
-    domain = %domain,
-    domain_sha256_prefix = %domain_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
-    note_seed = voice.note_seed,
-    base_texture_index = (voice.note_seed * 6.0).floor() as usize,
-    "Voice seed derivation"
-  );
   info!(
     base_freq = voice.base_freq,
     ?register,
@@ -423,6 +440,21 @@ fn run_drone_preview(
   }
 
   Ok(())
+}
+
+fn run_print(
+  config: &Config,
+  voice_args: &CliVoiceOverrides,
+  format: PrintFormat,
+) {
+  let voice = voice_args.resolve_voice(config);
+  let scale_key = voice_args.effective_scale_key(config);
+  let output = match format {
+    PrintFormat::Toml => print::format_toml(&voice, &scale_key),
+    PrintFormat::Nix => print::format_nix(&voice, &scale_key),
+    PrintFormat::Cli => print::format_cli(&voice, &scale_key),
+  };
+  println!("{output}");
 }
 
 fn run_voice(hostname: Option<&str>) {
