@@ -17,6 +17,12 @@ pub struct Metrics {
   pub drone_polls: IntCounterVec,
 }
 
+impl Default for Metrics {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl Metrics {
   /// Build a fresh registry and register every collector.
   pub fn new() -> Self {

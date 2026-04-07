@@ -39,7 +39,7 @@ impl PentatonicScale {
       // Walk octaves up, collecting every instance inside the range.
       while f < FREQ_HI {
         f *= 2.0;
-        if f >= FREQ_LO && f <= FREQ_HI {
+        if (FREQ_LO..=FREQ_HI).contains(&f) {
           notes.push(f);
         }
       }

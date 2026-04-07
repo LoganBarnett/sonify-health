@@ -138,7 +138,7 @@ fn bong_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (osc | cutoff) >> lowpole() * am * vol * ext_vol;
+  let mono = (osc | cutoff) >> (lowpole() * am * vol * ext_vol);
   let stereo =
     mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 3.0, 0.4);
   Box::new(stereo)
@@ -211,7 +211,7 @@ fn arpeggio_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (osc | cutoff) >> lowpole() * am * vol * ext_vol;
+  let mono = (osc | cutoff) >> (lowpole() * am * vol * ext_vol);
   let stereo =
     mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 4.0, 0.2);
   Box::new(stereo)
@@ -261,7 +261,7 @@ fn thrum_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (osc | cutoff) >> lowpole() * am * vol * ext_vol;
+  let mono = (osc | cutoff) >> (lowpole() * am * vol * ext_vol);
   let stereo =
     mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 2.5, 0.4);
   Box::new(stereo)
@@ -329,7 +329,7 @@ fn shimmer_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (mixed | cutoff) >> lowpole() * am * vol * ext_vol;
+  let mono = (mixed | cutoff) >> (lowpole() * am * vol * ext_vol);
   let stereo =
     mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 5.0, 0.3);
   Box::new(stereo)
