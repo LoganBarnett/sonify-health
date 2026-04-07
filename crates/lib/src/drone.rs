@@ -58,7 +58,6 @@ pub fn drone_graph_with_volume(
   let base = voice.base_freq as f32 * register.multiplier();
   let metric_cutoff = metric.clone();
   let metric_bong = metric.clone();
-  let metric_vol = metric.clone();
 
   // Normalize waveform blend so the peak stays at 1.0 before
   // amplitude scaling.
@@ -97,13 +96,9 @@ pub fn drone_graph_with_volume(
     (-phase * 5.0).exp()
   });
 
-  // Volume shifts texture, not loudness.  The floor keeps the
-  // drone faintly present at idle; the ceiling stays gentle
-  // even at full load.
-  let vol = lfo(move |_t| {
-    let m = metric_vol.value();
-    0.30 + m * m * 0.70
-  });
+  // Constant volume — load is communicated entirely through
+  // bong density, not loudness.
+  let vol = dc(0.30);
 
   let ext_shared = match external_volume {
     Some(ext) => ext.clone(),
@@ -176,7 +171,7 @@ mod tests {
   }
 
   #[test]
-  fn high_metric_louder_than_low() {
+  fn high_metric_denser_than_low() {
     let metric_lo = shared(0.1);
     let metric_hi = shared(0.9);
 
@@ -196,24 +191,29 @@ mod tests {
     lo_graph.allocate();
     hi_graph.allocate();
 
-    let rms = |graph: &mut Box<dyn AudioUnit>| -> f32 {
-      let sum: f32 = (0..88200)
-        .map(|_| {
-          let (l, r) = graph.get_stereo();
-          l * l + r * r
-        })
-        .sum();
-      (sum / 88200.0).sqrt()
+    // Count zero-crossings as a proxy for event density.
+    let crossings = |graph: &mut Box<dyn AudioUnit>| -> usize {
+      let mut prev = 0.0f32;
+      let mut count = 0usize;
+      for _ in 0..88200 {
+        let (l, _) = graph.get_stereo();
+        if l * prev < 0.0 {
+          count += 1;
+        }
+        prev = l;
+      }
+      count
     };
 
-    let rms_lo = rms(&mut lo_graph);
-    let rms_hi = rms(&mut hi_graph);
+    let xings_lo = crossings(&mut lo_graph);
+    let xings_hi = crossings(&mut hi_graph);
 
     assert!(
-      rms_hi > rms_lo,
-      "Higher metric RMS ({}) should exceed lower ({})",
-      rms_hi,
-      rms_lo
+      xings_hi > xings_lo,
+      "Higher metric should produce more zero-crossings \
+       ({}) than lower ({})",
+      xings_hi,
+      xings_lo
     );
   }
 }
