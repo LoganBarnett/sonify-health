@@ -102,7 +102,7 @@ pub fn drone_graph_with_volume(
   // even at full load.
   let vol = lfo(move |_t| {
     let m = metric_vol.value();
-    0.08 + m * m * 0.17
+    0.15 + m * m * 0.35
   });
 
   let ext_shared = match external_volume {
