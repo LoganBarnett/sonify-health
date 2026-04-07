@@ -96,11 +96,11 @@ pub fn drone_graph_with_volume(
     (-phase * 5.0).exp()
   });
 
-  // Volume with a floor so the drone is always faintly present.
+  // Volume with a floor so the drone is always audible.
   // Quadratic curve keeps low-metric drones gentle.
   let vol = lfo(move |_t| {
     let m = metric_vol.value();
-    0.02 + m * m * 0.13
+    0.08 + m * m * 0.52
   });
 
   let ext_shared = match external_volume {
@@ -163,10 +163,10 @@ mod tests {
       })
       .fold(0.0f32, f32::max);
 
-    // Volume floor is 0.02, so the signal should be very quiet
-    // but not necessarily silent.
+    // Volume floor is 0.08, so the signal should be quiet but
+    // not silent.
     assert!(
-      peak < 0.1,
+      peak < 0.3,
       "Drone at metric=0.0 should be very quiet, \
        got peak {}",
       peak
