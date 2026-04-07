@@ -14,6 +14,7 @@ use axum::{
   routing::get,
   Json, Router,
 };
+use openidconnect::core::CoreClient;
 use prometheus::{Encoder, TextEncoder};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -35,23 +36,27 @@ pub struct AppState {
   pub muted: Arc<AtomicBool>,
   pub frontend_path: PathBuf,
   pub preview: Arc<PreviewState>,
+  pub oidc_client: Option<Arc<CoreClient>>,
 }
 
 impl AppState {
   /// Construct `AppState` with pre-built metrics, shared mute flag,
-  /// the path to the compiled frontend assets directory, and the
-  /// preview state backing the real-time control surface.
+  /// the path to the compiled frontend assets directory, the preview
+  /// state backing the real-time control surface, and an optional
+  /// OIDC client for authentication.
   pub fn init(
     muted: Arc<AtomicBool>,
     metrics: Metrics,
     frontend_path: PathBuf,
     preview: Arc<PreviewState>,
+    oidc_client: Option<Arc<CoreClient>>,
   ) -> Self {
     Self {
       metrics,
       muted,
       frontend_path,
       preview,
+      oidc_client,
     }
   }
 }
@@ -128,13 +133,13 @@ async fn metrics_endpoint(State(state): State<AppState>) -> Response {
 
 // -- Router ------------------------------------------------------------------
 
-pub fn base_router(state: AppState) -> Router {
+/// Routes that remain public regardless of OIDC configuration:
+/// health check and Prometheus metrics.
+pub fn public_router(state: AppState) -> Router {
   aide::generate::extract_schemas(true);
   let mut api = OpenApi::default();
 
-  let frontend_path = state.frontend_path.clone();
-
-  let app_router = ApiRouter::new()
+  let public = ApiRouter::new()
     .api_route(
       "/healthz",
       get_with(healthz, |op: TransformOperation| {
@@ -147,6 +152,27 @@ pub fn base_router(state: AppState) -> Router {
         op.description("Prometheus metrics in text/plain format.")
       }),
     )
+    .with_state(state)
+    .finish_api_with(&mut api, |a| a.title("sonify-health"));
+
+  // Stash the OpenAPI spec in an Arc so it can be shared with the
+  // JSON endpoint built by the caller.
+  let api = Arc::new(api);
+  Router::new().merge(public).route(
+    "/api-docs/openapi.json",
+    get({
+      let api = api.clone();
+      move || async move { Json((*api).clone()) }
+    }),
+  )
+}
+
+/// Routes that are protected when OIDC is enabled: mute API,
+/// WebSocket, Scalar docs, and the SPA fallback.
+pub fn protected_router(state: AppState) -> Router {
+  let frontend_path = state.frontend_path.clone();
+
+  let mute_api = ApiRouter::new()
     .api_route(
       "/api/mute",
       aide::axum::routing::get_with(get_mute, |op: TransformOperation| {
@@ -159,10 +185,7 @@ pub fn base_router(state: AppState) -> Router {
         op.description("Unmute audio output.")
       }),
     )
-    .with_state(state.clone())
-    .finish_api_with(&mut api, |a| a.title("sonify-health"));
-
-  let api = Arc::new(api);
+    .with_state(state.clone());
 
   // Serve static frontend assets with SPA fallback to index.html.
   // Cache-Control: no-store ensures the browser always fetches fresh
@@ -176,15 +199,8 @@ pub fn base_router(state: AppState) -> Router {
     .service(ServeDir::new(&frontend_path).fallback(ServeFile::new(index)));
 
   Router::new()
-    .merge(app_router)
+    .merge(mute_api)
     .route("/ws", get(websocket::ws_handler).with_state(state))
-    .route(
-      "/api-docs/openapi.json",
-      get({
-        let api = api.clone();
-        move || async move { Json((*api).clone()) }
-      }),
-    )
     .route(
       "/scalar",
       get(

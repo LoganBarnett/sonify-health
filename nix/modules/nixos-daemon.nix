@@ -40,15 +40,15 @@
   cfg = config.services.sonify-health;
   tomlFormat = pkgs.formats.toml {};
 
-  # Detect whether the listen address looks like a Unix socket path (starts
-  # with /).  When it does, we auto-create the parent directory via
-  # RuntimeDirectory so users don't have to.
-  # RuntimeDirectory is relative to /run/, so strip the leading /run/ prefix.
-  # Only set when listen looks like a socket path under /run/.
-  runtimeDir =
-    if lib.hasPrefix "/run/" cfg.listen
-    then lib.removePrefix "/run/" (dirOf cfg.listen)
-    else null;
+  useSocket = cfg.socket != null;
+
+  # The listen value written into the TOML config file.  "sd-listen"
+  # tells tokio-listener to accept the socket from systemd socket
+  # activation; otherwise we bind to host:port directly.
+  listenValue =
+    if useSocket
+    then "sd-listen"
+    else "${cfg.host}:${toString cfg.port}";
 
   # Detect PipeWire so we can add the service user to the pipewire group
   # automatically, giving ALSA clients access to the PipeWire socket.
@@ -57,7 +57,7 @@
   configFile = tomlFormat.generate "sonify-health.toml" ({
       log_level = cfg.logLevel;
       log_format = cfg.logFormat;
-      listen = cfg.listen;
+      listen = listenValue;
     }
     // lib.optionalAttrs (cfg.audioDevice != null) {
       audio_device = cfg.audioDevice;
@@ -191,15 +191,38 @@ in {
       '';
     };
 
-    listen = lib.mkOption {
-      type = lib.types.str;
-      default = "127.0.0.1:3000";
+    socket = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "/run/sonify-health/sonify-health.sock";
       description = ''
-        Address for the web server to bind to (daemon mode).  Exposes
-        health check, metrics, and mute control endpoints.  Can be a
-        Unix socket path (starting with /) or a host:port string.
-        When a socket path under /run/ is used, the parent directory
-        is created automatically via RuntimeDirectory.
+        Path to the Unix socket.  When set, the daemon uses systemd
+        socket activation (sd-listen).  Set to null to use host:port
+        TCP binding instead.
+      '';
+    };
+
+    host = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1";
+      description = ''
+        TCP bind address.  Only used when socket is null.
+      '';
+    };
+
+    port = lib.mkOption {
+      type = lib.types.port;
+      default = 3000;
+      description = ''
+        TCP port to bind.  Only used when socket is null.
+      '';
+    };
+
+    openFirewall = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether to open the configured port in the NixOS firewall.
+        Only effective when socket is null (TCP mode).
       '';
     };
 
@@ -306,6 +329,42 @@ in {
       };
     };
 
+    oidc = {
+      enable = lib.mkEnableOption "OIDC authentication for the web UI and API";
+
+      baseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "https://sonify.example.com";
+        description = ''
+          Public base URL of the service, used to construct the OIDC
+          redirect URI (base_url + /auth/callback).
+        '';
+      };
+
+      issuer = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "https://sso.example.com/application/o/sonify-health/";
+        description = "OIDC issuer URL for provider discovery.";
+      };
+
+      clientId = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "OIDC client ID.";
+      };
+
+      clientSecretFile = lib.mkOption {
+        type = lib.types.str;
+        example = "/run/secrets/sonify-health-oidc";
+        description = ''
+          Path to a file containing the OIDC client secret.  The file
+          is read at daemon startup.
+        '';
+      };
+    };
+
     user = lib.mkOption {
       type = lib.types.str;
       default = "sonify-health";
@@ -338,9 +397,31 @@ in {
 
     users.groups.${cfg.group} = {};
 
+    # Open the TCP port when using host:port mode with openFirewall.
+    networking.firewall.allowedTCPPorts =
+      lib.mkIf (cfg.openFirewall && !useSocket) [cfg.port];
+
+    # Create the socket directory via tmpfiles when using socket
+    # activation.
+    systemd.tmpfiles.rules = lib.mkIf useSocket [
+      "d ${dirOf cfg.socket} 0755 ${cfg.user} ${cfg.group} -"
+    ];
+
+    # systemd socket unit for socket activation.
+    systemd.sockets.sonify-health = lib.mkIf useSocket {
+      description = "sonify-health listening socket";
+      wantedBy = ["sockets.target"];
+
+      socketConfig = {
+        ListenStream = cfg.socket;
+        SocketMode = "0660";
+        SocketGroup = cfg.group;
+      };
+    };
+
     systemd.services.sonify-health = {
       description = "sonify-health sonification daemon";
-      wantedBy = ["multi-user.target"];
+      wantedBy = lib.mkIf (!useSocket) ["multi-user.target"];
       after = ["network.target"];
       # Check commands are executed via "sh -c".  The default systemd PATH
       # on NixOS does not include /bin, so we must ensure a shell is
@@ -371,8 +452,13 @@ in {
           ProtectSystem = "strict";
           ProtectHome = true;
         }
-        // lib.optionalAttrs (runtimeDir != null) {
-          RuntimeDirectory = runtimeDir;
+        // lib.optionalAttrs cfg.oidc.enable {
+          Environment = [
+            "BASE_URL=${cfg.oidc.baseUrl}"
+            "OIDC_ISSUER=${cfg.oidc.issuer}"
+            "OIDC_CLIENT_ID=${cfg.oidc.clientId}"
+            "OIDC_CLIENT_SECRET_FILE=${cfg.oidc.clientSecretFile}"
+          ];
         };
     };
   };

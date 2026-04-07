@@ -1,3 +1,4 @@
+mod auth;
 mod config;
 mod daemon;
 mod logging;
@@ -9,6 +10,7 @@ mod voice_args;
 mod web_base;
 mod websocket;
 
+use axum::{middleware, routing::get, Router};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ConfigError};
 use daemon::DaemonError;
@@ -27,6 +29,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::signal;
 use tower_http::trace::TraceLayer;
+use tower_sessions::{cookie::SameSite, MemoryStore, SessionManagerLayer};
 use tracing::{debug, info};
 use voice_args::CliVoiceOverrides;
 use web_base::AppState;
@@ -47,6 +50,15 @@ enum ApplicationError {
 
   #[error("Daemon failed: {0}")]
   Daemon(#[from] DaemonError),
+
+  #[error("Invalid OIDC issuer URL: {0}")]
+  OidcInvalidIssuer(String),
+
+  #[error("OIDC provider discovery failed: {0}")]
+  OidcDiscovery(String),
+
+  #[error("Invalid OIDC redirect URI: {0}")]
+  OidcInvalidRedirectUri(String),
 
   #[error("Failed to bind listener to {address}: {source}")]
   ListenerBind {
@@ -80,6 +92,23 @@ struct Cli {
 
   #[arg(short, long, env = "CONFIG_FILE")]
   config: Option<std::path::PathBuf>,
+
+  /// Base URL of this service (e.g. https://sonify.example.com), used
+  /// to construct the OIDC redirect URI.
+  #[arg(long, env = "BASE_URL")]
+  base_url: Option<String>,
+
+  /// OIDC issuer URL for provider discovery.
+  #[arg(long, env = "OIDC_ISSUER")]
+  oidc_issuer: Option<String>,
+
+  /// OIDC client ID.
+  #[arg(long, env = "OIDC_CLIENT_ID")]
+  oidc_client_id: Option<String>,
+
+  /// Path to a file containing the OIDC client secret.
+  #[arg(long, env = "OIDC_CLIENT_SECRET_FILE")]
+  oidc_client_secret_file: Option<std::path::PathBuf>,
 
   #[command(subcommand)]
   command: Command,
@@ -171,6 +200,10 @@ async fn main() -> Result<(), ApplicationError> {
     cli.listen.as_deref(),
     cli.frontend_path.as_deref(),
     cli.config.as_deref(),
+    cli.base_url.as_deref(),
+    cli.oidc_issuer.as_deref(),
+    cli.oidc_client_id.as_deref(),
+    cli.oidc_client_secret_file.as_deref(),
   )?;
 
   init_logging(config.log_level, config.log_format);
@@ -240,13 +273,51 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     &config.daemon.drone_metrics,
   ));
 
+  // Perform OIDC provider discovery when configured.
+  let oidc_client = match &config.oidc {
+    Some(oidc) => {
+      let issuer = openidconnect::IssuerUrl::new(oidc.issuer.clone())
+        .map_err(|e| ApplicationError::OidcInvalidIssuer(e.to_string()))?;
+
+      let provider = openidconnect::core::CoreProviderMetadata::discover_async(
+        issuer,
+        openidconnect::reqwest::async_http_client,
+      )
+      .await
+      .map_err(|e| ApplicationError::OidcDiscovery(e.to_string()))?;
+
+      info!(issuer = %oidc.issuer, "OIDC provider discovery complete");
+
+      let redirect = openidconnect::RedirectUrl::new(format!(
+        "{}/auth/callback",
+        oidc.base_url.trim_end_matches('/')
+      ))
+      .map_err(|e| ApplicationError::OidcInvalidRedirectUri(e.to_string()))?;
+
+      // RequestBody sends client credentials in the POST body
+      // (client_secret_post).  Some providers (e.g. Authelia) require
+      // this instead of the HTTP Basic Auth default.
+      let client = openidconnect::core::CoreClient::from_provider_metadata(
+        provider,
+        openidconnect::ClientId::new(oidc.client_id.clone()),
+        Some(openidconnect::ClientSecret::new(oidc.client_secret.clone())),
+      )
+      .set_redirect_uri(redirect)
+      .set_auth_type(openidconnect::AuthType::RequestBody);
+
+      Some(Arc::new(client))
+    }
+    None => None,
+  };
+
   let state = AppState::init(
     Arc::clone(&muted),
     metrics.clone(),
     config.frontend_path.clone(),
     Arc::clone(&preview),
+    oidc_client,
   );
-  let app = web_base::base_router(state).layer(TraceLayer::new_for_http());
+  let app = create_app(state, config);
 
   info!("Binding to {}", config.listen_address);
 
@@ -341,6 +412,39 @@ async fn shutdown_signal(running: Arc<AtomicBool>) {
   }
 
   running.store(false, Ordering::Relaxed);
+}
+
+fn create_app(state: AppState, config: &Config) -> Router {
+  let session_store = MemoryStore::default();
+  let secure = config
+    .oidc
+    .as_ref()
+    .is_some_and(|o| o.base_url.starts_with("https://"));
+  // SameSite::Lax is required: Strict suppresses the session cookie on
+  // the cross-site redirect back from the OIDC provider.
+  let session_layer = SessionManagerLayer::new(session_store)
+    .with_secure(secure)
+    .with_same_site(SameSite::Lax);
+
+  let protected = web_base::protected_router(state.clone()).route_layer(
+    middleware::from_fn_with_state(state.clone(), auth::require_auth),
+  );
+
+  let public = web_base::public_router(state.clone());
+
+  let mut app = Router::new().merge(protected).merge(public);
+
+  // Only expose auth routes when OIDC is configured.
+  if state.oidc_client.is_some() {
+    let auth_router = Router::new()
+      .route("/auth/login", get(auth::login_handler))
+      .route("/auth/callback", get(auth::callback_handler))
+      .route("/auth/logout", get(auth::logout_handler))
+      .with_state(state);
+    app = app.merge(auth_router);
+  }
+
+  app.layer(session_layer).layer(TraceLayer::new_for_http())
 }
 
 fn run_heartbeat_preview(

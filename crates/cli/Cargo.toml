@@ -39,6 +39,8 @@ aide = { workspace = true }
 schemars = { workspace = true }
 sd-notify = { workspace = true }
 futures = { workspace = true }
+openidconnect = { workspace = true }
+tower-sessions = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 tracing-journald = "0.3"

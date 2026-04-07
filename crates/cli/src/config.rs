@@ -31,6 +31,30 @@ pub enum ConfigError {
 
   #[error("Configuration validation failed: {0}")]
   Validation(String),
+
+  #[error(
+    "Partial OIDC configuration: all four fields (base_url, \
+     oidc_issuer, oidc_client_id, oidc_client_secret_file) must \
+     be set together, but only some were provided"
+  )]
+  OidcPartialConfig,
+
+  #[error("Failed to read OIDC client secret from {path:?}: {source}")]
+  OidcSecretFileRead {
+    path: PathBuf,
+    #[source]
+    source: std::io::Error,
+  },
+}
+
+/// Fully resolved OIDC configuration.  Present only when all four
+/// fields were provided via CLI args, environment, or config file.
+#[derive(Debug, Clone)]
+pub struct OidcConfig {
+  pub base_url: String,
+  pub issuer: String,
+  pub client_id: String,
+  pub client_secret: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -43,6 +67,15 @@ pub(crate) struct ConfigFileRaw {
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
+  oidc: Option<OidcSectionRaw>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OidcSectionRaw {
+  base_url: Option<String>,
+  issuer: Option<String>,
+  client_id: Option<String>,
+  client_secret_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -85,6 +118,7 @@ pub struct Config {
   pub frontend_path: PathBuf,
   voice_overrides: VoiceOverrides,
   pub daemon: DaemonConfig,
+  pub oidc: Option<OidcConfig>,
 }
 
 /// Configuration specific to daemon mode.
@@ -110,12 +144,17 @@ impl Default for DaemonConfig {
 impl Config {
   /// Build a validated configuration by merging CLI
   /// arguments with an optional config file.
+  #[allow(clippy::too_many_arguments)]
   pub fn from_args(
     log_level: Option<&str>,
     log_format: Option<&str>,
     listen: Option<&str>,
     frontend_path: Option<&Path>,
     config_path: Option<&Path>,
+    base_url: Option<&str>,
+    oidc_issuer: Option<&str>,
+    oidc_client_id: Option<&str>,
+    oidc_client_secret_file: Option<&Path>,
   ) -> Result<Self, ConfigError> {
     let file = match config_path {
       Some(p) => ConfigFileRaw::from_file(p)?,
@@ -171,6 +210,33 @@ impl Config {
         ..DaemonConfig::default()
       });
 
+    let oidc_file = file.oidc.unwrap_or_default();
+    let oidc_base = base_url.map(String::from).or(oidc_file.base_url);
+    let oidc_iss = oidc_issuer.map(String::from).or(oidc_file.issuer);
+    let oidc_cid = oidc_client_id.map(String::from).or(oidc_file.client_id);
+    let oidc_sf = oidc_client_secret_file
+      .map(PathBuf::from)
+      .or(oidc_file.client_secret_file);
+
+    let oidc = match (oidc_base, oidc_iss, oidc_cid, oidc_sf) {
+      (Some(base), Some(iss), Some(cid), Some(sf)) => {
+        let secret = std::fs::read_to_string(&sf)
+          .map(|s| s.trim().to_string())
+          .map_err(|source| ConfigError::OidcSecretFileRead {
+            path: sf,
+            source,
+          })?;
+        Some(OidcConfig {
+          base_url: base,
+          issuer: iss,
+          client_id: cid,
+          client_secret: secret,
+        })
+      }
+      (None, None, None, None) => None,
+      _ => return Err(ConfigError::OidcPartialConfig),
+    };
+
     Ok(Config {
       log_level,
       log_format,
@@ -179,6 +245,7 @@ impl Config {
       frontend_path,
       voice_overrides: file.voice.unwrap_or_default(),
       daemon,
+      oidc,
     })
   }
 
@@ -250,7 +317,9 @@ mod tests {
 
   #[test]
   fn missing_drone_section_defaults() {
-    let config = Config::from_args(None, None, None, None, None).unwrap();
+    let config =
+      Config::from_args(None, None, None, None, None, None, None, None, None)
+        .unwrap();
     assert!(config.daemon.drone_metrics.is_empty());
     assert!(
       (config.daemon.drone_poll_interval_secs - 5.0).abs() < f64::EPSILON

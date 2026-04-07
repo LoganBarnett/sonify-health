@@ -277,6 +277,42 @@ in {
       };
     };
 
+    oidc = {
+      enable = lib.mkEnableOption "OIDC authentication for the web UI and API";
+
+      baseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "https://sonify.example.com";
+        description = ''
+          Public base URL of the service, used to construct the OIDC
+          redirect URI (base_url + /auth/callback).
+        '';
+      };
+
+      issuer = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "https://sso.example.com/application/o/sonify-health/";
+        description = "OIDC issuer URL for provider discovery.";
+      };
+
+      clientId = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "OIDC client ID.";
+      };
+
+      clientSecretFile = lib.mkOption {
+        type = lib.types.str;
+        example = "/run/secrets/sonify-health-oidc";
+        description = ''
+          Path to a file containing the OIDC client secret.  The file
+          is read at daemon startup.
+        '';
+      };
+    };
+
     user = lib.mkOption {
       type = lib.types.str;
       default = "_sonify-health";
@@ -380,28 +416,37 @@ in {
       '';
 
     launchd.daemons.sonify-health = {
-      serviceConfig = {
-        ProgramArguments = [
-          "/bin/sh"
-          "-c"
-          "/bin/wait4path ${cfg.package} && exec ${cfg.package}/bin/sonify-health --config ${configFile} --frontend-path ${cfg.frontendPath} daemon"
-        ];
-        UserName = cfg.user;
-        GroupName = cfg.group;
-        RunAtLoad = true;
-        KeepAlive = {
-          Crashed = true;
-          SuccessfulExit = false;
+      serviceConfig =
+        {
+          ProgramArguments = [
+            "/bin/sh"
+            "-c"
+            "/bin/wait4path ${cfg.package} && exec ${cfg.package}/bin/sonify-health --config ${configFile} --frontend-path ${cfg.frontendPath} daemon"
+          ];
+          UserName = cfg.user;
+          GroupName = cfg.group;
+          RunAtLoad = true;
+          KeepAlive = {
+            Crashed = true;
+            SuccessfulExit = false;
+          };
+          # Unix socket connections require write permission on the socket
+          # file.  Set umask to 0000 so the socket is created with 0777,
+          # allowing any local user/service to connect to the API.
+          Umask = 0;
+          ThrottleInterval = 30;
+          ProcessType = "Interactive";
+          StandardOutPath = "/var/log/sonify-health/stdout.log";
+          StandardErrorPath = "/var/log/sonify-health/stderr.log";
+        }
+        // lib.optionalAttrs cfg.oidc.enable {
+          EnvironmentVariables = {
+            BASE_URL = cfg.oidc.baseUrl;
+            OIDC_ISSUER = cfg.oidc.issuer;
+            OIDC_CLIENT_ID = cfg.oidc.clientId;
+            OIDC_CLIENT_SECRET_FILE = cfg.oidc.clientSecretFile;
+          };
         };
-        # Unix socket connections require write permission on the socket
-        # file.  Set umask to 0000 so the socket is created with 0777,
-        # allowing any local user/service to connect to the API.
-        Umask = 0;
-        ThrottleInterval = 30;
-        ProcessType = "Interactive";
-        StandardOutPath = "/var/log/sonify-health/stdout.log";
-        StandardErrorPath = "/var/log/sonify-health/stderr.log";
-      };
     };
 
     # Optional health-check agent.  Probes the daemon's health endpoint
