@@ -1,6 +1,13 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use fundsp::audiounit::BigBlockAdapter;
 use fundsp::prelude32::*;
 use thiserror::Error;
+
+/// Preferred buffer size in frames.  Larger buffers give the CPU
+/// more headroom for expensive graphs (the 32-channel FDN reverb
+/// in particular) at the cost of a few milliseconds of latency,
+/// which is irrelevant for ambient sonification.
+const BUFFER_FRAMES: u32 = 1024;
 
 #[derive(Debug, Error)]
 pub enum AudioError {
@@ -79,20 +86,34 @@ impl AudioOutput {
 
     let sample_rate = supported.sample_rate().0 as f64;
     let channels = supported.channels() as usize;
-    let stream_config: cpal::StreamConfig = supported.into();
+    let mut stream_config: cpal::StreamConfig = supported.into();
+    stream_config.buffer_size = cpal::BufferSize::Fixed(BUFFER_FRAMES);
 
     graph.set_sample_rate(sample_rate);
     graph.allocate();
+
+    // Block adapter lets fundsp vectorize its inner loops
+    // instead of computing one sample at a time.
+    let mut adapter = BigBlockAdapter::new(graph);
+    let mut left_buf: Vec<f32> = Vec::with_capacity(BUFFER_FRAMES as usize);
+    let mut right_buf: Vec<f32> = Vec::with_capacity(BUFFER_FRAMES as usize);
 
     let stream = device
       .build_output_stream(
         &stream_config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-          for frame in data.chunks_mut(channels) {
-            let (l, r) = graph.get_stereo();
-            frame[0] = l;
+          let frames = data.len() / channels;
+          left_buf.resize(frames, 0.0);
+          right_buf.resize(frames, 0.0);
+          adapter.process_big(
+            frames,
+            &[],
+            &mut [&mut left_buf, &mut right_buf],
+          );
+          for (i, frame) in data.chunks_mut(channels).enumerate() {
+            frame[0] = left_buf[i];
             if channels > 1 {
-              frame[1] = r;
+              frame[1] = right_buf[i];
             }
           }
         },
