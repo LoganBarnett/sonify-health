@@ -21,12 +21,13 @@ impl Severity {
     }
   }
 
-  /// Amplitude scaling — distress raises energy.
+  /// Amplitude scaling — distress raises energy, but stays
+  /// background-level even at worst severity.
   pub fn amplitude(self) -> f64 {
     match self {
-      Severity::Healthy => 0.3,
-      Severity::Degraded => 0.5,
-      Severity::Down => 0.8,
+      Severity::Healthy => 0.08,
+      Severity::Degraded => 0.14,
+      Severity::Down => 0.22,
     }
   }
 }

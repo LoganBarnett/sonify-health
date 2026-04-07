@@ -1,4 +1,4 @@
-use syn::{Expr, ExprLit, ExprRange, Field, Lit};
+use syn::{Expr, ExprLit, ExprRange, ExprUnary, Field, Lit, UnOp};
 
 /// A parsed `#[voice_param(order = N, range = LO..HI)]` field.
 pub struct VoiceField {
@@ -85,6 +85,14 @@ fn extract_float(expr: Option<&Expr>) -> syn::Result<Option<f64>> {
     Some(Expr::Lit(ExprLit {
       lit: Lit::Int(i), ..
     })) => Ok(Some(i.base10_parse::<f64>()?)),
+    Some(Expr::Unary(ExprUnary {
+      op: UnOp::Neg(_),
+      expr: inner,
+      ..
+    })) => {
+      let positive = extract_float(Some(inner))?;
+      Ok(positive.map(|v| -v))
+    }
     Some(other) => {
       Err(syn::Error::new_spanned(other, "expected a float literal"))
     }

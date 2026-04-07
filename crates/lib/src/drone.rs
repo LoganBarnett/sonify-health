@@ -27,16 +27,18 @@ impl DroneRegister {
 /// Build a single drone graph whose timbre and volume shift in
 /// real time with the given metric shared variable.
 ///
-/// The graph structure (from the design doc):
-///   saw_hz(freq) >> lowpass(cutoff) * lfo(AM) * metric
+/// The aesthetic target is periodic bell/bong tones with long
+/// reverb tails that overlap into a continuous ambient bed.
+/// Event rate and brightness encode the metric value.
 ///
-/// Filter cutoff:  metric 0.0..1.0 → 200..8000 Hz
-/// AM rate:        metric 0.0..1.0 → 1..60 Hz
-/// Volume:         directly proportional to metric value
-///
-/// When `external_volume` is provided, the output is further
-/// multiplied by it (smoothed with a 0.5s follow filter).
-/// The daemon uses this for mute control.
+/// Graph structure:
+///   voice_blend(sine + triangle + saw)
+///     → lowpole(200–1500 Hz cutoff)
+///     × bong_envelope(exp-decay pulse, rate 0.1–2 Hz)
+///     × volume(floor 0.02 + quadratic, max 0.15)
+///     → pan(voice.stereo_pan)
+///     → reverb_stereo(room=0.6, time=3.0, damp=0.4)
+///     × external_volume
 pub fn drone_graph(
   voice: &Voice,
   register: DroneRegister,
@@ -54,48 +56,63 @@ pub fn drone_graph_with_volume(
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
   let base = voice.base_freq as f32 * register.multiplier();
-  let metric_val = metric.clone();
-  let metric_am = metric.clone();
+  let metric_cutoff = metric.clone();
+  let metric_bong = metric.clone();
   let metric_vol = metric.clone();
 
-  // Sawtooth oscillator as the harmonically rich source.
-  let osc = saw_hz(base);
+  // Normalize waveform blend so the peak stays at 1.0 before
+  // amplitude scaling.
+  let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
+  let norm = if total_ratio > 0.0 {
+    1.0 / total_ratio
+  } else {
+    1.0
+  } as f32;
 
-  // Low-pass filter whose cutoff tracks the metric.
-  // 0.0 → 200 Hz (warm hum), 1.0 → 8000 Hz (bright buzz).
+  let sine_w = voice.sine_ratio as f32 * norm;
+  let tri_w = voice.tri_ratio as f32 * norm;
+  let saw_w = voice.saw_ratio as f32 * norm;
+
+  // Voice-blend oscillator: weighted sum of sine, triangle, and
+  // sawtooth at the base frequency.
+  let osc =
+    sine_hz(base) * sine_w + triangle_hz(base) * tri_w + saw_hz(base) * saw_w;
+
+  // One-pole lowpass (6 dB/oct, gentle rolloff) with dynamic
+  // cutoff.  Capped at 1500 Hz to stay warm even under load.
   let cutoff = lfo(move |_t| {
-    let m = metric_val.value();
-    200.0 + m * 7800.0
+    let m = metric_cutoff.value();
+    200.0 + m * 1300.0
   });
 
-  // Amplitude modulation (tremolo/roughness).
-  // 0.0 → 1 Hz gentle pulse, 1.0 → 60 Hz growl.
+  // Bong envelope: exponential-decay pulse train.  Creates
+  // bell-like attacks with natural decay tails.  Rate scales
+  // from one event per 10 seconds (idle) to twice per second
+  // (full load).
   let am = lfo(move |t| {
-    let m = metric_am.value();
-    let rate = 1.0 + m * 59.0;
-    0.5 + 0.5 * (t * rate * std::f32::consts::TAU).sin()
+    let m = metric_bong.value();
+    let rate = 0.1 + m * 1.9;
+    let phase = (t * rate) % 1.0;
+    (-phase * 5.0).exp()
   });
 
-  // Volume envelope: metric value smoothed to avoid clicks.
-  let vol = var(&metric_vol) >> follow(0.5);
+  // Volume with a floor so the drone is always faintly present.
+  // Quadratic curve keeps low-metric drones gentle.
+  let vol = lfo(move |_t| {
+    let m = metric_vol.value();
+    0.02 + m * m * 0.13
+  });
 
-  // Assemble: osc → filter → AM → volume.
-  // `cutoff >> resonator(base, bw)` is an option, but a
-  // simple lowpass_hz is closer to the design doc.
-  //
-  // Note: fundsp's `lowpass_hz` is a fixed-cutoff filter.
-  // For dynamic cutoff driven by a metric, we pipe the
-  // cutoff LFO into `lowpass()` which takes cutoff + Q
-  // inputs.  We supply a moderate Q of 0.7.
-  let filter_input = (osc | cutoff | dc(0.7)) >> lowpass();
+  let ext_shared = match external_volume {
+    Some(ext) => ext.clone(),
+    None => shared(1.0),
+  };
+  let ext_vol = var(&ext_shared) >> follow(0.5);
 
-  match external_volume {
-    Some(ext) => {
-      let ext_vol = var(ext) >> follow(0.5);
-      Box::new(filter_input * am * vol * ext_vol)
-    }
-    None => Box::new(filter_input * am * vol),
-  }
+  let mono = (osc | cutoff) >> lowpole() * am * vol * ext_vol;
+  let stereo =
+    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 3.0, 0.4);
+  Box::new(stereo)
 }
 
 #[cfg(test)]
@@ -112,11 +129,14 @@ mod tests {
     graph.allocate();
 
     let peak = (0..44100)
-      .map(|_| graph.get_stereo().0.abs())
+      .map(|_| {
+        let (l, r) = graph.get_stereo();
+        l.abs().max(r.abs())
+      })
       .fold(0.0f32, f32::max);
 
     assert!(
-      peak > 0.01,
+      peak > 0.001,
       "Drone at metric=0.8 should produce sound, \
        got peak {}",
       peak
@@ -124,28 +144,74 @@ mod tests {
   }
 
   #[test]
-  fn drone_silent_when_metric_zero() {
+  fn drone_quiet_when_metric_zero() {
     let metric = shared(0.0);
     let mut graph =
       drone_graph(&Voice::from_hostname("test"), DroneRegister::Mid, &metric);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
-    // Skip first 4410 samples (100ms) to let the follow
-    // filter settle.
-    for _ in 0..4410 {
+    // Skip 200ms to let filters and reverb settle.
+    for _ in 0..8820 {
       graph.get_stereo();
     }
 
     let peak = (0..44100)
-      .map(|_| graph.get_stereo().0.abs())
+      .map(|_| {
+        let (l, r) = graph.get_stereo();
+        l.abs().max(r.abs())
+      })
       .fold(0.0f32, f32::max);
 
+    // Volume floor is 0.02, so the signal should be very quiet
+    // but not necessarily silent.
     assert!(
-      peak < 0.01,
-      "Drone at metric=0.0 should be near-silent, \
+      peak < 0.1,
+      "Drone at metric=0.0 should be very quiet, \
        got peak {}",
       peak
+    );
+  }
+
+  #[test]
+  fn high_metric_louder_than_low() {
+    let metric_lo = shared(0.1);
+    let metric_hi = shared(0.9);
+
+    let mut lo_graph = drone_graph(
+      &Voice::from_hostname("test"),
+      DroneRegister::Mid,
+      &metric_lo,
+    );
+    let mut hi_graph = drone_graph(
+      &Voice::from_hostname("test"),
+      DroneRegister::Mid,
+      &metric_hi,
+    );
+
+    lo_graph.set_sample_rate(44100.0);
+    hi_graph.set_sample_rate(44100.0);
+    lo_graph.allocate();
+    hi_graph.allocate();
+
+    let rms = |graph: &mut Box<dyn AudioUnit>| -> f32 {
+      let sum: f32 = (0..88200)
+        .map(|_| {
+          let (l, r) = graph.get_stereo();
+          l * l + r * r
+        })
+        .sum();
+      (sum / 88200.0).sqrt()
+    };
+
+    let rms_lo = rms(&mut lo_graph);
+    let rms_hi = rms(&mut hi_graph);
+
+    assert!(
+      rms_hi > rms_lo,
+      "Higher metric RMS ({}) should exceed lower ({})",
+      rms_hi,
+      rms_lo
     );
   }
 }

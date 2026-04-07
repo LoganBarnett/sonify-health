@@ -16,6 +16,9 @@ listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # release_ms = 150.0
 # boop1_ratio = 0.5
 # boop2_ratio = 0.25
+# chirp_ratio = 1.2    # Onset pitch sweep (1.0 = none, 1.5 = perfect fifth)
+# stereo_pan = 0.0     # Drone stereo placement (-0.3..0.3)
+# reverb_mix = 0.4     # Wet/dry reverb blend (0.3..0.6)
 
 # Heartbeat timing and checks (used by `daemon` subcommand).
 [heartbeat]

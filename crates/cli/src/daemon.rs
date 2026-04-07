@@ -226,7 +226,6 @@ fn play_heartbeat(
   state: &HeartbeatState,
   audio_device: Option<&str>,
 ) -> Result<(), AudioError> {
-  // Read current severity values from shared state.
   let severities = [
     severity_from_shared(state.boops[0].value()),
     severity_from_shared(state.boops[1].value()),
@@ -240,23 +239,12 @@ fn play_heartbeat(
     "Playing heartbeat"
   );
 
-  let durations = heartbeat::boop_durations(voice);
-  let gap = Duration::from_millis(100);
-
-  for (i, &severity) in severities.iter().enumerate() {
-    let dur = durations[i];
-    let graph = heartbeat::boop_graph(voice, severity, dur);
-    AudioOutput::play_for(
-      graph,
-      Duration::from_secs_f64(dur + 0.05),
-      audio_device,
-    )?;
-    if i < 2 {
-      thread::sleep(gap);
-    }
-  }
-
-  Ok(())
+  let graph = heartbeat::heartbeat_graph(voice, severities);
+  AudioOutput::play_for(
+    graph,
+    heartbeat::heartbeat_duration(voice),
+    audio_device,
+  )
 }
 
 fn severity_from_shared(value: f32) -> sonify_health_lib::Severity {

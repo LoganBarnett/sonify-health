@@ -37,6 +37,15 @@ pub struct Voice {
 
   #[voice_param(order = 7, range = 0.2..0.3)]
   pub boop2_ratio: f64,
+
+  #[voice_param(order = 8, range = 1.0..1.5)]
+  pub chirp_ratio: f64,
+
+  #[voice_param(order = 9, range = -0.3..0.3)]
+  pub stereo_pan: f64,
+
+  #[voice_param(order = 10, range = 0.3..0.6)]
+  pub reverb_mix: f64,
 }
 
 impl Voice {
@@ -71,6 +80,15 @@ impl Voice {
     if let Some(v) = o.boop2_ratio {
       self.boop2_ratio = v;
     }
+    if let Some(v) = o.chirp_ratio {
+      self.chirp_ratio = v;
+    }
+    if let Some(v) = o.stereo_pan {
+      self.stereo_pan = v;
+    }
+    if let Some(v) = o.reverb_mix {
+      self.reverb_mix = v;
+    }
     self
   }
 }
@@ -86,6 +104,9 @@ pub struct VoiceOverrides {
   pub release_ms: Option<f64>,
   pub boop1_ratio: Option<f64>,
   pub boop2_ratio: Option<f64>,
+  pub chirp_ratio: Option<f64>,
+  pub stereo_pan: Option<f64>,
+  pub reverb_mix: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -97,7 +118,10 @@ impl fmt::Display for Voice {
     writeln!(f, "attack_ms:    {:.1} ms", self.attack_ms)?;
     writeln!(f, "release_ms:   {:.1} ms", self.release_ms)?;
     writeln!(f, "boop1_ratio:  {:.3}", self.boop1_ratio)?;
-    write!(f, "boop2_ratio:  {:.3}", self.boop2_ratio)
+    writeln!(f, "boop2_ratio:  {:.3}", self.boop2_ratio)?;
+    writeln!(f, "chirp_ratio:  {:.3}", self.chirp_ratio)?;
+    writeln!(f, "stereo_pan:   {:.3}", self.stereo_pan)?;
+    write!(f, "reverb_mix:   {:.3}", self.reverb_mix)
   }
 }
 
@@ -139,6 +163,9 @@ mod tests {
       assert!((80.0..250.0).contains(&v.release_ms));
       assert!((0.4..0.6).contains(&v.boop1_ratio));
       assert!((0.2..0.3).contains(&v.boop2_ratio));
+      assert!((1.0..1.5).contains(&v.chirp_ratio));
+      assert!((-0.3..0.3).contains(&v.stereo_pan));
+      assert!((0.3..0.6).contains(&v.reverb_mix));
     }
   }
 

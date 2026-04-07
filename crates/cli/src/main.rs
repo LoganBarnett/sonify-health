@@ -294,23 +294,13 @@ fn run_heartbeat_preview(
   let voice = config.voice();
   info!(base_freq = voice.base_freq, "Playing heartbeat preview");
 
-  let durations = heartbeat::boop_durations(&voice);
-  let gap = Duration::from_millis(100);
-
-  for (i, &severity) in severities.iter().enumerate() {
-    let dur = durations[i];
-    let graph = heartbeat::boop_graph(&voice, severity, dur);
-    AudioOutput::play_for(
-      graph,
-      Duration::from_secs_f64(dur + 0.05),
-      config.audio_device.as_deref(),
-    )?;
-    if i < 2 {
-      std::thread::sleep(gap);
-    }
-  }
-
-  Ok(())
+  let graph = heartbeat::heartbeat_graph(&voice, severities);
+  AudioOutput::play_for(
+    graph,
+    heartbeat::heartbeat_duration(&voice),
+    config.audio_device.as_deref(),
+  )
+  .map_err(ApplicationError::AudioPlayback)
 }
 
 fn run_drone_preview(
