@@ -2,10 +2,12 @@ mod config;
 mod daemon;
 mod logging;
 mod metrics;
+mod preview_state;
 mod print;
 mod systemd;
 mod voice_args;
 mod web_base;
+mod websocket;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ConfigError};
@@ -225,10 +227,24 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
+  let voice = config.voice();
+  let scale = config.scale();
+  let scale_key =
+    config.scale_key_for(&gethostname::gethostname().to_string_lossy());
+
+  let preview = Arc::new(preview_state::PreviewState::new(
+    voice.clone(),
+    scale_key,
+    Arc::clone(&muted),
+    &config.daemon.heartbeat_checks,
+    &config.daemon.drone_metrics,
+  ));
+
   let state = AppState::init(
     Arc::clone(&muted),
     metrics.clone(),
     config.frontend_path.clone(),
+    Arc::clone(&preview),
   );
   let app = web_base::base_router(state).layer(TraceLayer::new_for_http());
 
@@ -264,21 +280,21 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
 
   // Spawn the blocking daemon loop in a separate thread.
   let daemon_config = config.daemon.clone();
-  let voice = config.voice();
-  let scale = config.scale();
   let audio_device = config.audio_device.clone();
   let daemon_muted = Arc::clone(&muted);
   let daemon_running = Arc::clone(&running);
+  let daemon_preview = Arc::clone(&preview);
   let daemon_handle = tokio::task::spawn_blocking(move || {
-    daemon::run_daemon(
-      &daemon_config,
-      &voice,
-      &scale,
-      audio_device.as_deref(),
-      daemon_muted,
-      daemon_running,
+    daemon::run_daemon(daemon::DaemonContext {
+      config: &daemon_config,
+      voice: &voice,
+      scale: &scale,
+      audio_device: audio_device.as_deref(),
+      muted: daemon_muted,
+      running: daemon_running,
       metrics,
-    )
+      preview: daemon_preview,
+    })
   });
 
   let running_signal = Arc::clone(&running);

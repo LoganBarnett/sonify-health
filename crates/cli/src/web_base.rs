@@ -1,4 +1,6 @@
 use crate::metrics::Metrics;
+use crate::preview_state::PreviewState;
+use crate::websocket;
 use aide::{
   axum::{routing::get_with, ApiRouter},
   openapi::OpenApi,
@@ -25,32 +27,36 @@ use tower::ServiceBuilder;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-// ── AppState ──────────────────────────────────────────────────────────────────
+// -- AppState ----------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct AppState {
   pub metrics: Metrics,
   pub muted: Arc<AtomicBool>,
   pub frontend_path: PathBuf,
+  pub preview: Arc<PreviewState>,
 }
 
 impl AppState {
   /// Construct `AppState` with pre-built metrics, shared mute flag,
-  /// and the path to the compiled frontend assets directory.
+  /// the path to the compiled frontend assets directory, and the
+  /// preview state backing the real-time control surface.
   pub fn init(
     muted: Arc<AtomicBool>,
     metrics: Metrics,
     frontend_path: PathBuf,
+    preview: Arc<PreviewState>,
   ) -> Self {
     Self {
       metrics,
       muted,
       frontend_path,
+      preview,
     }
   }
 }
 
-// ── Health ────────────────────────────────────────────────────────────────────
+// -- Health ------------------------------------------------------------------
 
 #[derive(Serialize, JsonSchema)]
 pub struct HealthResponse {
@@ -63,7 +69,7 @@ async fn healthz() -> Json<HealthResponse> {
   })
 }
 
-// ── Mute ──────────────────────────────────────────────────────────────────────
+// -- Mute --------------------------------------------------------------------
 
 #[derive(Serialize, JsonSchema)]
 pub struct MuteResponse {
@@ -79,16 +85,26 @@ async fn get_mute(State(state): State<AppState>) -> Json<MuteResponse> {
 async fn put_mute(State(state): State<AppState>) -> Json<MuteResponse> {
   state.muted.store(true, Ordering::Relaxed);
   state.metrics.muted.set(1);
+  state.preview.update_all_combined_volumes();
+  let _ = state
+    .preview
+    .broadcast_tx
+    .send(json!({"type": "mute_changed", "muted": true}).to_string());
   Json(MuteResponse { muted: true })
 }
 
 async fn delete_mute(State(state): State<AppState>) -> Json<MuteResponse> {
   state.muted.store(false, Ordering::Relaxed);
   state.metrics.muted.set(0);
+  state.preview.update_all_combined_volumes();
+  let _ = state
+    .preview
+    .broadcast_tx
+    .send(json!({"type": "mute_changed", "muted": false}).to_string());
   Json(MuteResponse { muted: false })
 }
 
-// ── Metrics ───────────────────────────────────────────────────────────────────
+// -- Metrics -----------------------------------------------------------------
 
 async fn metrics_endpoint(State(state): State<AppState>) -> Response {
   let encoder = TextEncoder::new();
@@ -110,7 +126,7 @@ async fn metrics_endpoint(State(state): State<AppState>) -> Response {
   }
 }
 
-// ── Router ────────────────────────────────────────────────────────────────────
+// -- Router ------------------------------------------------------------------
 
 pub fn base_router(state: AppState) -> Router {
   aide::generate::extract_schemas(true);
@@ -143,7 +159,7 @@ pub fn base_router(state: AppState) -> Router {
         op.description("Unmute audio output.")
       }),
     )
-    .with_state(state)
+    .with_state(state.clone())
     .finish_api_with(&mut api, |a| a.title("sonify-health"));
 
   let api = Arc::new(api);
@@ -161,6 +177,7 @@ pub fn base_router(state: AppState) -> Router {
 
   Router::new()
     .merge(app_router)
+    .route("/ws", get(websocket::ws_handler).with_state(state))
     .route(
       "/api-docs/openapi.json",
       get({
