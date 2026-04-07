@@ -22,7 +22,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::signal;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{debug, info};
 use web_base::AppState;
 
 #[derive(Debug, Error)]
@@ -133,6 +133,14 @@ async fn main() -> Result<(), ApplicationError> {
   )?;
 
   init_logging(config.log_level, config.log_format);
+
+  debug!(
+    log_level = ?config.log_level,
+    log_format = ?config.log_format,
+    listen = %config.listen_address,
+    audio_device = ?config.audio_device,
+    "Resolved configuration"
+  );
 
   match cli.command {
     Command::Preview {
@@ -294,8 +302,18 @@ fn run_heartbeat_preview(
 
   let voice = config.voice();
   let scale = config.scale();
+  debug!(?voice, "Resolved voice");
   let specs =
     voice.boop_specs(&scale, severities.len(), heartbeat::TOTAL_BOOP_TIME);
+  for (i, spec) in specs.iter().enumerate() {
+    debug!(
+      boop = i,
+      freq = format_args!("{:.1} Hz", spec.freq),
+      duration = format_args!("{:.3}s", spec.duration),
+      severity = %severities[i],
+      "Boop spec"
+    );
+  }
   info!(
     base_freq = voice.base_freq,
     boops = severities.len(),
@@ -337,6 +355,7 @@ fn run_drone_preview(
   }
 
   let voice = config.voice();
+  debug!(?voice, "Resolved voice");
   info!(
     base_freq = voice.base_freq,
     ?register,

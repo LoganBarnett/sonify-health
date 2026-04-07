@@ -14,7 +14,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -34,10 +34,20 @@ pub fn run_daemon(
   running: Arc<AtomicBool>,
   metrics: Metrics,
 ) -> Result<(), DaemonError> {
+  debug!(?voice, "Resolved voice");
   let boop_count = config.heartbeat_checks.len();
   let heartbeat_state = Arc::new(HeartbeatState::new(boop_count));
   let boop_specs =
     voice.boop_specs(scale, boop_count, heartbeat::TOTAL_BOOP_TIME);
+  for (i, spec) in boop_specs.iter().enumerate() {
+    debug!(
+      boop = i,
+      freq = format_args!("{:.1} Hz", spec.freq),
+      duration = format_args!("{:.3}s", spec.duration),
+      check = config.heartbeat_checks[i].name,
+      "Boop spec"
+    );
+  }
 
   // Spawn a check thread for each heartbeat check.
   let check_handles: Vec<_> = config
