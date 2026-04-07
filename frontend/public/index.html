@@ -10,7 +10,45 @@
     <div id="app"></div>
     <script src="/elm.js"></script>
     <script>
-      Elm.Main.init({ node: document.getElementById("app") });
+      var app = Elm.Main.init({ node: document.getElementById("app") });
+
+      var ws = null;
+      var reconnectTimer = null;
+
+      function connect() {
+        var proto = location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(proto + "//" + location.host + "/ws");
+
+        ws.onopen = function () {
+          app.ports.websocketReceive.send(
+            JSON.stringify({ type: "connected" })
+          );
+        };
+
+        ws.onmessage = function (event) {
+          app.ports.websocketReceive.send(event.data);
+        };
+
+        ws.onclose = function () {
+          app.ports.websocketReceive.send(
+            JSON.stringify({ type: "disconnected" })
+          );
+          ws = null;
+          reconnectTimer = setTimeout(connect, 2000);
+        };
+
+        ws.onerror = function () {
+          if (ws) ws.close();
+        };
+      }
+
+      app.ports.websocketSend.subscribe(function (msg) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(msg);
+        }
+      });
+
+      connect();
     </script>
   </body>
 </html>
