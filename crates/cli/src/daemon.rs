@@ -321,11 +321,13 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       metrics.heartbeats_played.inc();
     }
 
-    // Sleep through the rest of the slot.
-    let remaining = config
-      .timing
-      .duration_until_next_slot()
-      .max(Duration::from_millis(500));
+    // Sleep until the next slot.  Use the full cycle duration minus
+    // a small margin so we land just before the next slot rather
+    // than re-entering the current one.
+    let remaining = Duration::from_secs_f64(
+      config.timing.cycle_duration_secs - config.timing.slot_duration_secs,
+    )
+    .max(Duration::from_millis(500));
     let end = std::time::Instant::now() + remaining;
     while std::time::Instant::now() < end && running.load(Ordering::Relaxed) {
       if preview.drone_rebuild_requested.load(Ordering::Relaxed)
