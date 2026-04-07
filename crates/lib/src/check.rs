@@ -1,4 +1,4 @@
-use crate::drone::DroneRegister;
+use crate::drone::{DroneRegister, DroneTexture};
 use crate::severity::Severity;
 use serde::Deserialize;
 use std::process::Command;
@@ -29,6 +29,7 @@ pub struct DroneMetricConfig {
   pub command: String,
   pub result_mode: ResultMode,
   pub register: DroneRegister,
+  pub texture: Option<DroneTexture>,
 }
 
 #[derive(Debug, Error)]
@@ -162,6 +163,7 @@ mod tests {
       command: "echo 0.75".into(),
       result_mode: ResultMode::Stdout,
       register: DroneRegister::Low,
+      texture: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
     assert!((val - 0.75).abs() < 0.001);
@@ -187,6 +189,7 @@ mod tests {
       command: "echo 5.0".into(),
       result_mode: ResultMode::Stdout,
       register: DroneRegister::Mid,
+      texture: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
     assert!(val <= 1.0);

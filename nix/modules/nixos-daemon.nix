@@ -85,14 +85,17 @@
     // lib.optionalAttrs (cfg.drone.metrics != []) {
       drone = {
         poll_interval_secs = cfg.drone.pollIntervalSecs;
-        metrics =
-          map (m: {
+        metrics = map (m:
+          {
             name = m.name;
             command = m.command;
             result_mode = m.resultMode;
             register = m.register;
+          }
+          // lib.optionalAttrs (m.texture != null) {
+            texture = m.texture;
           })
-          cfg.drone.metrics;
+        cfg.drone.metrics;
       };
     });
 
@@ -123,6 +126,16 @@
         description = ''
           Pitch register for the drone voice.  "low" = half base frequency,
           "mid" = base frequency, "high" = double base frequency.
+        '';
+      };
+
+      texture = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum ["bong" "arpeggio" "thrum" "shimmer"]);
+        default = null;
+        description = ''
+          Drone texture.  "bong" = periodic bell strikes, "arpeggio" = cycling
+          pentatonic notes, "thrum" = continuous tremolo, "shimmer" = detuned
+          beating.  When null, auto-assigned by metric position.
         '';
       };
     };

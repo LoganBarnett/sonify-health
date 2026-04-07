@@ -119,6 +119,38 @@ impl Voice {
     self
   }
 
+  /// Draw pentatonic notes for drone arpeggio from a salted PRNG.
+  /// Hashing `note_seed + b"drone"` gives a stream fully independent
+  /// from heartbeat draws, so adding or removing drone metrics
+  /// cannot shift boop note selection.
+  pub fn drone_notes(&self, scale: &PentatonicScale, count: usize) -> Vec<f64> {
+    let mut hasher = Sha256::new();
+    hasher.update(self.note_seed.to_le_bytes());
+    hasher.update(b"drone");
+    let hash = hasher.finalize();
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&hash);
+    let mut rng = Xoshiro256StarStar::from_seed(seed);
+
+    let lo = self.base_freq / 2.0;
+    let hi = self.base_freq * 2.0;
+    let nearby: Vec<f64> = scale
+      .notes()
+      .iter()
+      .copied()
+      .filter(|&n| n >= lo && n <= hi)
+      .collect();
+    let notes = if nearby.is_empty() {
+      scale.notes()
+    } else {
+      &nearby
+    };
+
+    (0..count)
+      .map(|_| notes[rng.gen_range(0..notes.len())])
+      .collect()
+  }
+
   /// Generate per-boop note and duration specs from a sub-PRNG
   /// seeded by `note_seed`.  The sub-PRNG always draws a drone
   /// note first so heartbeat draws are stable regardless of drone
@@ -262,6 +294,42 @@ mod tests {
     });
     assert_eq!(overridden.base_freq, 440.0);
     assert_eq!(overridden.sine_ratio, original_sine);
+  }
+
+  #[test]
+  fn drone_notes_deterministic() {
+    let v = Voice::from_hostname("test");
+    let scale = PentatonicScale::from_key("local");
+    let n1 = v.drone_notes(&scale, 4);
+    let n2 = v.drone_notes(&scale, 4);
+    assert_eq!(n1, n2);
+  }
+
+  #[test]
+  fn drone_notes_within_octave_range() {
+    let v = Voice::from_hostname("test");
+    let scale = PentatonicScale::from_key("local");
+    let notes = v.drone_notes(&scale, 4);
+    for &n in &notes {
+      assert!(
+        n >= v.base_freq / 2.0 && n <= v.base_freq * 2.0,
+        "Drone note {:.1} Hz outside +-1 octave of base {:.1} Hz",
+        n,
+        v.base_freq
+      );
+    }
+  }
+
+  #[test]
+  fn drone_notes_independent_from_boop_draws() {
+    let v = Voice::from_hostname("test");
+    let scale = PentatonicScale::from_key("local");
+    let drone1 = v.drone_notes(&scale, 4);
+    // Calling boop_specs with different counts must not affect
+    // drone_notes, since they use separate PRNG streams.
+    let _specs = v.boop_specs(&scale, 3, 1.0);
+    let drone2 = v.drone_notes(&scale, 4);
+    assert_eq!(drone1, drone2);
   }
 
   /// Golden test: the derive macro must produce the same values

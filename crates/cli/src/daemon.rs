@@ -5,7 +5,7 @@ use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
   check, drone, heartbeat,
   state::HeartbeatState,
-  BoopSpec, DroneState, PentatonicScale, Voice,
+  BoopSpec, DroneState, DroneTexture, PentatonicScale, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -107,10 +107,24 @@ pub fn run_daemon(
     .iter()
     .enumerate()
     .filter_map(|(i, cfg)| {
+      let texture = cfg.texture.unwrap_or_else(|| DroneTexture::from_index(i));
+      let notes = if texture == DroneTexture::Arpeggio {
+        voice.drone_notes(scale, 4)
+      } else {
+        vec![]
+      };
+      debug!(
+        metric = cfg.name,
+        ?texture,
+        arpeggio_notes = notes.len(),
+        "Drone texture resolved"
+      );
       let graph = drone::drone_graph_with_volume(
         voice,
         cfg.register,
+        texture,
         &drone_state.metrics[i],
+        &notes,
         Some(&mute_volume),
       );
       match AudioOutput::play(graph, audio_device) {

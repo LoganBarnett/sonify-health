@@ -12,7 +12,7 @@ use fundsp::prelude32::shared;
 use logging::init_logging;
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, DroneRegister, Severity, Voice,
+  drone, heartbeat, DroneRegister, DroneTexture, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -102,6 +102,11 @@ enum Command {
     #[arg(long, value_enum, default_value_t = DroneRegister::Mid)]
     register: DroneRegister,
 
+    /// Drone texture (bong/arpeggio/thrum/shimmer). Only used with
+    /// drone mode.
+    #[arg(long, value_enum, default_value_t = DroneTexture::Bong)]
+    texture: DroneTexture,
+
     /// Playback duration in seconds for drone preview.
     #[arg(long, default_value_t = 5.0)]
     duration: f64,
@@ -148,6 +153,7 @@ async fn main() -> Result<(), ApplicationError> {
       heartbeat,
       drone,
       register,
+      texture,
       duration,
       values,
     } => {
@@ -161,7 +167,7 @@ async fn main() -> Result<(), ApplicationError> {
       match effective {
         SoundType::Heartbeat => run_heartbeat_preview(&config, &values),
         SoundType::Drone => {
-          run_drone_preview(&config, register, duration, &values)
+          run_drone_preview(&config, register, texture, duration, &values)
         }
       }
     }
@@ -332,6 +338,7 @@ fn run_heartbeat_preview(
 fn run_drone_preview(
   config: &Config,
   register: DroneRegister,
+  texture: DroneTexture,
   duration: f64,
   values: &[String],
 ) -> Result<(), ApplicationError> {
@@ -355,17 +362,25 @@ fn run_drone_preview(
   }
 
   let voice = config.voice();
+  let scale = config.scale();
+  let notes = if texture == DroneTexture::Arpeggio {
+    voice.drone_notes(&scale, 4)
+  } else {
+    vec![]
+  };
   debug!(?voice, "Resolved voice");
   info!(
     base_freq = voice.base_freq,
     ?register,
+    ?texture,
     metric,
     duration,
     "Playing drone preview"
   );
 
   let metric_shared = shared(metric as f32);
-  let graph = drone::drone_graph(&voice, register, &metric_shared);
+  let graph =
+    drone::drone_graph(&voice, register, texture, &metric_shared, &notes);
   AudioOutput::play_for(
     graph,
     Duration::from_secs_f64(duration),

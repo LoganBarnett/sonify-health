@@ -10,7 +10,7 @@ pub mod timing;
 pub mod voice;
 
 pub use check::DroneMetricConfig;
-pub use drone::DroneRegister;
+pub use drone::{DroneRegister, DroneTexture};
 pub use logging::{LogFormat, LogLevel};
 pub use scale::PentatonicScale;
 pub use severity::Severity;
