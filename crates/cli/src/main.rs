@@ -10,9 +10,10 @@ use config::{Config, ConfigError};
 use daemon::DaemonError;
 use fundsp::prelude32::shared;
 use logging::init_logging;
+use sha2::{Digest, Sha256};
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, DroneRegister, DroneTexture, Severity, Voice,
+  drone, heartbeat, scale, DroneRegister, DroneTexture, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -111,6 +112,11 @@ enum Command {
     #[arg(long, default_value_t = 5.0)]
     duration: f64,
 
+    /// Play continuously until interrupted (Ctrl-C).  Overrides
+    /// --duration for drone previews.
+    #[arg(long)]
+    continuous: bool,
+
     /// Positional values: 1 or more severities for heartbeat,
     /// 1 metric for drone.
     values: Vec<String>,
@@ -155,6 +161,7 @@ async fn main() -> Result<(), ApplicationError> {
       register,
       texture,
       duration,
+      continuous,
       values,
     } => {
       let effective = if drone {
@@ -166,9 +173,9 @@ async fn main() -> Result<(), ApplicationError> {
       };
       match effective {
         SoundType::Heartbeat => run_heartbeat_preview(&config, &values),
-        SoundType::Drone => {
-          run_drone_preview(&config, register, texture, duration, &values)
-        }
+        SoundType::Drone => run_drone_preview(
+          &config, register, texture, duration, continuous, &values,
+        ),
       }
     }
     Command::Voice { hostname } => {
@@ -340,6 +347,7 @@ fn run_drone_preview(
   register: DroneRegister,
   texture: Option<DroneTexture>,
   duration: f64,
+  continuous: bool,
   values: &[String],
 ) -> Result<(), ApplicationError> {
   if values.len() != 1 {
@@ -370,6 +378,20 @@ fn run_drone_preview(
     vec![]
   };
   debug!(?voice, "Resolved voice");
+
+  let hostname = gethostname::gethostname().to_string_lossy().to_string();
+  let domain = scale::domain_from_hostname(&hostname);
+  let host_hash = Sha256::digest(hostname.as_bytes());
+  let domain_hash = Sha256::digest(domain.as_bytes());
+  debug!(
+    hostname = %hostname,
+    hostname_sha256_prefix = %host_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+    domain = %domain,
+    domain_sha256_prefix = %domain_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+    note_seed = voice.note_seed,
+    base_texture_index = (voice.note_seed * 6.0).floor() as usize,
+    "Voice seed derivation"
+  );
   info!(
     base_freq = voice.base_freq,
     ?register,
@@ -382,11 +404,23 @@ fn run_drone_preview(
   let metric_shared = shared(metric as f32);
   let graph =
     drone::drone_graph(&voice, register, texture, &metric_shared, &notes);
-  AudioOutput::play_for(
-    graph,
-    Duration::from_secs_f64(duration),
-    config.audio_device.as_deref(),
-  )?;
+
+  if continuous {
+    let _output = AudioOutput::play(graph, config.audio_device.as_deref())?;
+    info!("Playing continuously, press Ctrl-C to stop");
+    let (tx, rx) = std::sync::mpsc::channel();
+    ctrlc::set_handler(move || {
+      let _ = tx.send(());
+    })
+    .expect("Failed to install Ctrl-C handler");
+    rx.recv().ok();
+  } else {
+    AudioOutput::play_for(
+      graph,
+      Duration::from_secs_f64(duration),
+      config.audio_device.as_deref(),
+    )?;
+  }
 
   Ok(())
 }
@@ -395,8 +429,20 @@ fn run_voice(hostname: Option<&str>) {
   let hn = hostname.map(String::from).unwrap_or_else(|| {
     gethostname::gethostname().to_string_lossy().to_string()
   });
-  let voice = Voice::from_hostname(&hn)
-    .with_scale(&sonify_health_lib::scale::domain_from_hostname(&hn));
+  let domain = scale::domain_from_hostname(&hn);
+  let voice = Voice::from_hostname(&hn).with_scale(&domain);
+
+  let host_hash = Sha256::digest(hn.as_bytes());
+  let domain_hash = Sha256::digest(domain.as_bytes());
+  debug!(
+    hostname = %hn,
+    hostname_sha256_prefix = %host_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+    domain = %domain,
+    domain_sha256_prefix = %domain_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+    note_seed = voice.note_seed,
+    base_texture_index = (voice.note_seed * 6.0).floor() as usize,
+    "Voice seed derivation"
+  );
 
   let label = hostname.unwrap_or("(current host)");
   println!("Voice for {}:\n{}", label, voice);
