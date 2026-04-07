@@ -7,7 +7,7 @@ use thiserror::Error;
 /// more headroom for expensive graphs (the 32-channel FDN reverb
 /// in particular) at the cost of a few milliseconds of latency,
 /// which is irrelevant for ambient sonification.
-const BUFFER_FRAMES: u32 = 1024;
+const BUFFER_FRAMES: u32 = 2048;
 
 #[derive(Debug, Error)]
 pub enum AudioError {
