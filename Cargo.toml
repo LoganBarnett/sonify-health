@@ -52,11 +52,12 @@ gethostname = "0.4"
 ctrlc = "3.4"
 
 # Web server
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1.41", features = ["full"] }
 tokio-listener = { version = "0.5", features = ["axum08"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "fs", "set-header"] }
+futures = "0.3"
 
 # Observability
 prometheus = "0.13"

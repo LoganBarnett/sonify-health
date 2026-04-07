@@ -1,6 +1,7 @@
 use crate::severity::Severity;
 use crate::voice::{BoopSpec, Voice};
 use fundsp::prelude32::*;
+use fundsp::shared::Shared;
 use std::time::Duration;
 
 /// Total time budget for boops (excluding gaps).
@@ -50,14 +51,24 @@ struct BoopTiming {
   release: f32,
 }
 
-/// Build a complete heartbeat audio graph that renders N boops in
-/// a single stream.  Each boop plays its own pentatonic note at
-/// the severity-adjusted pitch, with a chirp onset sweep, and the
-/// output is panned center with a short reverb tail.
+/// Build a complete heartbeat audio graph (no external volume).
 pub fn heartbeat_graph(
   voice: &Voice,
   severities: &[Severity],
   specs: &[BoopSpec],
+) -> Box<dyn AudioUnit> {
+  heartbeat_graph_with_volume(voice, severities, specs, None)
+}
+
+/// Build a heartbeat audio graph with optional external volume
+/// multiplier (used for preview volume control).  Each boop plays
+/// its own pentatonic note at the severity-adjusted pitch, with a
+/// chirp onset sweep, and the output is panned and reverbed.
+pub fn heartbeat_graph_with_volume(
+  voice: &Voice,
+  severities: &[Severity],
+  specs: &[BoopSpec],
+  external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
   let count = Ord::min(specs.len(), severities.len());
   let chirp_ratio = voice.chirp_ratio as f32;
@@ -139,8 +150,14 @@ pub fn heartbeat_graph(
     0.0
   });
 
+  let ext = match external_volume {
+    Some(s) => s.clone(),
+    None => shared(1.0),
+  };
+  let ext_vol = var(&ext) >> follow(0.1);
+
   let waveform = (sine() * sine_w) & (triangle() * tri_w) & (saw() * saw_w);
-  let mix = (freq_env >> waveform) * amp_env;
+  let mix = (freq_env >> waveform) * amp_env * ext_vol;
   let stereo = mix
     >> pan(voice.stereo_pan as f32)
     >> reverb_stereo(0.3, 0.8, voice.reverb_mix as f32);
