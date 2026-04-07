@@ -3,7 +3,7 @@ use crate::metrics::Metrics;
 use crate::preview_state::{severity_from_shared, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
-  audio::{AudioError, AudioOutput},
+  audio::{AudioError, AudioMixer},
   check, drone, heartbeat,
   state::DroneState,
   DroneTexture, PentatonicScale, Voice,
@@ -146,16 +146,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     })
     .collect();
 
-  // -- Drone audio streams (use combined_volumes) -----------------------------
+  // -- Single audio mixer stream -----------------------------------------------
 
-  let mut drone_outputs = build_drone_outputs(
-    voice,
-    config,
-    scale,
-    &drone_state,
-    &preview,
-    audio_device,
-  );
+  let mixer = AudioMixer::new(audio_device)?;
+
+  let mut drone_slot_ids =
+    build_drone_slots(&mixer, voice, config, scale, &drone_state, &preview);
 
   // -- Drone poll threads -----------------------------------------------------
 
@@ -241,12 +237,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       .swap(false, Ordering::Relaxed)
     {
       rebuild_drones(
-        &mut drone_outputs,
+        &mixer,
+        &mut drone_slot_ids,
         &preview,
         config,
         scale,
         &drone_state,
-        audio_device,
       );
     }
 
@@ -266,7 +262,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     if preview.heartbeat_trigger.swap(false, Ordering::Relaxed)
       && boop_count > 0
     {
-      play_heartbeat_preview(&preview, scale, boop_count, audio_device)?;
+      play_heartbeat_preview(&mixer, &preview, scale, boop_count)?;
       metrics.heartbeats_played.inc();
       thread::sleep(Duration::from_millis(50));
       continue;
@@ -274,7 +270,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
     // Heartbeat loop (continuous).
     if preview.heartbeat_loop.load(Ordering::Relaxed) && boop_count > 0 {
-      play_heartbeat_preview(&preview, scale, boop_count, audio_device)?;
+      play_heartbeat_preview(&mixer, &preview, scale, boop_count)?;
       metrics.heartbeats_played.inc();
       // Brief pause before looping.
       thread::sleep(Duration::from_millis(50));
@@ -293,12 +289,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           .swap(false, Ordering::Relaxed)
         {
           rebuild_drones(
-            &mut drone_outputs,
+            &mixer,
+            &mut drone_slot_ids,
             &preview,
             config,
             scale,
             &drone_state,
-            audio_device,
           );
         }
         if preview.heartbeat_trigger.load(Ordering::Relaxed)
@@ -321,7 +317,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
     // Normal slot-based heartbeat.
     if !is_muted && boop_count > 0 {
-      play_heartbeat_preview(&preview, scale, boop_count, audio_device)?;
+      play_heartbeat_preview(&mixer, &preview, scale, boop_count)?;
       metrics.heartbeats_played.inc();
     }
 
@@ -350,27 +346,27 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     let _ = h.join();
   }
 
-  // Drop drone outputs explicitly so audio stops before we log.
-  drop(drone_outputs);
+  // Clear all mixer slots so audio stops before we log.
+  mixer.clear();
   info!("Daemon stopped");
   Ok(())
 }
 
 // -- Drone build / rebuild ---------------------------------------------------
 
-fn build_drone_outputs(
+fn build_drone_slots(
+  mixer: &AudioMixer,
   voice: &Voice,
   config: &DaemonConfig,
   scale: &PentatonicScale,
   drone_state: &DroneState,
   preview: &PreviewState,
-  audio_device: Option<&str>,
-) -> Vec<AudioOutput> {
+) -> Vec<usize> {
   config
     .drone_metrics
     .iter()
     .enumerate()
-    .filter_map(|(i, cfg)| {
+    .map(|(i, cfg)| {
       let texture = cfg.texture.unwrap_or_else(|| voice.drone_texture(i));
       let notes = if texture == DroneTexture::Arpeggio {
         voice.drone_notes(scale, 4)
@@ -391,52 +387,37 @@ fn build_drone_outputs(
         &notes,
         Some(&preview.combined_volumes[i]),
       );
-      match AudioOutput::play(graph, audio_device) {
-        Ok(output) => {
-          info!(metric = cfg.name, "Drone audio stream started");
-          Some(output)
-        }
-        Err(e) => {
-          warn!(
-            metric = cfg.name,
-            error = %e,
-            "Failed to start drone audio stream"
-          );
-          None
-        }
-      }
+      let slot = mixer.add(graph);
+      info!(metric = cfg.name, slot, "Drone added to mixer");
+      slot
     })
     .collect()
 }
 
 fn rebuild_drones(
-  drone_outputs: &mut Vec<AudioOutput>,
+  mixer: &AudioMixer,
+  drone_slot_ids: &mut Vec<usize>,
   preview: &PreviewState,
   config: &DaemonConfig,
   scale: &PentatonicScale,
   drone_state: &DroneState,
-  audio_device: Option<&str>,
 ) {
-  drone_outputs.clear();
+  for id in drone_slot_ids.drain(..) {
+    mixer.remove(id);
+  }
   let voice = preview.voice.read().unwrap();
   info!("Rebuilding drone audio streams");
-  *drone_outputs = build_drone_outputs(
-    &voice,
-    config,
-    scale,
-    drone_state,
-    preview,
-    audio_device,
-  );
+  *drone_slot_ids =
+    build_drone_slots(mixer, &voice, config, scale, drone_state, preview);
 }
 
 // -- Heartbeat ---------------------------------------------------------------
 
 fn play_heartbeat_preview(
+  mixer: &AudioMixer,
   preview: &PreviewState,
   scale: &PentatonicScale,
   boop_count: usize,
-  audio_device: Option<&str>,
 ) -> Result<(), DaemonError> {
   let voice = preview.voice.read().unwrap();
   let specs = voice.boop_specs(scale, boop_count, heartbeat::TOTAL_BOOP_TIME);
@@ -462,11 +443,9 @@ fn play_heartbeat_preview(
     &specs,
     Some(&preview.heartbeat_volume),
   );
-  AudioOutput::play_for(
-    graph,
-    heartbeat::heartbeat_duration(&specs),
-    audio_device,
-  )?;
+  let slot = mixer.add(graph);
+  std::thread::sleep(heartbeat::heartbeat_duration(&specs));
+  mixer.remove(slot);
   Ok(())
 }
 
