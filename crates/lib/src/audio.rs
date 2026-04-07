@@ -87,7 +87,14 @@ impl AudioOutput {
     let sample_rate = supported.sample_rate().0 as f64;
     let channels = supported.channels() as usize;
     let mut stream_config: cpal::StreamConfig = supported.into();
-    stream_config.buffer_size = cpal::BufferSize::Fixed(BUFFER_FRAMES);
+
+    // macOS CoreAudio defaults to tiny buffers that underrun with
+    // the 32-channel FDN reverb.  ALSA/PipeWire defaults are
+    // already large enough and may reject arbitrary fixed sizes.
+    #[cfg(target_os = "macos")]
+    {
+      stream_config.buffer_size = cpal::BufferSize::Fixed(BUFFER_FRAMES);
+    }
 
     graph.set_sample_rate(sample_rate);
     graph.allocate();
