@@ -295,6 +295,16 @@ in {
       '';
     };
 
+    frontendPath = lib.mkOption {
+      type = lib.types.str;
+      default = "${cfg.package}/share/sonify-health/frontend";
+      defaultText = lib.literalExpression ''"''${cfg.package}/share/sonify-health/frontend"'';
+      description = ''
+        Path to the compiled Elm frontend assets directory.  The default
+        points at the Nix store output from the cli package build.
+      '';
+    };
+
     uid = lib.mkOption {
       type = lib.types.int;
       default = 402;
@@ -374,7 +384,7 @@ in {
         ProgramArguments = [
           "/bin/sh"
           "-c"
-          "/bin/wait4path ${cfg.package} && exec ${cfg.package}/bin/sonify-health --config ${configFile} daemon"
+          "/bin/wait4path ${cfg.package} && exec ${cfg.package}/bin/sonify-health --config ${configFile} --frontend-path ${cfg.frontendPath} daemon"
         ];
         UserName = cfg.user;
         GroupName = cfg.group;

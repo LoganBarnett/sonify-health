@@ -72,6 +72,12 @@
       # Unified formatter
       pkgs.treefmt
       pkgs.alejandra
+      # Elm frontend
+      pkgs.elmPackages.elm
+      pkgs.elmPackages.elm-format
+      pkgs.elm2nix
+      # CSS formatting
+      pkgs.prettier
     ];
   in {
     devShells = forAllSystems (system: let
@@ -87,6 +93,11 @@
             jq -r '.packages[].name' | \
             sort | \
             sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
+
+          echo ""
+          echo "Elm frontend:"
+          echo "  Build:       cd frontend && elm make src/Main.elm --output public/elm.js"
+          echo "  Regenerate:  cd frontend && elm2nix convert 2>/dev/null > elm-srcs.nix && elm2nix snapshot"
 
           # Symlink cargo-husky hooks into .git/hooks/ using paths relative
           # to .git/hooks/ so the repo stays valid after moves or copies.

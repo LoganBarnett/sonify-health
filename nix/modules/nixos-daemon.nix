@@ -317,6 +317,16 @@ in {
       default = "sonify-health";
       description = "System group the daemon runs as.";
     };
+
+    frontendPath = lib.mkOption {
+      type = lib.types.str;
+      default = "${cfg.package}/share/sonify-health/frontend";
+      defaultText = lib.literalExpression ''"''${cfg.package}/share/sonify-health/frontend"'';
+      description = ''
+        Path to the compiled Elm frontend assets directory.  The default
+        points at the Nix store output from the cli package build.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -340,7 +350,7 @@ in {
       serviceConfig =
         {
           Type = "notify";
-          ExecStart = "${cfg.package}/bin/sonify-health --config ${configFile} daemon";
+          ExecStart = "${cfg.package}/bin/sonify-health --config ${configFile} --frontend-path ${cfg.frontendPath} daemon";
           User = cfg.user;
           Group = cfg.group;
           SupplementaryGroups = lib.mkDefault (

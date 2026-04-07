@@ -39,6 +39,7 @@ pub(crate) struct ConfigFileRaw {
   log_format: Option<String>,
   listen: Option<String>,
   audio_device: Option<String>,
+  frontend_path: Option<PathBuf>,
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
@@ -81,6 +82,7 @@ pub struct Config {
   pub log_format: LogFormat,
   pub listen_address: ListenerAddress,
   pub audio_device: Option<String>,
+  pub frontend_path: PathBuf,
   voice_overrides: VoiceOverrides,
   pub daemon: DaemonConfig,
 }
@@ -112,6 +114,7 @@ impl Config {
     log_level: Option<&str>,
     log_format: Option<&str>,
     listen: Option<&str>,
+    frontend_path: Option<&Path>,
     config_path: Option<&Path>,
   ) -> Result<Self, ConfigError> {
     let file = match config_path {
@@ -144,6 +147,11 @@ impl Config {
       .parse::<ListenerAddress>()
       .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
+    let frontend_path = frontend_path
+      .map(PathBuf::from)
+      .or(file.frontend_path)
+      .unwrap_or_else(|| PathBuf::from("frontend/public"));
+
     let (drone_poll_interval_secs, drone_metrics) = file
       .drone
       .map(|d| (d.poll_interval_secs.unwrap_or(5.0), d.metrics))
@@ -168,6 +176,7 @@ impl Config {
       log_format,
       listen_address,
       audio_device: file.audio_device,
+      frontend_path,
       voice_overrides: file.voice.unwrap_or_default(),
       daemon,
     })
@@ -241,7 +250,7 @@ mod tests {
 
   #[test]
   fn missing_drone_section_defaults() {
-    let config = Config::from_args(None, None, None, None).unwrap();
+    let config = Config::from_args(None, None, None, None, None).unwrap();
     assert!(config.daemon.drone_metrics.is_empty());
     assert!(
       (config.daemon.drone_poll_interval_secs - 5.0).abs() < f64::EPSILON

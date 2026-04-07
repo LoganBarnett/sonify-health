@@ -73,6 +73,9 @@ struct Cli {
   #[arg(long, env = "LISTEN")]
   listen: Option<String>,
 
+  #[arg(long, env = "FRONTEND_PATH")]
+  frontend_path: Option<std::path::PathBuf>,
+
   #[arg(short, long, env = "CONFIG_FILE")]
   config: Option<std::path::PathBuf>,
 
@@ -164,6 +167,7 @@ async fn main() -> Result<(), ApplicationError> {
     cli.log_level.as_deref(),
     cli.log_format.as_deref(),
     cli.listen.as_deref(),
+    cli.frontend_path.as_deref(),
     cli.config.as_deref(),
   )?;
 
@@ -174,6 +178,7 @@ async fn main() -> Result<(), ApplicationError> {
     log_format = ?config.log_format,
     listen = %config.listen_address,
     audio_device = ?config.audio_device,
+    frontend_path = ?config.frontend_path,
     "Resolved configuration"
   );
 
@@ -220,7 +225,11 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
-  let state = AppState::init(Arc::clone(&muted), metrics.clone());
+  let state = AppState::init(
+    Arc::clone(&muted),
+    metrics.clone(),
+    config.frontend_path.clone(),
+  );
   let app = web_base::base_router(state).layer(TraceLayer::new_for_http());
 
   info!("Binding to {}", config.listen_address);

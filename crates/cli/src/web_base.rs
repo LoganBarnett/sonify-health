@@ -7,7 +7,7 @@ use aide::{
 };
 use axum::{
   extract::State,
-  http::StatusCode,
+  http::{header, HeaderValue, StatusCode},
   response::{IntoResponse, Response},
   routing::get,
   Json, Router,
@@ -16,10 +16,14 @@ use prometheus::{Encoder, TextEncoder};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
   Arc,
 };
+use tower::ServiceBuilder;
+use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 // ── AppState ──────────────────────────────────────────────────────────────────
 
@@ -27,12 +31,22 @@ use std::sync::{
 pub struct AppState {
   pub metrics: Metrics,
   pub muted: Arc<AtomicBool>,
+  pub frontend_path: PathBuf,
 }
 
 impl AppState {
-  /// Construct `AppState` with pre-built metrics and shared mute flag.
-  pub fn init(muted: Arc<AtomicBool>, metrics: Metrics) -> Self {
-    Self { metrics, muted }
+  /// Construct `AppState` with pre-built metrics, shared mute flag,
+  /// and the path to the compiled frontend assets directory.
+  pub fn init(
+    muted: Arc<AtomicBool>,
+    metrics: Metrics,
+    frontend_path: PathBuf,
+  ) -> Self {
+    Self {
+      metrics,
+      muted,
+      frontend_path,
+    }
   }
 }
 
@@ -102,6 +116,8 @@ pub fn base_router(state: AppState) -> Router {
   aide::generate::extract_schemas(true);
   let mut api = OpenApi::default();
 
+  let frontend_path = state.frontend_path.clone();
+
   let app_router = ApiRouter::new()
     .api_route(
       "/healthz",
@@ -132,6 +148,17 @@ pub fn base_router(state: AppState) -> Router {
 
   let api = Arc::new(api);
 
+  // Serve static frontend assets with SPA fallback to index.html.
+  // Cache-Control: no-store ensures the browser always fetches fresh
+  // assets; cache-busting is handled via Nix store hash in the URL.
+  let index = frontend_path.join("index.html");
+  let spa_fallback = ServiceBuilder::new()
+    .layer(SetResponseHeaderLayer::overriding(
+      header::CACHE_CONTROL,
+      HeaderValue::from_static("no-store"),
+    ))
+    .service(ServeDir::new(&frontend_path).fallback(ServeFile::new(index)));
+
   Router::new()
     .merge(app_router)
     .route(
@@ -149,4 +176,5 @@ pub fn base_router(state: AppState) -> Router {
           .axum_handler(),
       ),
     )
+    .fallback_service(spa_fallback)
 }
