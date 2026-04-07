@@ -103,12 +103,13 @@
       };
 
       texture = lib.mkOption {
-        type = lib.types.nullOr (lib.types.enum ["bong" "arpeggio" "thrum" "shimmer"]);
+        type = lib.types.nullOr (lib.types.enum ["bong" "arpeggio" "thrum" "shimmer" "reactor" "warpcore"]);
         default = null;
         description = ''
           Drone texture.  "bong" = periodic bell strikes, "arpeggio" = cycling
           pentatonic notes, "thrum" = continuous tremolo, "shimmer" = detuned
-          beating.  When null, auto-assigned by metric position.
+          beating, "reactor" = deep pulsing power hum, "warpcore" = rhythmic
+          spectral sweep.  When null, auto-assigned by metric position.
         '';
       };
     };

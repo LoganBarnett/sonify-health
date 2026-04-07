@@ -6,6 +6,7 @@ use rand_xoshiro::Xoshiro256StarStar;
 use sha2::{Digest, Sha256};
 use sonify_health_voice_derive::VoiceGenerate;
 use std::fmt;
+use tracing::debug;
 
 /// Voice parameters derived deterministically from a hostname.
 ///
@@ -147,17 +148,37 @@ impl Voice {
       &nearby
     };
 
-    (0..count)
+    let drawn_notes: Vec<f64> = (0..count)
       .map(|_| notes[rng.gen_range(0..notes.len())])
-      .collect()
+      .collect();
+
+    debug!(
+      note_seed = self.note_seed,
+      base_freq = format_args!("{:.1} Hz", self.base_freq),
+      candidate_notes = nearby.len(),
+      selected = ?drawn_notes.iter().map(|n| format!("{:.1}", n)).collect::<Vec<_>>(),
+      "Drone arpeggio notes selected"
+    );
+
+    drawn_notes
   }
 
   /// Derive a drone texture from the voice, offset by metric index.
   /// Different hosts get different base textures; multiple metrics on
   /// the same host cycle from that base so each sounds distinct.
   pub fn drone_texture(&self, metric_index: usize) -> DroneTexture {
-    let base = (self.note_seed * 4.0).floor() as usize;
-    DroneTexture::from_index(base + metric_index)
+    let base = (self.note_seed * 6.0).floor() as usize;
+    let resolved = DroneTexture::from_index(base + metric_index);
+
+    debug!(
+      note_seed = self.note_seed,
+      base_index = base,
+      metric_index,
+      resolved = ?resolved,
+      "Drone texture derived"
+    );
+
+    resolved
   }
 
   /// Generate per-boop note and duration specs from a sub-PRNG

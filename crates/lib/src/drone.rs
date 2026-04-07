@@ -1,8 +1,10 @@
 use crate::voice::Voice;
 use clap::ValueEnum;
+use fundsp::math::sin_hz;
 use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 use serde::Deserialize;
+use tracing::debug;
 
 /// Pitch register for a drone voice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum)]
@@ -32,17 +34,21 @@ pub enum DroneTexture {
   Arpeggio,
   Thrum,
   Shimmer,
+  Reactor,
+  Warpcore,
 }
 
 impl DroneTexture {
   /// Cycle through textures by metric index so different metrics
   /// on the same host automatically get distinct textures.
   pub fn from_index(i: usize) -> Self {
-    match i % 4 {
+    match i % 6 {
       0 => DroneTexture::Bong,
       1 => DroneTexture::Arpeggio,
       2 => DroneTexture::Thrum,
-      _ => DroneTexture::Shimmer,
+      3 => DroneTexture::Shimmer,
+      4 => DroneTexture::Reactor,
+      _ => DroneTexture::Warpcore,
     }
   }
 }
@@ -92,33 +98,69 @@ pub fn drone_graph_with_volume(
     DroneTexture::Shimmer => {
       shimmer_graph(voice, register, metric, external_volume)
     }
+    DroneTexture::Reactor => {
+      reactor_graph(voice, register, metric, external_volume)
+    }
+    DroneTexture::Warpcore => {
+      warp_core_graph(voice, register, metric, external_volume)
+    }
   }
 }
 
 // ------------------------------------------------------------------
-// Bong: periodic bell strikes (existing behaviour)
+// Bong: periodic bell strikes with inharmonic partials
 // ------------------------------------------------------------------
 
-/// Periodic bell strikes with exponential-decay pulse train.
-/// Metric drives event rate (0.1-2 Hz) and brightness (200-1500 Hz
-/// lowpole cutoff).
+/// Periodic bell strikes with inharmonic bell partials (2.76x,
+/// 5.4x), sub-octave weight, and filtered pink noise bed.  Metric
+/// drives event rate (0.1-2 Hz) and brightness (200-1500 Hz
+/// lowpass cutoff, Q 0.3-0.8).
 fn bong_graph(
   voice: &Voice,
   register: DroneRegister,
   metric: &Shared,
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
-  let base = voice.base_freq as f32 * register.multiplier();
+  let freq = voice.base_freq as f32 * register.multiplier();
+  let reverb_mix = voice.reverb_mix as f32;
   let metric_cutoff = metric.clone();
+  let metric_q = metric.clone();
   let metric_bong = metric.clone();
 
+  debug!(
+    texture = "bong",
+    register = ?register,
+    base_freq = format_args!("{:.1} Hz", freq),
+    sub_octave = format_args!("{:.1} Hz", freq * 0.5),
+    bell_partial_1 = format_args!("{:.1} Hz (2.76x)", freq * 2.76),
+    bell_partial_2 = format_args!("{:.1} Hz (5.4x)", freq * 5.4),
+    mix = "primary 0.55, bell1 0.15, bell2 0.06, sub 0.20, noise 0.04",
+    noise_filter = "lowpole 300 Hz",
+    filter = "lowpass, Q 0.3-0.8",
+    cutoff_range = "200-1500 Hz",
+    reverb_mix = format_args!("{:.3}", voice.reverb_mix),
+    "Bong harmonic recipe"
+  );
+
   let (sine_w, tri_w, saw_w) = blend_weights(voice);
+  let primary =
+    sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
+  let bell1 = sine_hz(freq * 2.76);
+  let bell2 = sine_hz(freq * 5.4);
+  let sub = sine_hz(freq * 0.5);
+  let noise = pink() >> lowpole_hz(300.0);
+
   let osc =
-    sine_hz(base) * sine_w + triangle_hz(base) * tri_w + saw_hz(base) * saw_w;
+    primary * 0.55 + bell1 * 0.15 + bell2 * 0.06 + sub * 0.20 + noise * 0.04;
 
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
     200.0 + m * 1300.0
+  });
+
+  let q = lfo(move |_t| {
+    let m = metric_q.value();
+    0.3 + m * 0.5
   });
 
   // Exponential-decay pulse train.  Rate scales from one event per
@@ -138,19 +180,20 @@ fn bong_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (osc | cutoff) >> (lowpole() * am * vol * ext_vol);
+  let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
   let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 3.0, 0.4);
+    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 3.0, reverb_mix);
   Box::new(stereo)
 }
 
 // ------------------------------------------------------------------
-// Arpeggio: cycling pentatonic notes with overlapping reverb tails
+// Arpeggio: cycling pentatonic notes with detuned unison and chorus
 // ------------------------------------------------------------------
 
-/// Cycling pentatonic arpeggio with soft per-note envelopes and
-/// long reverb.  Metric drives cycle speed (0.05-0.5 Hz, one full
-/// cycle every 2-20 s) and brightness.
+/// Cycling pentatonic arpeggio with detuned unison (+3 cents),
+/// octave-above ghost tone, filtered pink noise bed, and chorus
+/// for spatial width.  Metric drives cycle speed (0.05-0.5 Hz)
+/// and brightness (lowpass, Q 0.5-0.8).
 fn arpeggio_graph(
   voice: &Voice,
   register: DroneRegister,
@@ -164,11 +207,25 @@ fn arpeggio_graph(
     scaled.push(voice.base_freq as f32 * mult);
   }
   let count = scaled.len();
+  let reverb_mix = voice.reverb_mix as f32;
 
   let (sine_w, tri_w, saw_w) = blend_weights(voice);
 
-  // Voice-blended waveform stepping through arpeggio notes.
-  // Computed per-sample so frequency changes are discrete.
+  debug!(
+    texture = "arpeggio",
+    register = ?register,
+    notes = ?scaled.iter().map(|n| format!("{:.1}", n)).collect::<Vec<_>>(),
+    mix = "primary 0.55, detuned(x1.002) 0.30, octave_up 0.15",
+    noise_filter = "lowpole 400 Hz, gain 0.03",
+    chorus_params = "seed 0, sep 0.015, var 0.005, rate 0.2",
+    filter = "lowpass, Q 0.5-0.8",
+    cutoff_range = "200-1500 Hz",
+    reverb_mix = format_args!("{:.3}", voice.reverb_mix),
+    "Arpeggio harmonic recipe"
+  );
+
+  // Voice-blended waveform stepping through arpeggio notes with
+  // detuned unison and octave-above ghost tone.
   let metric_osc = metric.clone();
   let notes_osc = scaled.clone();
   let osc = lfo(move |t| {
@@ -177,17 +234,42 @@ fn arpeggio_graph(
     let phase = (t * rate) % 1.0;
     let idx = (phase * count as f32).floor() as usize % count;
     let freq = notes_osc[idx];
+
+    // Primary voice blend.
     let p = (t * freq) % 1.0;
     let s = (p * std::f32::consts::TAU).sin();
     let tri = 4.0 * (p - (p + 0.5).floor()).abs() - 1.0;
     let sw = 2.0 * p - 1.0;
-    s * sine_w + tri * tri_w + sw * saw_w
+    let primary = s * sine_w + tri * tri_w + sw * saw_w;
+
+    // Detuned unison (+3 cents).
+    let det_freq = freq * 1.002;
+    let dp = (t * det_freq) % 1.0;
+    let ds = (dp * std::f32::consts::TAU).sin();
+    let dtri = 4.0 * (dp - (dp + 0.5).floor()).abs() - 1.0;
+    let dsw = 2.0 * dp - 1.0;
+    let detuned = ds * sine_w + dtri * tri_w + dsw * saw_w;
+
+    // Octave-above ghost (sine only for ethereal quality).
+    let ghost = (t * freq * 2.0 * std::f32::consts::TAU).sin();
+
+    primary * 0.55 + detuned * 0.30 + ghost * 0.15
   });
+
+  // Pink noise bed outside the note LFO.
+  let noise = pink() >> lowpole_hz(400.0);
+  let osc_with_noise = osc + noise * 0.03;
 
   let metric_cutoff = metric.clone();
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
     200.0 + m * 1300.0
+  });
+
+  let metric_q = metric.clone();
+  let q = lfo(move |_t| {
+    let m = metric_q.value();
+    0.5 + m * 0.3
   });
 
   // Soft per-note envelope masks phase discontinuities at note
@@ -211,46 +293,87 @@ fn arpeggio_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (osc | cutoff) >> (lowpole() * am * vol * ext_vol);
-  let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 4.0, 0.2);
+  let mono = (osc_with_noise | cutoff | q) >> (lowpass() * am * vol * ext_vol);
+  let mono_chorus = mono >> chorus(0, 0.015, 0.005, 0.2);
+  let stereo = mono_chorus
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.6, 5.0, reverb_mix);
   Box::new(stereo)
 }
 
 // ------------------------------------------------------------------
-// Thrum: continuous tone with sinusoidal tremolo
+// Thrum: continuous tone with macro-pulse tremolo and filter wobble
 // ------------------------------------------------------------------
 
-/// Continuous tone that never goes silent.  Metric drives tremolo
-/// rate (0.5-6 Hz) and depth (0.3-0.9).  Warmer cutoff range
-/// (150-750 Hz), shorter reverb (2.5 s).
+/// Continuous tone with sub-octave triangle, 5th-harmonic saw
+/// edge, and brown noise rumble.  Dual tremolo (primary + macro-
+/// pulse at 0.03 Hz, blended 70/30) and slow filter wobble
+/// (+/-60 Hz at 0.08 Hz).  Metric drives tremolo rate and depth.
 fn thrum_graph(
   voice: &Voice,
   register: DroneRegister,
   metric: &Shared,
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
-  let base = voice.base_freq as f32 * register.multiplier();
+  let freq = voice.base_freq as f32 * register.multiplier();
+  let reverb_mix = voice.reverb_mix as f32;
 
   let (sine_w, tri_w, saw_w) = blend_weights(voice);
-  let osc =
-    sine_hz(base) * sine_w + triangle_hz(base) * tri_w + saw_hz(base) * saw_w;
 
+  debug!(
+    texture = "thrum",
+    register = ?register,
+    base_freq = format_args!("{:.1} Hz", freq),
+    sub_tri = format_args!("{:.1} Hz (0.5x)", freq * 0.5),
+    saw_5th = format_args!("{:.1} Hz (5x)", freq * 5.0),
+    mix = "primary 0.55, sub_tri 0.25, saw_5x 0.04, brown 0.05",
+    noise_filter = "lowpole 120 Hz",
+    tremolo = "primary 0.5-6 Hz + macro 0.03 Hz, blend 70/30",
+    filter_wobble = "0.08 Hz, +/-60 Hz",
+    filter = "lowpass, Q 0.4-0.8",
+    cutoff_range = "150-750 Hz",
+    reverb_mix = format_args!("{:.3}", voice.reverb_mix),
+    "Thrum harmonic recipe"
+  );
+
+  let primary =
+    sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
+  let sub_tri = triangle_hz(freq * 0.5);
+  let saw_5x = saw_hz(freq * 5.0);
+  let noise = brown() >> lowpole_hz(120.0);
+
+  let osc = primary * 0.55 + sub_tri * 0.25 + saw_5x * 0.04 + noise * 0.05;
+
+  // Cutoff with slow filter wobble at 0.08 Hz.
   let metric_cutoff = metric.clone();
-  let cutoff = lfo(move |_t| {
+  let cutoff = lfo(move |t| {
     let m = metric_cutoff.value();
-    150.0 + m * 600.0
+    let center = 150.0 + m * 600.0;
+    let wobble = (t * 0.08 * std::f32::consts::TAU).sin() * 60.0;
+    center + wobble
   });
 
-  // Sinusoidal tremolo.  Amplitude oscillates between (1-depth)
-  // and 1.0 so the tone is always audible.
+  let metric_q = metric.clone();
+  let q = lfo(move |_t| {
+    let m = metric_q.value();
+    0.4 + m * 0.4
+  });
+
+  // Dual tremolo: primary sinusoidal tremolo blended 70/30 with a
+  // macro-pulse at 0.03 Hz (~33 s period).
   let metric_trem = metric.clone();
   let am = lfo(move |t| {
     let m = metric_trem.value();
     let rate = 0.5 + m * 5.5;
     let depth = 0.3 + m * 0.6;
+
     let half = 0.5 * (1.0 + (t * rate * std::f32::consts::TAU).sin());
-    1.0 - depth + depth * half
+    let primary_trem = 1.0 - depth + depth * half;
+
+    let macro_half = 0.5 * (1.0 + (t * 0.03 * std::f32::consts::TAU).sin());
+    let macro_trem = 1.0 - depth + depth * macro_half;
+
+    primary_trem * 0.7 + macro_trem * 0.3
   });
 
   let vol = dc(0.30);
@@ -261,19 +384,20 @@ fn thrum_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (osc | cutoff) >> (lowpole() * am * vol * ext_vol);
+  let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
   let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 2.5, 0.4);
+    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 2.5, reverb_mix);
   Box::new(stereo)
 }
 
 // ------------------------------------------------------------------
-// Shimmer: detuned sine pair with slow beating/phasing
+// Shimmer: 4-voice detuned pad with bandpass air and chorus
 // ------------------------------------------------------------------
 
-/// Detuned sine pair creating slow beating.  Metric drives detune
-/// amount (0.2-1.2 %) and a slow amplitude swell (1.5-4 s period).
-/// Bright cutoff range (400-2400 Hz), long reverb (5.0 s).
+/// Four-voice detuned pad (primary, detuned-up, detuned-down,
+/// octave ghost) with bandpass-filtered pink noise "air" and
+/// post-filter chorus.  Metric drives detune width and swell
+/// period.  Long reverb (6.0 s).
 fn shimmer_graph(
   voice: &Voice,
   register: DroneRegister,
@@ -281,16 +405,31 @@ fn shimmer_graph(
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
   let base = voice.base_freq as f32 * register.multiplier();
+  let reverb_mix = voice.reverb_mix as f32;
 
   let (sine_w, tri_w, saw_w) = blend_weights(voice);
 
-  // Combine voice-blended oscillator with a detuned sine into a
-  // single LFO so all types are concrete for the fundsp operators.
+  debug!(
+    texture = "shimmer",
+    register = ?register,
+    base_freq = format_args!("{:.1} Hz", base),
+    mix = "primary 0.40, det_up 0.25, det_down 0.25, ghost(2x) 0.10",
+    air_filter = "bandpass 2000 Hz Q=2.0, gain 0.02",
+    chorus_params = "seed 42, sep 0.020, var 0.008, rate 0.15",
+    filter = "lowpass, Q 0.5-0.7",
+    cutoff_range = "400-2400 Hz",
+    reverb_mix = format_args!("{:.3}", voice.reverb_mix),
+    "Shimmer harmonic recipe"
+  );
+
+  // Four-voice detuned pad computed in a single LFO so all voice
+  // types remain concrete for fundsp operators.
   let metric_osc = metric.clone();
   let mixed = lfo(move |t| {
     let m = metric_osc.value();
     let detune = 0.002 + m * 0.010;
-    let freq2 = base * (1.0 + detune);
+    let freq_up = base * (1.0 + detune);
+    let freq_down = base * (1.0 - detune);
 
     // Primary voice blend at base pitch.
     let p1 = (t * base) % 1.0;
@@ -299,16 +438,32 @@ fn shimmer_graph(
     let sw1 = 2.0 * p1 - 1.0;
     let primary = s1 * sine_w + tri1 * tri_w + sw1 * saw_w;
 
-    // Detuned sine for beating.
-    let secondary = (t * freq2 * std::f32::consts::TAU).sin();
+    // Detuned-up sine.
+    let det_up = (t * freq_up * std::f32::consts::TAU).sin();
 
-    0.5 * primary + 0.5 * secondary
+    // Detuned-down sine.
+    let det_down = (t * freq_down * std::f32::consts::TAU).sin();
+
+    // Octave-up ghost.
+    let ghost = (t * base * 2.0 * std::f32::consts::TAU).sin();
+
+    primary * 0.40 + det_up * 0.25 + det_down * 0.25 + ghost * 0.10
   });
+
+  // Bandpass-filtered pink noise for focused "air".
+  let air = pink() >> bandpass_hz(2000.0, 2.0);
+  let osc_with_air = mixed + air * 0.02;
 
   let metric_cutoff = metric.clone();
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
     400.0 + m * 2000.0
+  });
+
+  let metric_q = metric.clone();
+  let q = lfo(move |_t| {
+    let m = metric_q.value();
+    0.5 + m * 0.2
   });
 
   // Slow amplitude swell.  Period shortens with metric (4 s idle,
@@ -329,9 +484,189 @@ fn shimmer_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
-  let mono = (mixed | cutoff) >> (lowpole() * am * vol * ext_vol);
+  let mono = (osc_with_air | cutoff | q) >> (lowpass() * am * vol * ext_vol);
+  let mono_chorus = mono >> chorus(42, 0.020, 0.008, 0.15);
+  let stereo = mono_chorus
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.6, 6.0, reverb_mix);
+  Box::new(stereo)
+}
+
+// ------------------------------------------------------------------
+// Reactor: deep, slowly pulsing power hum
+// ------------------------------------------------------------------
+
+/// Deep power hum with harmonic stack (fundamental through 4th
+/// harmonic), sub-octave sine, and brown noise rumble.  Slow power
+/// pulse (0.05-0.15 Hz, floor 60%) with high-Q resonant filter
+/// (0.5-1.1).  Low cutoff range (100-600 Hz).
+fn reactor_graph(
+  voice: &Voice,
+  register: DroneRegister,
+  metric: &Shared,
+  external_volume: Option<&Shared>,
+) -> Box<dyn AudioUnit> {
+  let freq = voice.base_freq as f32 * register.multiplier();
+  let reverb_mix = voice.reverb_mix as f32;
+
+  let (sine_w, tri_w, saw_w) = blend_weights(voice);
+
+  debug!(
+    texture = "reactor",
+    register = ?register,
+    base_freq = format_args!("{:.1} Hz", freq),
+    sub_octave = format_args!("{:.1} Hz", freq * 0.5),
+    h2 = format_args!("{:.1} Hz (2x)", freq * 2.0),
+    h3 = format_args!("{:.1} Hz (3x)", freq * 3.0),
+    h4 = format_args!("{:.1} Hz (4x)", freq * 4.0),
+    mix = "primary 0.40, sub 0.30, h2 0.12, h3 0.06, h4 0.03, brown 0.06",
+    noise_filter = "lowpole 80 Hz",
+    power_pulse = "0.05-0.15 Hz, floor 60%",
+    filter = "lowpass, Q 0.5-1.1",
+    cutoff_range = "100-600 Hz",
+    reverb_mix = format_args!("{:.3}", voice.reverb_mix),
+    "Reactor harmonic recipe"
+  );
+
+  let primary =
+    sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
+  let sub = sine_hz(freq * 0.5);
+  let h2 = sine_hz(freq * 2.0);
+  let h3 = sine_hz(freq * 3.0);
+  let h4 = sine_hz(freq * 4.0);
+  let noise = brown() >> lowpole_hz(80.0);
+
+  let osc = primary * 0.40
+    + sub * 0.30
+    + h2 * 0.12
+    + h3 * 0.06
+    + h4 * 0.03
+    + noise * 0.06;
+
+  let metric_cutoff = metric.clone();
+  let cutoff = lfo(move |_t| {
+    let m = metric_cutoff.value();
+    100.0 + m * 500.0
+  });
+
+  let metric_q = metric.clone();
+  let q = lfo(move |_t| {
+    let m = metric_q.value();
+    0.5 + m * 0.6
+  });
+
+  // Slow power pulse.  Rate 0.05-0.15 Hz (7-20 s period), floor
+  // at 60% so the reactor never fully dims.
+  let metric_pulse = metric.clone();
+  let am = lfo(move |t| {
+    let m = metric_pulse.value();
+    let rate = 0.05 + m * 0.10;
+    let half = 0.5 * (1.0 + (t * rate * std::f32::consts::TAU).sin());
+    0.6 + 0.4 * half
+  });
+
+  let vol = dc(0.30);
+
+  let ext = match external_volume {
+    Some(s) => s.clone(),
+    None => shared(1.0),
+  };
+  let ext_vol = var(&ext) >> follow(0.5);
+
+  let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
   let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 5.0, 0.3);
+    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.7, 3.0, reverb_mix);
+  Box::new(stereo)
+}
+
+// ------------------------------------------------------------------
+// WarpCore: rhythmic pulse with synchronized spectral sweep
+// ------------------------------------------------------------------
+
+/// Rhythmic pulse with detuned sawtooth "plasma" pair, sub-octave
+/// triangle, and pink noise.  Filter cutoff sweeps in sync with
+/// the AM pulse for a "whooOOM" spectral effect.  Shaped sine
+/// envelope (.powf(0.6)) and post-filter phaser.
+fn warp_core_graph(
+  voice: &Voice,
+  register: DroneRegister,
+  metric: &Shared,
+  external_volume: Option<&Shared>,
+) -> Box<dyn AudioUnit> {
+  let freq = voice.base_freq as f32 * register.multiplier();
+  let reverb_mix = voice.reverb_mix as f32;
+
+  let (sine_w, tri_w, saw_w) = blend_weights(voice);
+
+  debug!(
+    texture = "warpcore",
+    register = ?register,
+    base_freq = format_args!("{:.1} Hz", freq),
+    plasma_up = format_args!("{:.1} Hz (x1.003)", freq * 1.003),
+    plasma_down = format_args!("{:.1} Hz (x0.997)", freq * 0.997),
+    sub_tri = format_args!("{:.1} Hz (0.5x)", freq * 0.5),
+    mix = "primary 0.50, plasma_up 0.08, plasma_down 0.08, sub_tri 0.18, noise 0.03",
+    noise_filter = "lowpole 400 Hz",
+    pulse = "0.3-2.0 Hz, floor 30%, shaped .powf(0.6)",
+    phaser_params = "feedback 0.5, rate 0.04 Hz",
+    filter = "lowpass, Q 0.4-0.8",
+    cutoff_range = "200-1800 Hz",
+    reverb_mix = format_args!("{:.3}", voice.reverb_mix),
+    "WarpCore harmonic recipe"
+  );
+
+  let primary =
+    sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
+  let plasma_up = saw_hz(freq * 1.003);
+  let plasma_down = saw_hz(freq * 0.997);
+  let sub_tri = triangle_hz(freq * 0.5);
+  let noise = pink() >> lowpole_hz(400.0);
+
+  let osc = primary * 0.50
+    + plasma_up * 0.08
+    + plasma_down * 0.08
+    + sub_tri * 0.18
+    + noise * 0.03;
+
+  // Filter cutoff sweeps in sync with AM pulse (phase-offset) for
+  // a spectral "whooOOM" sweep.
+  let metric_cutoff = metric.clone();
+  let cutoff = lfo(move |t| {
+    let m = metric_cutoff.value();
+    let rate = 0.3 + m * 1.7;
+    let sweep = 0.5 * (1.0 + (t * rate * std::f32::consts::TAU + 0.5).sin());
+    200.0 + sweep * 1600.0
+  });
+
+  let metric_q = metric.clone();
+  let q = lfo(move |_t| {
+    let m = metric_q.value();
+    0.4 + m * 0.4
+  });
+
+  // Shaped sine envelope with .powf(0.6) for softer peaks.  Floor
+  // at 30%.
+  let metric_am = metric.clone();
+  let am = lfo(move |t| {
+    let m = metric_am.value();
+    let rate = 0.3 + m * 1.7;
+    let half = 0.5 * (1.0 + (t * rate * std::f32::consts::TAU).sin());
+    0.3 + 0.7 * half.powf(0.6)
+  });
+
+  let vol = dc(0.30);
+
+  let ext = match external_volume {
+    Some(s) => s.clone(),
+    None => shared(1.0),
+  };
+  let ext_vol = var(&ext) >> follow(0.5);
+
+  let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
+  let mono_phased = mono >> phaser(0.5, |t| sin_hz(0.04, t) * 0.5 + 0.5);
+  let stereo = mono_phased
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.6, 3.5, reverb_mix);
   Box::new(stereo)
 }
 
@@ -525,11 +860,59 @@ mod tests {
   }
 
   #[test]
+  fn reactor_produces_sound() {
+    let metric = shared(0.5);
+    let mut graph = drone_graph(
+      &Voice::from_hostname("test"),
+      DroneRegister::Low,
+      DroneTexture::Reactor,
+      &metric,
+      &[],
+    );
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+
+    let peak = (0..44100)
+      .map(|_| {
+        let (l, r) = graph.get_stereo();
+        l.abs().max(r.abs())
+      })
+      .fold(0.0f32, f32::max);
+
+    assert!(peak > 0.001, "Reactor should produce sound, got peak {}", peak);
+  }
+
+  #[test]
+  fn warp_core_produces_sound() {
+    let metric = shared(0.5);
+    let mut graph = drone_graph(
+      &Voice::from_hostname("test"),
+      DroneRegister::Mid,
+      DroneTexture::Warpcore,
+      &metric,
+      &[],
+    );
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+
+    let peak = (0..44100)
+      .map(|_| {
+        let (l, r) = graph.get_stereo();
+        l.abs().max(r.abs())
+      })
+      .fold(0.0f32, f32::max);
+
+    assert!(peak > 0.001, "WarpCore should produce sound, got peak {}", peak);
+  }
+
+  #[test]
   fn texture_from_index_cycles() {
     assert_eq!(DroneTexture::from_index(0), DroneTexture::Bong);
     assert_eq!(DroneTexture::from_index(1), DroneTexture::Arpeggio);
     assert_eq!(DroneTexture::from_index(2), DroneTexture::Thrum);
     assert_eq!(DroneTexture::from_index(3), DroneTexture::Shimmer);
-    assert_eq!(DroneTexture::from_index(4), DroneTexture::Bong);
+    assert_eq!(DroneTexture::from_index(4), DroneTexture::Reactor);
+    assert_eq!(DroneTexture::from_index(5), DroneTexture::Warpcore);
+    assert_eq!(DroneTexture::from_index(6), DroneTexture::Bong);
   }
 }

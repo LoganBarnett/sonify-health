@@ -1991,6 +1991,7 @@ dependencies = [
  "sd-notify",
  "serde",
  "serde_json",
+ "sha2",
  "sonify-health-lib",
  "tap",
  "thiserror 2.0.18",

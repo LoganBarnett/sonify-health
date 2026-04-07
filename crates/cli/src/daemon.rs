@@ -1,9 +1,10 @@
 use crate::config::DaemonConfig;
 use crate::metrics::Metrics;
 use fundsp::prelude32::shared;
+use sha2::{Digest, Sha256};
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  check, drone, heartbeat,
+  check, drone, heartbeat, scale,
   state::HeartbeatState,
   BoopSpec, DroneState, DroneTexture, PentatonicScale, Voice,
 };
@@ -35,6 +36,21 @@ pub fn run_daemon(
   metrics: Metrics,
 ) -> Result<(), DaemonError> {
   debug!(?voice, "Resolved voice");
+
+  let hostname = gethostname::gethostname().to_string_lossy().to_string();
+  let domain = scale::domain_from_hostname(&hostname);
+  let host_hash = Sha256::digest(hostname.as_bytes());
+  let domain_hash = Sha256::digest(domain.as_bytes());
+  debug!(
+    hostname = %hostname,
+    hostname_sha256_prefix = %host_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+    domain = %domain,
+    domain_sha256_prefix = %domain_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+    note_seed = voice.note_seed,
+    base_texture_index = (voice.note_seed * 6.0).floor() as usize,
+    "Voice seed derivation"
+  );
+
   let boop_count = config.heartbeat_checks.len();
   let heartbeat_state = Arc::new(HeartbeatState::new(boop_count));
   let boop_specs =
