@@ -85,22 +85,25 @@ pub fn drone_graph_with_volume(
     200.0 + m * 1300.0
   });
 
-  // Bong envelope: exponential-decay pulse train.  Creates
-  // bell-like attacks with natural decay tails.  Rate scales
+  // Bong envelope: exponential-decay pulse train.  Rate scales
   // from one event per 10 seconds (idle) to twice per second
-  // (full load).
+  // (full load).  Decay sharpens with rate so individual
+  // events stay distinct even when dense — prevents the
+  // overlapping reverb tails from collapsing into a drone.
   let am = lfo(move |t| {
     let m = metric_bong.value();
     let rate = 0.1 + m * 1.9;
     let phase = (t * rate) % 1.0;
-    (-phase * 5.0).exp()
+    let decay = 5.0 + m * 10.0;
+    (-phase * decay).exp()
   });
 
-  // Volume with a floor so the drone is always audible.
-  // Quadratic curve keeps low-metric drones gentle.
+  // Volume shifts texture, not loudness.  The floor keeps the
+  // drone faintly present at idle; the ceiling stays gentle
+  // even at full load.
   let vol = lfo(move |_t| {
     let m = metric_vol.value();
-    0.08 + m * m * 0.52
+    0.08 + m * m * 0.17
   });
 
   let ext_shared = match external_volume {
