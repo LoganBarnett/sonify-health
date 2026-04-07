@@ -2,7 +2,7 @@
 # Exported from the flake as darwinModules.daemon.
 # See nixos-daemon.nix for the Linux/systemd equivalent.
 #
-# Usage:
+# Minimal usage (defaults to Unix domain socket):
 #
 #   inputs.sonify-health.darwinModules.default
 #
@@ -12,6 +12,14 @@
 #     heartbeat.checks = [
 #       { name = "local"; command = "/path/to/check-lan"; resultMode = "exit-code"; }
 #     ];
+#   };
+#
+# To use TCP instead:
+#
+#   services.sonify-health = {
+#     enable = true;
+#     socket = null;
+#     port   = 3000;
 #   };
 #
 # Note on macOS audio: launchd system daemons run outside any user session,
@@ -27,10 +35,24 @@
   cfg = config.services.sonify-health;
   tomlFormat = pkgs.formats.toml {};
 
+  listenArg =
+    if cfg.socket != null
+    then "--listen unix:${cfg.socket}"
+    else "--listen ${cfg.host}:${toString cfg.port}";
+
+  execLine =
+    "${cfg.package}/bin/sonify-health"
+    + " --config ${configFile}"
+    + " ${listenArg}"
+    + " --frontend-path ${cfg.frontendPath}"
+    + " daemon";
+
+  # The TOML config file carries heartbeat/drone/voice settings.
+  # Listen address is passed via --listen on the command line so the
+  # module retains structured socket/host/port options.
   configFile = tomlFormat.generate "sonify-health.toml" ({
       log_level = cfg.logLevel;
       log_format = cfg.logFormat;
-      listen = cfg.listen;
     }
     // lib.optionalAttrs (cfg.audioDevice != null) {
       audio_device = cfg.audioDevice;
@@ -164,14 +186,26 @@ in {
       '';
     };
 
-    listen = lib.mkOption {
-      type = lib.types.str;
+    socket = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
       default = "/var/run/sonify-health/sonify-health.sock";
       description = ''
-        Address for the web server to bind to (daemon mode).  Exposes
-        health check, metrics, and mute control endpoints.  Can be a
-        Unix socket path or a host:port string.
+        Path for the Unix domain socket used by the service.  When set,
+        the daemon binds its own socket (no launchd socket activation) and
+        the host/port options are ignored.  Set to null to use TCP instead.
       '';
+    };
+
+    host = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1";
+      description = "IP address to bind to.  Ignored when socket is set.";
+    };
+
+    port = lib.mkOption {
+      type = lib.types.port;
+      default = 3000;
+      description = "TCP port to listen on.  Ignored when socket is set.";
     };
 
     audioDevice = lib.mkOption {
@@ -304,7 +338,7 @@ in {
       };
 
       clientSecretFile = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.path;
         example = "/run/secrets/sonify-health-oidc";
         description = ''
           Path to a file containing the OIDC client secret.  The file
@@ -365,8 +399,9 @@ in {
 
       url = lib.mkOption {
         type = lib.types.str;
-        default = "http://127.0.0.1:3000/health";
-        example = "http://127.0.0.1:3000/health";
+        default = "http://127.0.0.1:${toString cfg.port}/healthz";
+        defaultText = lib.literalExpression ''"http://127.0.0.1:''${toString cfg.port}/healthz"'';
+        example = "http://127.0.0.1:3000/healthz";
         description = ''
           URL to probe for health.  The agent runs curl against this
           endpoint every 30 seconds and kills the daemon if it fails,
@@ -398,55 +433,52 @@ in {
     # so we use nix-darwin activation scripts.
     system.activationScripts.postActivation.text = let
       logDir = "/var/log/sonify-health";
-      # Detect whether listen looks like a socket path (starts with /).
       sockDir =
-        if lib.hasPrefix "/" cfg.listen
-        then dirOf cfg.listen
+        if cfg.socket != null
+        then dirOf cfg.socket
         else null;
     in
       ''
-        ${pkgs.coreutils}/bin/mkdir --parents ${logDir}
+        mkdir -p ${logDir}
         chown ${cfg.user}:${cfg.group} ${logDir}
         chmod 0750 ${logDir}
       ''
       + lib.optionalString (sockDir != null) ''
-        ${pkgs.coreutils}/bin/mkdir --parents ${sockDir}
+        mkdir -p ${sockDir}
         chown ${cfg.user}:${cfg.group} ${sockDir}
-        chmod 0755 ${sockDir}
+        chmod 0750 ${sockDir}
       '';
 
     launchd.daemons.sonify-health = {
-      serviceConfig =
-        {
-          ProgramArguments = [
-            "/bin/sh"
-            "-c"
-            "/bin/wait4path ${cfg.package} && exec ${cfg.package}/bin/sonify-health --config ${configFile} --frontend-path ${cfg.frontendPath} daemon"
-          ];
-          UserName = cfg.user;
-          GroupName = cfg.group;
-          RunAtLoad = true;
-          KeepAlive = {
-            Crashed = true;
-            SuccessfulExit = false;
-          };
-          # Unix socket connections require write permission on the socket
-          # file.  Set umask to 0000 so the socket is created with 0777,
-          # allowing any local user/service to connect to the API.
-          Umask = 0;
-          ThrottleInterval = 30;
-          ProcessType = "Interactive";
-          StandardOutPath = "/var/log/sonify-health/stdout.log";
-          StandardErrorPath = "/var/log/sonify-health/stderr.log";
-        }
-        // lib.optionalAttrs cfg.oidc.enable {
-          EnvironmentVariables = {
+      serviceConfig = {
+        ProgramArguments = [
+          "/bin/sh"
+          "-c"
+          "/bin/wait4path ${cfg.package} && exec ${execLine}"
+        ];
+        UserName = cfg.user;
+        GroupName = cfg.group;
+        RunAtLoad = true;
+        KeepAlive = {
+          Crashed = true;
+          SuccessfulExit = false;
+        };
+        ThrottleInterval = 30;
+        # Interactive prevents macOS from parking the process onto
+        # efficiency cores.  Without it the audio thread starves and
+        # produces silence, stuttering, or crackling.
+        ProcessType = "Interactive";
+        EnvironmentVariables =
+          {}
+          // lib.optionalAttrs cfg.oidc.enable {
             BASE_URL = cfg.oidc.baseUrl;
             OIDC_ISSUER = cfg.oidc.issuer;
             OIDC_CLIENT_ID = cfg.oidc.clientId;
             OIDC_CLIENT_SECRET_FILE = cfg.oidc.clientSecretFile;
           };
-        };
+        StandardOutPath = "/var/log/sonify-health/stdout.log";
+        StandardErrorPath = "/var/log/sonify-health/stderr.log";
+      };
     };
 
     # Optional health-check agent.  Probes the daemon's health endpoint
@@ -461,7 +493,7 @@ in {
         ];
         StartInterval = 30;
         RunAtLoad = false;
-        ProcessType = "Interactive";
+        ProcessType = "Background";
         StandardOutPath = "/var/log/sonify-health/healthcheck-stdout.log";
         StandardErrorPath = "/var/log/sonify-health/healthcheck-stderr.log";
       };

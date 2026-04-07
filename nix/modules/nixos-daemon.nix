@@ -2,7 +2,7 @@
 # Exported from the flake as nixosModules.daemon.
 # See darwin-daemon.nix for the macOS/launchd equivalent.
 #
-# Usage:
+# Minimal usage (defaults to Unix domain socket with socket activation):
 #
 #   inputs.sonify-health.nixosModules.default
 #
@@ -13,6 +13,22 @@
 #       { name = "local"; command = "/path/to/check-lan"; resultMode = "exit-code"; }
 #     ];
 #   };
+#
+# To use TCP instead:
+#
+#   services.sonify-health = {
+#     enable = true;
+#     socket = null;
+#     port   = 3000;
+#   };
+#
+# To reference the socket from a reverse proxy (e.g. nginx):
+#
+#   locations."/".proxyPass =
+#     "http://unix:${config.services.sonify-health.socket}";
+#
+# Note: when using socket mode the reverse proxy user must be a member of
+# the service group (cfg.group) so it can connect to the socket.
 #
 # fping works well as a check command — its exit codes map directly to
 # healthy (0), degraded (1, some unreachable), and down (2, all unreachable):
@@ -40,24 +56,16 @@
   cfg = config.services.sonify-health;
   tomlFormat = pkgs.formats.toml {};
 
-  useSocket = cfg.socket != null;
-
-  # The listen value written into the TOML config file.  "sd-listen"
-  # tells tokio-listener to accept the socket from systemd socket
-  # activation; otherwise we bind to host:port directly.
-  listenValue =
-    if useSocket
-    then "sd-listen"
-    else "${cfg.host}:${toString cfg.port}";
-
   # Detect PipeWire so we can add the service user to the pipewire group
   # automatically, giving ALSA clients access to the PipeWire socket.
   pipewireEnabled = config.services.pipewire.enable or false;
 
+  # The TOML config file carries heartbeat/drone/voice settings.
+  # Listen address is passed via --listen on the command line so the
+  # NixOS module retains structured socket/host/port options.
   configFile = tomlFormat.generate "sonify-health.toml" ({
       log_level = cfg.logLevel;
       log_format = cfg.logFormat;
-      listen = listenValue;
     }
     // lib.optionalAttrs (cfg.audioDevice != null) {
       audio_device = cfg.audioDevice;
@@ -192,29 +200,28 @@ in {
     };
 
     socket = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.path;
       default = "/run/sonify-health/sonify-health.sock";
       description = ''
-        Path to the Unix socket.  When set, the daemon uses systemd
-        socket activation (sd-listen).  Set to null to use host:port
-        TCP binding instead.
+        Path for the Unix domain socket used by the service.  When set,
+        systemd socket activation is used and the host/port options are
+        ignored.  Set to null to use TCP instead.
+
+        Other services (e.g. nginx) that proxy to this socket must be
+        members of the service group to connect.
       '';
     };
 
     host = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1";
-      description = ''
-        TCP bind address.  Only used when socket is null.
-      '';
+      description = "IP address to bind to.  Ignored when socket is set.";
     };
 
     port = lib.mkOption {
       type = lib.types.port;
       default = 3000;
-      description = ''
-        TCP port to bind.  Only used when socket is null.
-      '';
+      description = "TCP port to listen on.  Ignored when socket is set.";
     };
 
     openFirewall = lib.mkOption {
@@ -356,7 +363,7 @@ in {
       };
 
       clientSecretFile = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.path;
         example = "/run/secrets/sonify-health-oidc";
         description = ''
           Path to a file containing the OIDC client secret.  The file
@@ -399,67 +406,84 @@ in {
 
     # Open the TCP port when using host:port mode with openFirewall.
     networking.firewall.allowedTCPPorts =
-      lib.mkIf (cfg.openFirewall && !useSocket) [cfg.port];
+      lib.mkIf (cfg.openFirewall && cfg.socket == null) [cfg.port];
 
-    # Create the socket directory via tmpfiles when using socket
-    # activation.
-    systemd.tmpfiles.rules = lib.mkIf useSocket [
-      "d ${dirOf cfg.socket} 0755 ${cfg.user} ${cfg.group} -"
+    # Create the socket directory before the socket unit tries to bind.
+    systemd.tmpfiles.rules = lib.mkIf (cfg.socket != null) [
+      "d ${dirOf cfg.socket} 0750 ${cfg.user} ${cfg.group} -"
     ];
 
-    # systemd socket unit for socket activation.
-    systemd.sockets.sonify-health = lib.mkIf useSocket {
-      description = "sonify-health listening socket";
+    # Socket unit: systemd creates and holds the Unix domain socket, then
+    # passes the open file descriptor to the service on first activation.
+    systemd.sockets.sonify-health = lib.mkIf (cfg.socket != null) {
+      description = "sonify-health Unix domain socket";
       wantedBy = ["sockets.target"];
-
       socketConfig = {
         ListenStream = cfg.socket;
-        SocketMode = "0660";
+        SocketUser = cfg.user;
         SocketGroup = cfg.group;
+        # 0660: accessible to the service user and group only.  Add the
+        # reverse proxy user to cfg.group to grant it access.
+        SocketMode = "0660";
+        Accept = false;
       };
     };
 
     systemd.services.sonify-health = {
       description = "sonify-health sonification daemon";
-      wantedBy = lib.mkIf (!useSocket) ["multi-user.target"];
-      after = ["network.target"];
+      wantedBy = ["multi-user.target"];
+      after =
+        ["network.target"]
+        ++ lib.optional (cfg.socket != null) "sonify-health.socket";
+      requires =
+        lib.optional (cfg.socket != null) "sonify-health.socket";
+
       # Check commands are executed via "sh -c".  The default systemd PATH
       # on NixOS does not include /bin, so we must ensure a shell is
       # reachable.
       path = ["/bin" pkgs.bash];
 
-      serviceConfig =
-        {
-          Type = "notify";
-          ExecStart = "${cfg.package}/bin/sonify-health --config ${configFile} --frontend-path ${cfg.frontendPath} daemon";
-          User = cfg.user;
-          Group = cfg.group;
-          SupplementaryGroups = lib.mkDefault (
-            ["audio"]
-            ++ lib.optional pipewireEnabled "pipewire"
-          );
-          # Unix socket connections require write permission on the
-          # socket file.  Set UMask to 0000 so the socket is created
-          # with 0777, allowing any local user/service to connect.
-          UMask = "0000";
-          WatchdogSec = "30s";
-          Restart = "on-failure";
-          RestartSec = "5s";
-
-          # Hardening.
-          NoNewPrivileges = true;
-          PrivateTmp = true;
-          ProtectSystem = "strict";
-          ProtectHome = true;
-        }
+      environment =
+        {}
         // lib.optionalAttrs cfg.oidc.enable {
-          Environment = [
-            "BASE_URL=${cfg.oidc.baseUrl}"
-            "OIDC_ISSUER=${cfg.oidc.issuer}"
-            "OIDC_CLIENT_ID=${cfg.oidc.clientId}"
-            "OIDC_CLIENT_SECRET_FILE=${cfg.oidc.clientSecretFile}"
-          ];
+          BASE_URL = cfg.oidc.baseUrl;
+          OIDC_ISSUER = cfg.oidc.issuer;
+          OIDC_CLIENT_ID = cfg.oidc.clientId;
+          OIDC_CLIENT_SECRET_FILE = cfg.oidc.clientSecretFile;
         };
+
+      serviceConfig = {
+        Type = "notify";
+        NotifyAccess = "main";
+
+        WatchdogSec = lib.mkDefault "30s";
+
+        ExecStart =
+          "${cfg.package}/bin/sonify-health"
+          + " --config ${configFile}"
+          + (
+            if cfg.socket != null
+            then " --listen sd-listen"
+            else " --listen ${cfg.host}:${toString cfg.port}"
+          )
+          + " --frontend-path ${cfg.frontendPath}"
+          + " daemon";
+
+        User = cfg.user;
+        Group = cfg.group;
+        SupplementaryGroups = lib.mkDefault (
+          ["audio"]
+          ++ lib.optional pipewireEnabled "pipewire"
+        );
+        Restart = "on-failure";
+        RestartSec = "5s";
+
+        # Hardening.
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+      };
     };
   };
 }
