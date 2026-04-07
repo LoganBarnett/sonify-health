@@ -374,7 +374,7 @@ in {
         # allowing any local user/service to connect to the API.
         Umask = 0;
         ThrottleInterval = 30;
-        ProcessType = "Background";
+        ProcessType = "Interactive";
         StandardOutPath = "/var/log/sonify-health/stdout.log";
         StandardErrorPath = "/var/log/sonify-health/stderr.log";
       };
@@ -392,7 +392,7 @@ in {
         ];
         StartInterval = 30;
         RunAtLoad = false;
-        ProcessType = "Background";
+        ProcessType = "Interactive";
         StandardOutPath = "/var/log/sonify-health/healthcheck-stdout.log";
         StandardErrorPath = "/var/log/sonify-health/healthcheck-stderr.log";
       };
