@@ -1,3 +1,4 @@
+use crate::drone::DroneTexture;
 use crate::scale::PentatonicScale;
 use rand::Rng;
 use rand::SeedableRng;
@@ -149,6 +150,14 @@ impl Voice {
     (0..count)
       .map(|_| notes[rng.gen_range(0..notes.len())])
       .collect()
+  }
+
+  /// Derive a drone texture from the voice, offset by metric index.
+  /// Different hosts get different base textures; multiple metrics on
+  /// the same host cycle from that base so each sounds distinct.
+  pub fn drone_texture(&self, metric_index: usize) -> DroneTexture {
+    let base = (self.note_seed * 4.0).floor() as usize;
+    DroneTexture::from_index(base + metric_index)
   }
 
   /// Generate per-boop note and duration specs from a sub-PRNG

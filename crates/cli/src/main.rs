@@ -103,9 +103,9 @@ enum Command {
     register: DroneRegister,
 
     /// Drone texture (bong/arpeggio/thrum/shimmer). Only used with
-    /// drone mode.
-    #[arg(long, value_enum, default_value_t = DroneTexture::Bong)]
-    texture: DroneTexture,
+    /// drone mode.  Defaults to a hostname-derived texture.
+    #[arg(long, value_enum)]
+    texture: Option<DroneTexture>,
 
     /// Playback duration in seconds for drone preview.
     #[arg(long, default_value_t = 5.0)]
@@ -338,7 +338,7 @@ fn run_heartbeat_preview(
 fn run_drone_preview(
   config: &Config,
   register: DroneRegister,
-  texture: DroneTexture,
+  texture: Option<DroneTexture>,
   duration: f64,
   values: &[String],
 ) -> Result<(), ApplicationError> {
@@ -363,6 +363,7 @@ fn run_drone_preview(
 
   let voice = config.voice();
   let scale = config.scale();
+  let texture = texture.unwrap_or_else(|| voice.drone_texture(0));
   let notes = if texture == DroneTexture::Arpeggio {
     voice.drone_notes(&scale, 4)
   } else {

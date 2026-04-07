@@ -107,7 +107,7 @@ pub fn run_daemon(
     .iter()
     .enumerate()
     .filter_map(|(i, cfg)| {
-      let texture = cfg.texture.unwrap_or_else(|| DroneTexture::from_index(i));
+      let texture = cfg.texture.unwrap_or_else(|| voice.drone_texture(i));
       let notes = if texture == DroneTexture::Arpeggio {
         voice.drone_notes(scale, 4)
       } else {
