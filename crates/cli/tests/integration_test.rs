@@ -105,13 +105,11 @@ fn voice_with_hostname_flag() {
 }
 
 #[test]
-fn preview_requires_three_severities() {
-  let output = Command::new(binary_path())
-    .args(["preview", "0", "0"])
-    .output();
+fn preview_requires_at_least_one_severity() {
+  let output = Command::new(binary_path()).args(["preview"]).output();
   match output {
     Ok(output) => {
-      assert!(!output.status.success(), "preview with 2 args should fail");
+      assert!(!output.status.success(), "preview with 0 args should fail");
     }
     Err(e) => {
       panic!("Failed to execute binary: {}", e);

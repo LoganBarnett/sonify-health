@@ -6,9 +6,10 @@
 sonify-health turns infrastructure health into ambient sound.  Each machine
 self-reports via a two-layer audio model:
 
-- *Heartbeat* — three percussive boops played in a time-slotted cycle.  Each
-  boop encodes one subsystem check as healthy (baseline), degraded (minor third
-  shift), or down (tritone shift).
+- *Heartbeat* — percussive boops played in a time-slotted cycle.  Each boop
+  encodes one subsystem check as healthy (baseline), degraded (minor third
+  shift), or down (tritone shift).  The boop count matches the number of
+  configured checks, and each boop plays a distinct pentatonic note.
 - *Drone* — a continuous stress layer whose timbre, roughness, and volume shift
   in real time with system metrics like GPU load or memory pressure.
 
@@ -40,12 +41,13 @@ nix build
 
 *** Heartbeat
 
-Play three boops at the given severity levels (0 = healthy, 1 = degraded,
-2 = down):
+Play one or more boops at the given severity levels (0 = healthy,
+1 = degraded, 2 = down):
 
 #+begin_src sh :results none :exports code
-sonify-health preview 0 0 0             # all healthy
-sonify-health preview 0 1 0             # external connectivity degraded
+sonify-health preview 0                  # single boop, healthy
+sonify-health preview 0 0 0              # three boops, all healthy
+sonify-health preview 0 1 2 0 1          # five boops, mixed severity
 sonify-health preview --heartbeat 2 2 2  # explicit --heartbeat flag
 #+end_src
 
@@ -91,7 +93,7 @@ Key sections:
 - =[heartbeat]= — timing slot and check commands.
 - =[drone]= — continuous stress sonification metrics (see =config.example.toml=).
 
-Each =[[heartbeat.checks]]= entry maps to one of the three boops.  The
+Each =[[heartbeat.checks]]= entry maps to one boop in the heartbeat.  The
 =result_mode= field determines how the command result is read:
 
 - =exit-code= — exit code 0/1/2 maps to healthy/degraded/down.

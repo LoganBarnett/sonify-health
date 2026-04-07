@@ -173,10 +173,25 @@ impl Config {
     })
   }
 
-  /// Resolve the machine's voice: hostname-derived defaults
-  /// with any configured overrides applied.
+  /// Resolve the machine's voice: hostname-derived defaults with any
+  /// configured overrides and pentatonic scale snapping applied.
   pub fn voice(&self) -> Voice {
-    Voice::from_current_host().with_overrides(&self.voice_overrides)
+    let scale_key = self.scale_key();
+    Voice::from_hostname(&gethostname::gethostname().to_string_lossy())
+      .with_overrides(&self.voice_overrides)
+      .with_scale(&scale_key)
+  }
+
+  /// Build the pentatonic scale for this machine's domain.
+  pub fn scale(&self) -> sonify_health_lib::PentatonicScale {
+    sonify_health_lib::PentatonicScale::from_key(&self.scale_key())
+  }
+
+  fn scale_key(&self) -> String {
+    self.voice_overrides.scale_key.clone().unwrap_or_else(|| {
+      let hostname = gethostname::gethostname().to_string_lossy().to_string();
+      sonify_health_lib::scale::domain_from_hostname(&hostname)
+    })
   }
 }
 

@@ -1985,6 +1985,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "fundsp",
+ "gethostname",
  "prometheus",
  "schemars",
  "sd-notify",

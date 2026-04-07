@@ -1,3 +1,8 @@
+use crate::scale::PentatonicScale;
+use rand::Rng;
+use rand::SeedableRng;
+use rand_xoshiro::Xoshiro256StarStar;
+use sha2::{Digest, Sha256};
 use sonify_health_voice_derive::VoiceGenerate;
 use std::fmt;
 
@@ -46,12 +51,31 @@ pub struct Voice {
 
   #[voice_param(order = 10, range = 0.3..0.6)]
   pub reverb_mix: f64,
+
+  #[voice_param(order = 11, range = 0.0..1.0)]
+  pub note_seed: f64,
+}
+
+/// Per-boop specification: frequency and duration.
+#[derive(Debug, Clone)]
+pub struct BoopSpec {
+  pub freq: f64,
+  pub duration: f64,
 }
 
 impl Voice {
   /// Derive voice from the current machine's hostname.
   pub fn from_current_host() -> Self {
     Self::from_hostname(&gethostname::gethostname().to_string_lossy())
+  }
+
+  /// Snap base_freq to the nearest note in the pentatonic scale
+  /// derived from the given key.  Applied after PRNG generation and
+  /// overrides so it does not disturb draw order.
+  pub fn with_scale(mut self, scale_key: &str) -> Self {
+    let scale = crate::scale::PentatonicScale::from_key(scale_key);
+    self.base_freq = scale.snap(self.base_freq);
+    self
   }
 
   /// Apply overrides, replacing only the specified fields.
@@ -89,13 +113,72 @@ impl Voice {
     if let Some(v) = o.reverb_mix {
       self.reverb_mix = v;
     }
+    if let Some(v) = o.note_seed {
+      self.note_seed = v;
+    }
     self
+  }
+
+  /// Generate per-boop note and duration specs from a sub-PRNG
+  /// seeded by `note_seed`.  The sub-PRNG always draws a drone
+  /// note first so heartbeat draws are stable regardless of drone
+  /// configuration.
+  pub fn boop_specs(
+    &self,
+    scale: &PentatonicScale,
+    count: usize,
+    total_boop_time: f64,
+  ) -> Vec<BoopSpec> {
+    let hash = Sha256::digest(self.note_seed.to_le_bytes());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&hash);
+    let mut rng = Xoshiro256StarStar::from_seed(seed);
+
+    // Narrow the full scale to notes within one octave of
+    // base_freq so boops sound melodically related rather than
+    // scattered across 4+ octaves.
+    let lo = self.base_freq / 2.0;
+    let hi = self.base_freq * 2.0;
+    let nearby: Vec<f64> = scale
+      .notes()
+      .iter()
+      .copied()
+      .filter(|&n| n >= lo && n <= hi)
+      .collect();
+    let notes = if nearby.is_empty() {
+      scale.notes()
+    } else {
+      &nearby
+    };
+
+    // Draw 0: drone note index (always consumed, discarded).
+    let _drone_idx: usize = rng.gen_range(0..notes.len());
+
+    let duration_weights: [f64; 3] = [1.0, 2.0, 4.0];
+    let mut raw: Vec<(f64, f64)> = Vec::with_capacity(count);
+    let mut total_weight = 0.0;
+
+    for _ in 0..count {
+      let note_idx = rng.gen_range(0..notes.len());
+      let weight = duration_weights[rng.gen_range(0..3usize)];
+      total_weight += weight;
+      raw.push((notes[note_idx], weight));
+    }
+
+    raw
+      .into_iter()
+      .map(|(freq, weight)| BoopSpec {
+        freq,
+        duration: weight / total_weight * total_boop_time,
+      })
+      .collect()
   }
 }
 
 /// Optional overrides for voice parameters from configuration.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct VoiceOverrides {
+  pub scale_key: Option<String>,
   pub base_freq: Option<f64>,
   pub sine_ratio: Option<f64>,
   pub tri_ratio: Option<f64>,
@@ -107,6 +190,7 @@ pub struct VoiceOverrides {
   pub chirp_ratio: Option<f64>,
   pub stereo_pan: Option<f64>,
   pub reverb_mix: Option<f64>,
+  pub note_seed: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -117,8 +201,6 @@ impl fmt::Display for Voice {
     writeln!(f, "saw_ratio:    {:.3}", self.saw_ratio)?;
     writeln!(f, "attack_ms:    {:.1} ms", self.attack_ms)?;
     writeln!(f, "release_ms:   {:.1} ms", self.release_ms)?;
-    writeln!(f, "boop1_ratio:  {:.3}", self.boop1_ratio)?;
-    writeln!(f, "boop2_ratio:  {:.3}", self.boop2_ratio)?;
     writeln!(f, "chirp_ratio:  {:.3}", self.chirp_ratio)?;
     writeln!(f, "stereo_pan:   {:.3}", self.stereo_pan)?;
     write!(f, "reverb_mix:   {:.3}", self.reverb_mix)
@@ -136,7 +218,7 @@ mod tests {
     assert_eq!(v1.base_freq, v2.base_freq);
     assert_eq!(v1.sine_ratio, v2.sine_ratio);
     assert_eq!(v1.attack_ms, v2.attack_ms);
-    assert_eq!(v1.boop1_ratio, v2.boop1_ratio);
+    assert_eq!(v1.note_seed, v2.note_seed);
   }
 
   #[test]
@@ -166,6 +248,7 @@ mod tests {
       assert!((1.0..1.5).contains(&v.chirp_ratio));
       assert!((-0.3..0.3).contains(&v.stereo_pan));
       assert!((0.3..0.6).contains(&v.reverb_mix));
+      assert!((0.0..1.0).contains(&v.note_seed));
     }
   }
 

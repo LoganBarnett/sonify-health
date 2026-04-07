@@ -106,7 +106,8 @@ enum Command {
     #[arg(long, default_value_t = 5.0)]
     duration: f64,
 
-    /// Positional values: 3 severities for heartbeat, 1 metric for drone.
+    /// Positional values: 1 or more severities for heartbeat,
+    /// 1 metric for drone.
     values: Vec<String>,
   },
 
@@ -205,6 +206,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   // Spawn the blocking daemon loop in a separate thread.
   let daemon_config = config.daemon.clone();
   let voice = config.voice();
+  let scale = config.scale();
   let audio_device = config.audio_device.clone();
   let daemon_muted = Arc::clone(&muted);
   let daemon_running = Arc::clone(&running);
@@ -212,6 +214,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     daemon::run_daemon(
       &daemon_config,
       &voice,
+      &scale,
       audio_device.as_deref(),
       daemon_muted,
       daemon_running,
@@ -269,11 +272,10 @@ fn run_heartbeat_preview(
   config: &Config,
   values: &[String],
 ) -> Result<(), ApplicationError> {
-  if values.len() != 3 {
-    return Err(ApplicationError::InvalidSeverity(format!(
-      "expected exactly 3 severity values, got {}",
-      values.len()
-    )));
+  if values.is_empty() {
+    return Err(ApplicationError::InvalidSeverity(
+      "expected 1 or more severity values, got 0".to_string(),
+    ));
   }
 
   let parse_severity = |s: &str| -> Result<Severity, ApplicationError> {
@@ -285,19 +287,25 @@ fn run_heartbeat_preview(
       })
   };
 
-  let severities: [Severity; 3] = [
-    parse_severity(&values[0])?,
-    parse_severity(&values[1])?,
-    parse_severity(&values[2])?,
-  ];
+  let severities: Vec<Severity> = values
+    .iter()
+    .map(|v| parse_severity(v))
+    .collect::<Result<_, _>>()?;
 
   let voice = config.voice();
-  info!(base_freq = voice.base_freq, "Playing heartbeat preview");
+  let scale = config.scale();
+  let specs =
+    voice.boop_specs(&scale, severities.len(), heartbeat::TOTAL_BOOP_TIME);
+  info!(
+    base_freq = voice.base_freq,
+    boops = severities.len(),
+    "Playing heartbeat preview"
+  );
 
-  let graph = heartbeat::heartbeat_graph(&voice, severities);
+  let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
   AudioOutput::play_for(
     graph,
-    heartbeat::heartbeat_duration(&voice),
+    heartbeat::heartbeat_duration(&specs),
     config.audio_device.as_deref(),
   )
   .map_err(ApplicationError::AudioPlayback)
@@ -349,9 +357,11 @@ fn run_drone_preview(
 }
 
 fn run_voice(hostname: Option<&str>) {
-  let voice = hostname
-    .map(Voice::from_hostname)
-    .unwrap_or_else(Voice::from_current_host);
+  let hn = hostname.map(String::from).unwrap_or_else(|| {
+    gethostname::gethostname().to_string_lossy().to_string()
+  });
+  let voice = Voice::from_hostname(&hn)
+    .with_scale(&sonify_health_lib::scale::domain_from_hostname(&hn));
 
   let label = hostname.unwrap_or("(current host)");
   println!("Voice for {}:\n{}", label, voice);

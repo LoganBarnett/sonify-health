@@ -1,29 +1,148 @@
 use crate::severity::Severity;
-use crate::voice::Voice;
+use crate::voice::{BoopSpec, Voice};
 use fundsp::prelude32::*;
 use std::time::Duration;
 
-/// Total time budget for the three boops (excluding gaps).
-const TOTAL_BOOP_TIME: f64 = 1.2;
+/// Total time budget for boops (excluding gaps).
+pub const TOTAL_BOOP_TIME: f64 = 1.2;
 
-/// Silence between consecutive boops.
+/// Base gap between consecutive boops.  Actual gaps scale
+/// proportionally with the shorter of the two adjacent boops.
 const GAP_SECS: f64 = 0.1;
 
-/// Duration of each of the three boops based on the voice's
-/// rhythmic proportions.
-pub fn boop_durations(voice: &Voice) -> [f64; 3] {
-  let b1 = voice.boop1_ratio * TOTAL_BOOP_TIME;
-  let b2 = voice.boop2_ratio * TOTAL_BOOP_TIME;
-  let b3 = (1.0 - voice.boop1_ratio - voice.boop2_ratio) * TOTAL_BOOP_TIME;
-  [b1, b2, b3]
+/// Compute the gap between two adjacent boops.  Proportional to
+/// the shorter duration so that quick boops cluster tightly while
+/// long boops get breathing room.
+fn gap_between(dur_a: f64, dur_b: f64, max_dur: f64) -> f64 {
+  if max_dur <= 0.0 {
+    return GAP_SECS;
+  }
+  GAP_SECS * (dur_a.min(dur_b) / max_dur)
 }
 
-/// Total wall-clock duration of a full heartbeat sequence
-/// including gaps and a small release tail.
-pub fn heartbeat_duration(voice: &Voice) -> Duration {
-  let [b1, b2, b3] = boop_durations(voice);
-  let total = b1 + GAP_SECS + b2 + GAP_SECS + b3 + 0.05;
-  Duration::from_secs_f64(total)
+/// Total wall-clock duration of a heartbeat sequence including
+/// proportional gaps and a small release tail.
+pub fn heartbeat_duration(specs: &[BoopSpec]) -> Duration {
+  if specs.is_empty() {
+    return Duration::ZERO;
+  }
+
+  let max_dur = specs.iter().map(|s| s.duration).fold(0.0f64, f64::max);
+
+  let boop_sum: f64 = specs.iter().map(|s| s.duration).sum();
+  let gap_sum: f64 = specs
+    .windows(2)
+    .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
+    .sum();
+
+  Duration::from_secs_f64(boop_sum + gap_sum + 0.05)
+}
+
+/// Parameters for a single boop inside the heartbeat closure.
+#[derive(Clone)]
+struct BoopTiming {
+  start: f32,
+  end: f32,
+  freq: f32,
+  amp: f32,
+  dur: f32,
+  attack: f32,
+  release: f32,
+}
+
+/// Build a complete heartbeat audio graph that renders N boops in
+/// a single stream.  Each boop plays its own pentatonic note at
+/// the severity-adjusted pitch, with a chirp onset sweep, and the
+/// output is panned center with a short reverb tail.
+pub fn heartbeat_graph(
+  voice: &Voice,
+  severities: &[Severity],
+  specs: &[BoopSpec],
+) -> Box<dyn AudioUnit> {
+  let count = Ord::min(specs.len(), severities.len());
+  let chirp_ratio = voice.chirp_ratio as f32;
+
+  let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
+  let norm = if total_ratio > 0.0 {
+    1.0 / total_ratio
+  } else {
+    1.0
+  } as f32;
+
+  let sine_w = voice.sine_ratio as f32 * norm;
+  let tri_w = voice.tri_ratio as f32 * norm;
+  let saw_w = voice.saw_ratio as f32 * norm;
+
+  let max_dur = specs[..count]
+    .iter()
+    .map(|s| s.duration)
+    .fold(0.0f64, f64::max);
+
+  // Pre-compute start times and per-boop parameters.
+  let mut timings = Vec::with_capacity(count);
+  let mut t = 0.0f64;
+  for i in 0..count {
+    let freq = (specs[i].freq * severities[i].pitch_ratio()) as f32;
+    let amp = severities[i].amplitude() as f32;
+    let dur = specs[i].duration as f32;
+    let attack = (voice.attack_ms as f32 / 1000.0).min(dur * 0.3);
+    let release = (voice.release_ms as f32 / 1000.0).min(dur * 0.5);
+    let start = t as f32;
+
+    timings.push(BoopTiming {
+      start,
+      end: start + dur,
+      freq,
+      amp,
+      dur,
+      attack,
+      release,
+    });
+
+    t += specs[i].duration;
+    if i + 1 < count {
+      t += gap_between(specs[i].duration, specs[i + 1].duration, max_dur);
+    }
+  }
+
+  // Frequency LFO: switches between boop frequencies with chirp
+  // onset sweep, outputs near-zero between boops.
+  let freq_timings = timings.clone();
+  let freq_env = lfo(move |t: f32| {
+    for p in &freq_timings {
+      if t >= p.start && t < p.end {
+        let local_t = t - p.start;
+        let chirp_t = (local_t / 0.04).min(1.0);
+        return p.freq * chirp_ratio
+          + (p.freq - p.freq * chirp_ratio) * chirp_t;
+      }
+    }
+    0.01
+  });
+
+  // Amplitude envelope: attack/release per boop, silence between.
+  let amp_timings = timings;
+  let amp_env = envelope(move |t: f32| {
+    for p in &amp_timings {
+      if t >= p.start && t < p.end {
+        let local_t = t - p.start;
+        let fade_in = (local_t / p.attack).min(1.0);
+        let sustain_end = p.dur - p.release;
+        let fade_out = if local_t > sustain_end && p.release > 0.0 {
+          ((p.dur - local_t) / p.release).max(0.0)
+        } else {
+          1.0
+        };
+        return fade_in * fade_out * p.amp;
+      }
+    }
+    0.0
+  });
+
+  let waveform = (sine() * sine_w) & (triangle() * tri_w) & (saw() * saw_w);
+  let mix = (freq_env >> waveform) * amp_env;
+  let stereo = mix >> pan(0.0) >> reverb_stereo(0.3, 0.8, 0.6);
+  Box::new(stereo)
 }
 
 /// Build an audio graph for a single boop at the given severity
@@ -39,8 +158,6 @@ pub fn boop_graph(
   let release = (voice.release_ms / 1000.0).min(duration_secs * 0.5) as f32;
   let dur = duration_secs as f32;
 
-  // Normalize waveform blend so the peak doesn't exceed 1.0
-  // before amplitude scaling.
   let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
   let norm = if total_ratio > 0.0 {
     1.0 / total_ratio
@@ -67,80 +184,6 @@ pub fn boop_graph(
   });
 
   Box::new(waveform * env)
-}
-
-/// Build a complete heartbeat audio graph that renders all three
-/// boops in a single stream.  Each boop includes a chirp onset
-/// sweep and the output is panned center with a short reverb tail.
-///
-/// This eliminates the three separate audio streams that the old
-/// per-boop approach required.
-pub fn heartbeat_graph(
-  voice: &Voice,
-  severities: [Severity; 3],
-) -> Box<dyn AudioUnit> {
-  let durations = boop_durations(voice);
-  let chirp_ratio = voice.chirp_ratio as f32;
-
-  let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
-  let norm = if total_ratio > 0.0 {
-    1.0 / total_ratio
-  } else {
-    1.0
-  } as f32;
-
-  let sine_w = voice.sine_ratio as f32 * norm;
-  let tri_w = voice.tri_ratio as f32 * norm;
-  let saw_w = voice.saw_ratio as f32 * norm;
-
-  let starts: [f32; 3] = [
-    0.0,
-    (durations[0] + GAP_SECS) as f32,
-    (durations[0] + GAP_SECS + durations[1] + GAP_SECS) as f32,
-  ];
-
-  let build_boop = |i: usize| {
-    let freq = (voice.base_freq * severities[i].pitch_ratio()) as f32;
-    let amp = severities[i].amplitude() as f32;
-    let dur = durations[i] as f32;
-    let start = starts[i];
-    let end = start + dur;
-    let attack = (voice.attack_ms as f32 / 1000.0).min(dur * 0.3);
-    let release = (voice.release_ms as f32 / 1000.0).min(dur * 0.5);
-
-    // Chirp: sweep from freq × chirp_ratio down to freq over
-    // 40 ms at boop onset.
-    let freq_env = lfo(move |t: f32| {
-      if t < start || t >= end {
-        return 0.01;
-      }
-      let local_t = t - start;
-      let chirp_t = (local_t / 0.04).min(1.0);
-      freq * chirp_ratio + (freq - freq * chirp_ratio) * chirp_t
-    });
-
-    let amp_env = envelope(move |t: f32| {
-      if t < start || t >= end {
-        return 0.0;
-      }
-      let local_t = t - start;
-      let fade_in = (local_t / attack).min(1.0);
-      let sustain_end = dur - release;
-      let fade_out = if local_t > sustain_end && release > 0.0 {
-        ((dur - local_t) / release).max(0.0)
-      } else {
-        1.0
-      };
-      fade_in * fade_out * amp
-    });
-
-    let waveform = sine() * sine_w & triangle() * tri_w & saw() * saw_w;
-    (freq_env >> waveform) * amp_env
-  };
-
-  let mix = build_boop(0) + build_boop(1) + build_boop(2);
-  let stereo = mix >> pan(0.0) >> reverb_stereo(0.3, 0.8, 0.6);
-  Box::new(stereo)
 }
 
 #[cfg(test)]
@@ -195,27 +238,73 @@ mod tests {
   }
 
   #[test]
-  fn boop_durations_sum_correctly() {
-    let voice = Voice::from_hostname("test");
-    let [b1, b2, b3] = boop_durations(&voice);
-    let sum = b1 + b2 + b3;
+  fn heartbeat_duration_sums_correctly() {
+    let specs = vec![
+      BoopSpec {
+        freq: 440.0,
+        duration: 0.4,
+      },
+      BoopSpec {
+        freq: 550.0,
+        duration: 0.4,
+      },
+      BoopSpec {
+        freq: 660.0,
+        duration: 0.4,
+      },
+    ];
+    let dur = heartbeat_duration(&specs);
+    // 3 × 0.4 = 1.2 boop time, plus gaps and 0.05 tail.
     assert!(
-      (sum - TOTAL_BOOP_TIME).abs() < 1e-10,
-      "Boop durations should sum to {}, got {}",
-      TOTAL_BOOP_TIME,
-      sum
+      dur.as_secs_f64() > 1.2,
+      "Duration should exceed boop sum, got {:.3}",
+      dur.as_secs_f64()
+    );
+  }
+
+  #[test]
+  fn heartbeat_duration_empty() {
+    assert_eq!(heartbeat_duration(&[]), Duration::ZERO);
+  }
+
+  #[test]
+  fn heartbeat_duration_single_boop() {
+    let specs = vec![BoopSpec {
+      freq: 440.0,
+      duration: 1.2,
+    }];
+    let dur = heartbeat_duration(&specs);
+    // Single boop: 1.2 + 0.05 tail, no gaps.
+    assert!(
+      (dur.as_secs_f64() - 1.25).abs() < 1e-10,
+      "Single boop should be duration + tail, got {:.3}",
+      dur.as_secs_f64()
     );
   }
 
   #[test]
   fn heartbeat_graph_produces_sound() {
     let voice = Voice::from_hostname("test");
+    let specs = vec![
+      BoopSpec {
+        freq: 440.0,
+        duration: 0.4,
+      },
+      BoopSpec {
+        freq: 550.0,
+        duration: 0.4,
+      },
+      BoopSpec {
+        freq: 660.0,
+        duration: 0.4,
+      },
+    ];
     let severities = [Severity::Healthy, Severity::Degraded, Severity::Down];
-    let mut graph = heartbeat_graph(&voice, severities);
+    let mut graph = heartbeat_graph(&voice, &severities, &specs);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
-    let samples = (heartbeat_duration(&voice).as_secs_f32() * 44100.0) as usize;
+    let samples = (heartbeat_duration(&specs).as_secs_f32() * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();
@@ -226,6 +315,58 @@ mod tests {
     assert!(
       peak > 0.001,
       "Heartbeat graph should produce audible samples, \
+       got peak {}",
+      peak
+    );
+  }
+
+  #[test]
+  fn heartbeat_graph_five_boops() {
+    let voice = Voice::from_hostname("test");
+    let specs = vec![
+      BoopSpec {
+        freq: 220.0,
+        duration: 0.24,
+      },
+      BoopSpec {
+        freq: 330.0,
+        duration: 0.24,
+      },
+      BoopSpec {
+        freq: 440.0,
+        duration: 0.24,
+      },
+      BoopSpec {
+        freq: 550.0,
+        duration: 0.24,
+      },
+      BoopSpec {
+        freq: 660.0,
+        duration: 0.24,
+      },
+    ];
+    let severities = [
+      Severity::Healthy,
+      Severity::Degraded,
+      Severity::Down,
+      Severity::Healthy,
+      Severity::Degraded,
+    ];
+    let mut graph = heartbeat_graph(&voice, &severities, &specs);
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+
+    let samples = (heartbeat_duration(&specs).as_secs_f32() * 44100.0) as usize;
+    let peak = (0..samples)
+      .map(|_| {
+        let (l, r) = graph.get_stereo();
+        l.abs().max(r.abs())
+      })
+      .fold(0.0f32, f32::max);
+
+    assert!(
+      peak > 0.001,
+      "Five-boop heartbeat should produce audible samples, \
        got peak {}",
       peak
     );

@@ -5,7 +5,7 @@ use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
   check, drone, heartbeat,
   state::HeartbeatState,
-  DroneState, Voice,
+  BoopSpec, DroneState, PentatonicScale, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -28,12 +28,16 @@ pub enum DaemonError {
 pub fn run_daemon(
   config: &DaemonConfig,
   voice: &Voice,
+  scale: &PentatonicScale,
   audio_device: Option<&str>,
   muted: Arc<AtomicBool>,
   running: Arc<AtomicBool>,
   metrics: Metrics,
 ) -> Result<(), DaemonError> {
-  let heartbeat_state = Arc::new(HeartbeatState::default());
+  let boop_count = config.heartbeat_checks.len();
+  let heartbeat_state = Arc::new(HeartbeatState::new(boop_count));
+  let boop_specs =
+    voice.boop_specs(scale, boop_count, heartbeat::TOTAL_BOOP_TIME);
 
   // Spawn a check thread for each heartbeat check.
   let check_handles: Vec<_> = config
@@ -192,8 +196,8 @@ pub fn run_daemon(
       was_muted = is_muted;
     }
 
-    if !is_muted {
-      play_heartbeat(voice, &heartbeat_state, audio_device)?;
+    if !is_muted && !boop_specs.is_empty() {
+      play_heartbeat(voice, &heartbeat_state, &boop_specs, audio_device)?;
       metrics.heartbeats_played.inc();
     }
 
@@ -224,25 +228,27 @@ pub fn run_daemon(
 fn play_heartbeat(
   voice: &Voice,
   state: &HeartbeatState,
+  specs: &[BoopSpec],
   audio_device: Option<&str>,
 ) -> Result<(), AudioError> {
-  let severities = [
-    severity_from_shared(state.boops[0].value()),
-    severity_from_shared(state.boops[1].value()),
-    severity_from_shared(state.boops[2].value()),
-  ];
+  let severities: Vec<_> = state
+    .boops
+    .iter()
+    .map(|b| severity_from_shared(b.value()))
+    .collect();
 
   info!(
-    s0 = %severities[0],
-    s1 = %severities[1],
-    s2 = %severities[2],
+    severities = ?severities
+      .iter()
+      .map(|s| s.to_string())
+      .collect::<Vec<_>>(),
     "Playing heartbeat"
   );
 
-  let graph = heartbeat::heartbeat_graph(voice, severities);
+  let graph = heartbeat::heartbeat_graph(voice, &severities, specs);
   AudioOutput::play_for(
     graph,
-    heartbeat::heartbeat_duration(voice),
+    heartbeat::heartbeat_duration(specs),
     audio_device,
   )
 }

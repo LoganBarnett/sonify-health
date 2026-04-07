@@ -180,8 +180,8 @@ in {
       description = ''
         Hostname-derived voice parameter overrides.  Unspecified fields
         use the hash-derived default.  Available: base_freq, sine_ratio,
-        tri_ratio, saw_ratio, attack_ms, release_ms, boop1_ratio,
-        boop2_ratio.
+        tri_ratio, saw_ratio, attack_ms, release_ms, chirp_ratio,
+        stereo_pan, reverb_mix.
       '';
     };
 
@@ -224,8 +224,8 @@ in {
           ]
         '';
         description = ''
-          Heartbeat check commands (max 3).  Each maps to one boop in
-          the heartbeat pattern.  fping is a good fit — its exit codes
+          Heartbeat check commands.  Each maps to one boop in the
+          heartbeat pattern.  fping is a good fit — its exit codes
           (0/1/2 = all/some/none reachable) map directly to the
           healthy/degraded/down severities.
         '';
