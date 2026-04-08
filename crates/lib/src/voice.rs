@@ -169,21 +169,18 @@ impl Voice {
     resolved
   }
 
-  /// Generate per-boop note and duration specs from a sub-PRNG
-  /// seeded by `note_seed`.  The sub-PRNG always draws a drone
-  /// note first so heartbeat draws are stable regardless of drone
-  /// configuration.
+  /// Generate per-boop note and duration specs.  Each check gets
+  /// its own sub-PRNG seeded from `note_seed + "boop" + check_index`,
+  /// so adding boops to one check never shifts another check's note
+  /// sequence.  Duration weights are still normalized across all
+  /// boops to fill `total_boop_time`.
   pub fn boop_specs(
     &self,
     scale: &PentatonicScale,
-    count: usize,
+    check_count: usize,
+    boops_per_check: usize,
     total_boop_time: f64,
   ) -> Vec<BoopSpec> {
-    let hash = Sha256::digest(self.note_seed.to_le_bytes());
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&hash);
-    let mut rng = Xoshiro256StarStar::from_seed(seed);
-
     // Narrow the full scale to notes within one octave of
     // base_freq so boops sound melodically related rather than
     // scattered across 4+ octaves.
@@ -201,18 +198,27 @@ impl Voice {
       &nearby
     };
 
-    // Draw 0: drone note index (always consumed, discarded).
-    let _drone_idx: usize = rng.gen_range(0..notes.len());
-
     let duration_weights: [f64; 3] = [1.0, 2.0, 4.0];
-    let mut raw: Vec<(f64, f64)> = Vec::with_capacity(count);
+    let total = check_count * boops_per_check;
+    let mut raw: Vec<(f64, f64)> = Vec::with_capacity(total);
     let mut total_weight = 0.0;
 
-    for _ in 0..count {
-      let note_idx = rng.gen_range(0..notes.len());
-      let weight = duration_weights[rng.gen_range(0..3usize)];
-      total_weight += weight;
-      raw.push((notes[note_idx], weight));
+    for check_idx in 0..check_count {
+      let mut hasher = Sha256::new();
+      hasher.update(self.note_seed.to_le_bytes());
+      hasher.update(b"boop");
+      hasher.update((check_idx as u64).to_le_bytes());
+      let hash = hasher.finalize();
+      let mut seed = [0u8; 32];
+      seed.copy_from_slice(&hash);
+      let mut rng = Xoshiro256StarStar::from_seed(seed);
+
+      for _ in 0..boops_per_check {
+        let note_idx = rng.gen_range(0..notes.len());
+        let weight = duration_weights[rng.gen_range(0..3usize)];
+        total_weight += weight;
+        raw.push((notes[note_idx], weight));
+      }
     }
 
     raw
@@ -341,9 +347,27 @@ mod tests {
     let drone1 = v.drone_notes(&scale, 4);
     // Calling boop_specs with different counts must not affect
     // drone_notes, since they use separate PRNG streams.
-    let _specs = v.boop_specs(&scale, 3, 1.0);
+    let _specs = v.boop_specs(&scale, 3, 1, 1.0);
     let drone2 = v.drone_notes(&scale, 4);
     assert_eq!(drone1, drone2);
+  }
+
+  #[test]
+  fn boop_notes_stable_across_count_changes() {
+    let v = Voice::from_hostname("test");
+    let scale = PentatonicScale::from_key("local");
+    // With 3 checks and 1 boop each, record each check's first note.
+    let specs_1 = v.boop_specs(&scale, 3, 1, 1.2);
+    // With 3 checks and 3 boops each, the first boop per check
+    // must keep the same frequency.
+    let specs_3 = v.boop_specs(&scale, 3, 3, 1.2);
+    for check in 0..3 {
+      assert_eq!(
+        specs_1[check].freq,
+        specs_3[check * 3].freq,
+        "Check {check}'s first note shifted when boops_per_check changed"
+      );
+    }
   }
 
   /// Golden test: the derive macro must produce the same values

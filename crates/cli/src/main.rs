@@ -477,7 +477,7 @@ fn run_heartbeat_preview(
   let scale = voice_args.resolve_scale(config);
   debug!(?voice, "Resolved voice");
   let specs =
-    voice.boop_specs(&scale, severities.len(), heartbeat::TOTAL_BOOP_TIME);
+    voice.boop_specs(&scale, severities.len(), 1, heartbeat::TOTAL_BOOP_TIME);
   for (i, spec) in specs.iter().enumerate() {
     debug!(
       boop = i,

@@ -162,9 +162,8 @@ impl PreviewState {
       })
       .collect();
 
-    let initial_total = check_count;
     let initial_specs =
-      voice.boop_specs(&scale, initial_total, heartbeat::TOTAL_BOOP_TIME);
+      voice.boop_specs(&scale, check_count, 1, heartbeat::TOTAL_BOOP_TIME);
     let initial_pins = vec![false; initial_specs.len()];
 
     Self {
@@ -224,8 +223,13 @@ impl PreviewState {
     let boops_per_check = self.boop_count.load(Ordering::Relaxed);
     let total = boops_per_check * self.check_names.len();
     let voice = self.voice.read().unwrap();
-    let fresh =
-      voice.boop_specs(&self.scale, total, heartbeat::TOTAL_BOOP_TIME);
+    let check_count = self.check_names.len();
+    let fresh = voice.boop_specs(
+      &self.scale,
+      check_count,
+      boops_per_check,
+      heartbeat::TOTAL_BOOP_TIME,
+    );
 
     let mut specs = self.boop_specs.write().unwrap();
     let mut pins = self.boop_pins.write().unwrap();
