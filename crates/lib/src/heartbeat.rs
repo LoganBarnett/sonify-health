@@ -110,6 +110,8 @@ pub fn heartbeat_graph_with_volume(
   let count = Ord::min(specs.len(), severities.len());
   let chirp_ratio = voice.chirp_ratio as f32;
   let brightness = voice.brightness as f32;
+  let resonance = voice.resonance as f32;
+  let sub_mix = voice.sub_octave as f32;
 
   let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
   let norm = if total_ratio > 0.0 {
@@ -153,7 +155,7 @@ pub fn heartbeat_graph_with_volume(
       harshness: profile.harshness as f32,
       filter_cutoff: (freq * profile.filter_cutoff as f32 * brightness)
         .min(MAX_CUTOFF),
-      filter_q: profile.filter_q as f32,
+      filter_q: profile.filter_q as f32 * resonance,
     });
 
     t += (voice.attack_ms / 1000.0) + specs[i].duration;
@@ -240,6 +242,22 @@ pub fn heartbeat_graph_with_volume(
     20000.0
   });
 
+  // Sub-octave oscillator: sine at half the boop frequency,
+  // mixed in before the lowpass to add low-end body.
+  let sub_freq_timings = timings.clone();
+  let sub_freq_env = lfo(move |t: f32| {
+    for p in sub_freq_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        let body_t = (t - p.start - p.attack).max(0.0);
+        let chirp_t = (body_t / 0.04).min(1.0);
+        let base = p.freq * 0.5;
+        return base * chirp_ratio + (base - base * chirp_ratio) * chirp_t;
+      }
+    }
+    0.01
+  });
+  let sub_osc = sub_freq_env >> sine();
+
   // Lowpass Q: higher resonance at worse severity creates a
   // honky, nasal peak — shrill without just being high-pitched.
   let q_timings = timings;
@@ -263,7 +281,7 @@ pub fn heartbeat_graph_with_volume(
 
   let waveform =
     (sine() * sine_w_env) & (triangle() * tri_w) & (saw() * saw_w_env);
-  let signal = freq_env >> waveform;
+  let signal = (freq_env >> waveform) + (sub_osc * sub_mix);
   let mono = (signal | cutoff_env | q_env) >> (lowpass() * amp_env * ext_vol);
   let with_echo =
     mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
@@ -300,14 +318,17 @@ pub fn boop_graph(
   let tri_w = voice.tri_ratio as f32 * norm;
   let saw_w = voice.saw_ratio as f32 * norm + harshness;
 
-  let waveform =
-    sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
+  let sub = sine_hz(freq * 0.5) * voice.sub_octave as f32;
+  let waveform = sine_hz(freq) * sine_w
+    + triangle_hz(freq) * tri_w
+    + saw_hz(freq) * saw_w
+    + sub;
 
   let cutoff = dc(
     (freq * profile.filter_cutoff as f32 * voice.brightness as f32)
       .min(MAX_CUTOFF),
   );
-  let q_val = dc(profile.filter_q as f32);
+  let q_val = dc(profile.filter_q as f32 * voice.resonance as f32);
 
   let env = envelope(move |t: f32| {
     let fade_in = if attack > 0.0 {

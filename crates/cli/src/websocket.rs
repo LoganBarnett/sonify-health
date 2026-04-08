@@ -523,6 +523,8 @@ struct ImportVoice {
   echo_delay: Option<f64>,
   echo_mix: Option<f64>,
   brightness: Option<f64>,
+  resonance: Option<f64>,
+  sub_octave: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -596,6 +598,12 @@ fn voice_fields(v: &ImportVoice) -> Vec<(&'static str, f64)> {
   }
   if let Some(x) = v.brightness {
     out.push(("brightness", x));
+  }
+  if let Some(x) = v.resonance {
+    out.push(("resonance", x));
+  }
+  if let Some(x) = v.sub_octave {
+    out.push(("sub_octave", x));
   }
   out
 }

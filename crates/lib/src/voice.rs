@@ -59,6 +59,12 @@ pub struct Voice {
 
   #[voice_param(order = 12, range = 0.3..1.0)]
   pub brightness: f64,
+
+  #[voice_param(order = 13, range = 0.2..2.0)]
+  pub resonance: f64,
+
+  #[voice_param(order = 14, range = 0.0..0.6)]
+  pub sub_octave: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -123,6 +129,12 @@ impl Voice {
     }
     if let Some(v) = o.brightness {
       self.brightness = v;
+    }
+    if let Some(v) = o.resonance {
+      self.resonance = v;
+    }
+    if let Some(v) = o.sub_octave {
+      self.sub_octave = v;
     }
     self
   }
@@ -290,6 +302,8 @@ pub struct VoiceOverrides {
   pub echo_delay: Option<f64>,
   pub echo_mix: Option<f64>,
   pub brightness: Option<f64>,
+  pub resonance: Option<f64>,
+  pub sub_octave: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -305,7 +319,9 @@ impl fmt::Display for Voice {
     writeln!(f, "reverb_mix:   {:.3}", self.reverb_mix)?;
     writeln!(f, "echo_delay:   {:.3} s", self.echo_delay)?;
     writeln!(f, "echo_mix:     {:.3}", self.echo_mix)?;
-    write!(f, "brightness:   {:.3}", self.brightness)
+    writeln!(f, "brightness:   {:.3}", self.brightness)?;
+    writeln!(f, "resonance:    {:.3}", self.resonance)?;
+    write!(f, "sub_octave:   {:.3}", self.sub_octave)
   }
 }
 
@@ -352,6 +368,8 @@ mod tests {
       assert!((0.01..1.0).contains(&v.echo_delay));
       assert!((0.0..1.0).contains(&v.echo_mix));
       assert!((0.3..1.0).contains(&v.brightness));
+      assert!((0.2..2.0).contains(&v.resonance));
+      assert!((0.0..0.6).contains(&v.sub_octave));
     }
   }
 

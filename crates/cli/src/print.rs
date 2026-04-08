@@ -35,6 +35,8 @@ pub(crate) fn format_toml(
     format!("echo_delay = {}", float_lit(voice.echo_delay)),
     format!("echo_mix = {}", float_lit(voice.echo_mix)),
     format!("brightness = {}", float_lit(voice.brightness)),
+    format!("resonance = {}", float_lit(voice.resonance)),
+    format!("sub_octave = {}", float_lit(voice.sub_octave)),
   ];
   for spec in boops {
     lines.push(String::new());
@@ -67,6 +69,8 @@ pub(crate) fn format_nix(
     format!("  echo_delay = {};", float_lit(voice.echo_delay)),
     format!("  echo_mix = {};", float_lit(voice.echo_mix)),
     format!("  brightness = {};", float_lit(voice.brightness)),
+    format!("  resonance = {};", float_lit(voice.resonance)),
+    format!("  sub_octave = {};", float_lit(voice.sub_octave)),
     "};".to_string(),
   ];
   if !boops.is_empty() {
@@ -105,6 +109,8 @@ pub(crate) fn format_json(
       "echo_delay": voice.echo_delay,
       "echo_mix": voice.echo_mix,
       "brightness": voice.brightness,
+      "resonance": voice.resonance,
+      "sub_octave": voice.sub_octave,
     }
   });
   if !boops.is_empty() {
@@ -135,6 +141,8 @@ pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
     format!("--echo-delay {}", voice.echo_delay),
     format!("--echo-mix {}", voice.echo_mix),
     format!("--brightness {}", voice.brightness),
+    format!("--resonance {}", voice.resonance),
+    format!("--sub-octave {}", voice.sub_octave),
   ]
   .join(" ")
 }

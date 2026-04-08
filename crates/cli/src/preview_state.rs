@@ -123,6 +123,22 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
+  VoiceParamMeta {
+    name: "resonance",
+    description:
+      "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak.",
+    min: 0.1,
+    max: 3.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "sub_octave",
+    description:
+      "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body.",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
 ];
 
 /// Metadata for a configured drone metric.
@@ -517,6 +533,8 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "echo_delay" => Some(voice.echo_delay),
     "echo_mix" => Some(voice.echo_mix),
     "brightness" => Some(voice.brightness),
+    "resonance" => Some(voice.resonance),
+    "sub_octave" => Some(voice.sub_octave),
     _ => None,
   }
 }
@@ -536,6 +554,8 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "echo_delay" => voice.echo_delay = value,
     "echo_mix" => voice.echo_mix = value,
     "brightness" => voice.brightness = value,
+    "resonance" => voice.resonance = value,
+    "sub_octave" => voice.sub_octave = value,
     _ => return false,
   }
   true
@@ -556,6 +576,8 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "echo_delay": voice.echo_delay,
     "echo_mix": voice.echo_mix,
     "brightness": voice.brightness,
+    "resonance": voice.resonance,
+    "sub_octave": voice.sub_octave,
   })
 }
 

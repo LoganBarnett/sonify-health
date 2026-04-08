@@ -23,3 +23,25 @@ commit (=5f606c5=).  The following commits need review:
 Also include any commits that land after =c3d6e14= before this task is started.
 
 After syncing, update =rust-template.json= with the final synced hash.
+
+* TODO Filter slope (pole count)
+Discrete choice (2/4 poles).  4-pole = 24 dB/oct, much steeper cutoff.
+Chain two =lowpass()= nodes with same cutoff/Q.  Could be a voice param with
+discrete steps or a boolean "steep filter".
+
+* TODO Square/pulse oscillator
+Add square wave option for hollow, odd-harmonic tone (warp core character).
+Either a fourth oscillator weight (=square_ratio=) or replace saw with a
+pulse-width param.
+
+* TODO Vibrato depth + rate
+LFO pitch modulation after chirp onset.  Two params: =vibrato_depth= (cents)
+and =vibrato_rate= (Hz).  Adds "living machine" movement to long sustains.
+
+* TODO Voice-level detune
+User-facing detune offset (cents) applied to all boops, independent of
+severity.  Creates chorus-like thickness on healthy tones.
+
+* TODO Voice-level harshness offset
+User-facing offset added to severity-driven harshness.  Lets user push healthy
+tones buzzier or pull down tones smoother.

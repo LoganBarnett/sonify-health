@@ -65,6 +65,14 @@ pub(crate) struct CliVoiceOverrides {
   /// Override brightness (lowpass cutoff scaler, 0.05–1.0).
   #[arg(long, help_heading = "Voice overrides")]
   brightness: Option<f64>,
+
+  /// Override resonance (filter Q scaler, 0.1–3.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  resonance: Option<f64>,
+
+  /// Override sub-octave mix (0.0–1.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  sub_octave: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -92,6 +100,8 @@ impl CliVoiceOverrides {
       echo_delay: self.echo_delay,
       echo_mix: self.echo_mix,
       brightness: self.brightness,
+      resonance: self.resonance,
+      sub_octave: self.sub_octave,
     }
   }
 
