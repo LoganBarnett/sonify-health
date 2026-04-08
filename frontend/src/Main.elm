@@ -438,10 +438,10 @@ viewToolbar model =
             , button
                 [ class
                     (if model.muted then
-                        "mute-btn"
+                        "btn-mute"
 
                      else
-                        "action-btn"
+                        "btn-action"
                     )
                 , onClick ToggleMute
                 ]
@@ -453,11 +453,11 @@ viewToolbar model =
                         "Mute"
                     )
                 ]
-            , button [ class "action-btn", onClick RevertAll ]
+            , button [ class "btn-action", onClick RevertAll ]
                 [ text "Revert" ]
-            , button [ class "action-btn", onClick ExportToml ]
+            , button [ class "btn-action", onClick ExportToml ]
                 [ text "Export TOML" ]
-            , a [ href "/scalar", class "action-btn" ]
+            , a [ href "/scalar", class "btn-action" ]
                 [ text "API Docs" ]
             ]
         ]
@@ -522,7 +522,7 @@ viewHeartbeatPanel model =
                 , text " Loop"
                 ]
             , button
-                [ class "trigger-btn"
+                [ class "btn-trigger"
                 , onClick TriggerHeartbeat
                 ]
                 [ text "Play Now" ]
@@ -619,7 +619,7 @@ viewDrone index drone =
                 [ text (formatFloat drone.value) ]
             , if drone.overridden then
                 button
-                    [ class "live-btn"
+                    [ class "btn-live"
                     , onClick (ClearDroneOverride index)
                     ]
                     [ text "Live" ]
@@ -689,7 +689,7 @@ viewExportModal model =
                         ]
                         []
                     , button
-                        [ class "action-btn"
+                        [ class "btn-action"
                         , onClick DismissExport
                         ]
                         [ text "Close" ]

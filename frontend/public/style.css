@@ -157,7 +157,7 @@ a:hover {
 
 /* Buttons — each variant is self-contained */
 
-.action-btn {
+.btn-action {
   display: inline-block;
   padding: var(--btn-py) var(--btn-px);
   border: 1px solid var(--color-border);
@@ -169,12 +169,12 @@ a:hover {
   text-decoration: none;
   line-height: var(--btn-line-height);
 }
-.action-btn:hover {
+.btn-action:hover {
   background: var(--color-border);
   text-decoration: none;
 }
 
-.mute-btn {
+.btn-mute {
   display: inline-block;
   padding: var(--btn-py) var(--btn-px);
   border: 1px solid var(--color-down-text);
@@ -186,12 +186,12 @@ a:hover {
   text-decoration: none;
   line-height: var(--btn-line-height);
 }
-.mute-btn:hover {
+.btn-mute:hover {
   background: var(--color-border);
   text-decoration: none;
 }
 
-.trigger-btn {
+.btn-trigger {
   display: inline-block;
   padding: var(--space-xs) var(--space-md);
   border: 1px solid var(--color-border);
@@ -203,12 +203,12 @@ a:hover {
   text-decoration: none;
   line-height: var(--btn-line-height);
 }
-.trigger-btn:hover {
+.btn-trigger:hover {
   background: var(--color-border);
   text-decoration: none;
 }
 
-.live-btn {
+.btn-live {
   display: inline-block;
   padding: var(--space-xs) var(--space-md);
   border: 1px solid var(--color-healthy-text);
@@ -220,7 +220,7 @@ a:hover {
   text-decoration: none;
   line-height: var(--btn-line-height);
 }
-.live-btn:hover {
+.btn-live:hover {
   background: var(--color-border);
   text-decoration: none;
 }
