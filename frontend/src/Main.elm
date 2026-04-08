@@ -1271,7 +1271,7 @@ viewExportModal model =
                 [ div
                     [ class "modal"
                     , Html.Events.stopPropagationOn "click"
-                        (Json.Decode.succeed ( NoOp, True ))
+                        (Decode.succeed ( NoOp, True ))
                     ]
                     [ h3 [ class "modal-title" ] [ text "Export Voice" ]
                     , div [ class "tab-bar" ]
