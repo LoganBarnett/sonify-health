@@ -24,7 +24,6 @@ pub enum DaemonError {
 /// Everything the daemon thread needs from main.
 pub struct DaemonContext<'a> {
   pub config: &'a DaemonConfig,
-  pub voice: &'a Voice,
   pub scale: &'a PentatonicScale,
   pub audio_device: Option<&'a str>,
   pub muted: Arc<AtomicBool>,
@@ -40,7 +39,6 @@ pub struct DaemonContext<'a> {
 pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   let DaemonContext {
     config,
-    voice,
     scale,
     audio_device,
     muted,
@@ -48,8 +46,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     metrics,
     preview,
   } = ctx;
-  debug!(?voice, "Resolved voice");
-  log_voice_derivation(voice);
+  {
+    let voices = preview.voices.read().unwrap();
+    let voice = &voices[&crate::preview_state::VoiceOwner::Heartbeat];
+    debug!(?voice, "Resolved voice");
+    log_voice_derivation(voice);
+  }
 
   // Log initial boop specs from materialized state.
   {
@@ -238,7 +240,13 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       thread::spawn(move || {
         while run.load(Ordering::Relaxed) {
           // Read current voice, drone config, and metric.
-          let voice = prev.voice.read().unwrap().clone();
+          let voice = prev
+            .voices
+            .read()
+            .unwrap()
+            .get(&crate::preview_state::VoiceOwner::Drone(i))
+            .cloned()
+            .expect("Drone voice missing from voices map");
           let info = {
             let infos = prev.drone_infos.read().unwrap();
             match infos.get(i) {
@@ -412,7 +420,8 @@ fn play_heartbeat_preview(
   let total = specs.len();
   let boops_per_check = preview.boop_count.load(Ordering::Relaxed);
 
-  let voice = preview.voice.read().unwrap();
+  let voices = preview.voices.read().unwrap();
+  let voice = &voices[&crate::preview_state::VoiceOwner::Heartbeat];
 
   // Each check's severity repeats for its phrase of boops.
   let severities: Vec<_> = (0..total)

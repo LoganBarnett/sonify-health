@@ -8,7 +8,7 @@ use sonify_health_lib::{
   state::{DroneState, HeartbeatState},
   BoopSpec, PentatonicScale, Severity, Voice,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
   atomic::{AtomicBool, AtomicUsize, Ordering},
   Arc, RwLock,
@@ -150,6 +150,24 @@ pub struct DroneMetricInfo {
   pub boops: usize,
 }
 
+/// Identifies which sound-producing entity owns a voice.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum VoiceOwner {
+  Heartbeat,
+  Drone(usize),
+}
+
+impl VoiceOwner {
+  /// Parse from the WebSocket `layer` + optional `index` fields.
+  pub fn from_layer_index(layer: &str, index: Option<usize>) -> Option<Self> {
+    match layer {
+      "heartbeat" => Some(Self::Heartbeat),
+      "drone" => index.map(Self::Drone),
+      _ => None,
+    }
+  }
+}
+
 /// Shared mutable state backing the real-time preview UI.
 ///
 /// Both the Axum WebSocket handler and the `spawn_blocking` daemon
@@ -158,8 +176,8 @@ pub struct DroneMetricInfo {
 /// audio-relevant `Shared<f32>` values feed directly into fundsp
 /// graphs.
 pub struct PreviewState {
-  original_voice: Voice,
-  pub voice: RwLock<Voice>,
+  original_voices: HashMap<VoiceOwner, Voice>,
+  pub voices: RwLock<HashMap<VoiceOwner, Voice>>,
   pub scale: PentatonicScale,
   pub scale_key: String,
   pub muted: Arc<AtomicBool>,
@@ -181,7 +199,7 @@ pub struct PreviewState {
   original_drone_infos: Vec<DroneMetricInfo>,
   pub boop_count: AtomicUsize,
   original_boop_count: usize,
-  pub locked_params: RwLock<HashSet<String>>,
+  pub locked_params: RwLock<HashMap<VoiceOwner, HashSet<String>>>,
   pub locked_drones: RwLock<HashSet<usize>>,
   pub boop_specs: RwLock<Vec<BoopSpec>>,
   pub boop_pins: RwLock<Vec<bool>>,
@@ -235,9 +253,15 @@ impl PreviewState {
       (initial_notes.to_vec(), pins, count)
     };
 
+    let mut voices = HashMap::new();
+    voices.insert(VoiceOwner::Heartbeat, voice.clone());
+    for i in 0..drone_count {
+      voices.insert(VoiceOwner::Drone(i), voice.clone());
+    }
+
     Self {
-      original_voice: voice.clone(),
-      voice: RwLock::new(voice),
+      original_voices: voices.clone(),
+      voices: RwLock::new(voices),
       scale,
       scale_key,
       muted,
@@ -257,7 +281,7 @@ impl PreviewState {
       drone_infos: RwLock::new(drone_infos),
       boop_count: AtomicUsize::new(boop_count),
       original_boop_count: boop_count,
-      locked_params: RwLock::new(HashSet::new()),
+      locked_params: RwLock::new(HashMap::new()),
       locked_drones: RwLock::new(HashSet::new()),
       boop_specs: RwLock::new(initial_specs),
       boop_pins: RwLock::new(initial_pins),
@@ -292,7 +316,8 @@ impl PreviewState {
   pub fn recompute_boop_specs(&self) {
     let boops_per_check = self.boop_count.load(Ordering::Relaxed);
     let total = boops_per_check * self.check_names.len();
-    let voice = self.voice.read().unwrap();
+    let voices = self.voices.read().unwrap();
+    let voice = &voices[&VoiceOwner::Heartbeat];
     let check_count = self.check_names.len();
     let fresh = voice.boop_specs(
       &self.scale,
@@ -327,7 +352,8 @@ impl PreviewState {
   /// Build the full state snapshot JSON sent on connect and on
   /// `get_state` / `revert_all`.
   pub fn state_snapshot(&self) -> String {
-    let voice = self.voice.read().unwrap();
+    let voices = self.voices.read().unwrap();
+    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
     let hb_overrides = self.heartbeat_overrides.read().unwrap();
     let drone_overrides = self.drone_overrides.read().unwrap();
     let drone_infos = self.drone_infos.read().unwrap();
@@ -335,7 +361,12 @@ impl PreviewState {
     let specs = self.boop_specs.read().unwrap();
     let pins = self.boop_pins.read().unwrap();
 
-    let voice_json = voice_to_json(&voice);
+    let heartbeat_voice_json = voice_to_json(heartbeat_voice);
+
+    let heartbeat_locked: Vec<_> = locked
+      .get(&VoiceOwner::Heartbeat)
+      .map(|s| s.iter().map(|p| json!(p)).collect())
+      .unwrap_or_default();
 
     let voice_params_json: Vec<_> = VOICE_PARAMS
       .iter()
@@ -369,6 +400,14 @@ impl PreviewState {
       .iter()
       .enumerate()
       .map(|(i, info)| {
+        let drone_voice = voices
+          .get(&VoiceOwner::Drone(i))
+          .map(voice_to_json)
+          .unwrap_or(json!({}));
+        let drone_locked: Vec<_> = locked
+          .get(&VoiceOwner::Drone(i))
+          .map(|s| s.iter().map(|p| json!(p)).collect())
+          .unwrap_or_default();
         json!({
           "name": info.name,
           "value": self.drone_state.metrics[i].value(),
@@ -377,11 +416,12 @@ impl PreviewState {
           "boops": info.boops,
           "register": register_str(info.register),
           "overridden": drone_overrides[i].is_some(),
+          "voice": drone_voice,
+          "locked_params": drone_locked,
         })
       })
       .collect();
 
-    let locked_json: Vec<_> = locked.iter().map(|s| json!(s)).collect();
     let locked_drones = self.locked_drones.read().unwrap();
     let locked_drones_json: Vec<_> =
       locked_drones.iter().map(|i| json!(i)).collect();
@@ -403,7 +443,8 @@ impl PreviewState {
 
     json!({
       "type": "state",
-      "voice": voice_json,
+      "heartbeat_voice": heartbeat_voice_json,
+      "heartbeat_locked_params": heartbeat_locked,
       "voice_params": voice_params_json,
       "muted": self.muted.load(Ordering::Relaxed),
       "heartbeat_volume": self.heartbeat_volume.value(),
@@ -411,7 +452,6 @@ impl PreviewState {
       "boop_count": self.boop_count.load(Ordering::Relaxed),
       "checks": checks_json,
       "drones": drones_json,
-      "locked_params": locked_json,
       "locked_drones": locked_drones_json,
       "boop_specs": boop_specs_json,
       "boop_spec_ranges": {
@@ -426,38 +466,88 @@ impl PreviewState {
     .to_string()
   }
 
-  /// Format the current voice as a TOML `[voice]` block.
+  /// Format all voices as a TOML block.
   pub fn export_toml(&self) -> String {
-    let voice = self.voice.read().unwrap();
+    let voices = self.voices.read().unwrap();
+    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let drone_infos = self.drone_infos.read().unwrap();
+    let drone_voices: Vec<_> = drone_infos
+      .iter()
+      .enumerate()
+      .map(|(i, info)| {
+        let v = voices
+          .get(&VoiceOwner::Drone(i))
+          .cloned()
+          .unwrap_or_else(|| heartbeat_voice.clone());
+        (info.name.clone(), v)
+      })
+      .collect();
     let specs = self.boop_specs.read().unwrap();
-    print::format_toml(&voice, &self.scale_key, &specs)
+    print::format_toml(heartbeat_voice, &drone_voices, &self.scale_key, &specs)
   }
 
-  /// Format the current voice as a JSON object.
+  /// Format all voices as a JSON object.
   pub fn export_json(&self) -> String {
-    let voice = self.voice.read().unwrap();
+    let voices = self.voices.read().unwrap();
+    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let drone_infos = self.drone_infos.read().unwrap();
+    let drone_voices: Vec<_> = drone_infos
+      .iter()
+      .enumerate()
+      .map(|(i, info)| {
+        let v = voices
+          .get(&VoiceOwner::Drone(i))
+          .cloned()
+          .unwrap_or_else(|| heartbeat_voice.clone());
+        (info.name.clone(), v)
+      })
+      .collect();
     let specs = self.boop_specs.read().unwrap();
-    print::format_json(&voice, &self.scale_key, &specs)
+    print::format_json(heartbeat_voice, &drone_voices, &self.scale_key, &specs)
   }
 
-  /// Format the current voice as a Nix attribute set.
+  /// Format all voices as a Nix attribute set.
   pub fn export_nix(&self) -> String {
-    let voice = self.voice.read().unwrap();
+    let voices = self.voices.read().unwrap();
+    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let drone_infos = self.drone_infos.read().unwrap();
+    let drone_voices: Vec<_> = drone_infos
+      .iter()
+      .enumerate()
+      .map(|(i, info)| {
+        let v = voices
+          .get(&VoiceOwner::Drone(i))
+          .cloned()
+          .unwrap_or_else(|| heartbeat_voice.clone());
+        (info.name.clone(), v)
+      })
+      .collect();
     let specs = self.boop_specs.read().unwrap();
-    print::format_nix(&voice, &self.scale_key, &specs)
+    print::format_nix(heartbeat_voice, &drone_voices, &self.scale_key, &specs)
   }
 
   /// Reset everything to startup values.  Locked voice params
   /// and locked drones survive the reset; boop pins are cleared.
   pub fn revert(&self) {
-    // Snapshot locked param values before resetting the voice.
+    // Snapshot per-entity locked param values before resetting.
     let locked = self.locked_params.read().unwrap().clone();
-    let locked_values: Vec<(String, f64)> = {
-      let voice = self.voice.read().unwrap();
+    let locked_values: HashMap<VoiceOwner, Vec<(String, f64)>> = {
+      let voices = self.voices.read().unwrap();
       locked
         .iter()
-        .filter_map(|name| {
-          get_voice_param(&voice, name).map(|v| (name.clone(), v))
+        .map(|(owner, params)| {
+          let vals: Vec<(String, f64)> = voices
+            .get(owner)
+            .map(|voice| {
+              params
+                .iter()
+                .filter_map(|name| {
+                  get_voice_param(voice, name).map(|v| (name.clone(), v))
+                })
+                .collect()
+            })
+            .unwrap_or_default();
+          (owner.clone(), vals)
         })
         .collect()
     };
@@ -476,13 +566,17 @@ impl PreviewState {
         .collect()
     };
 
-    *self.voice.write().unwrap() = self.original_voice.clone();
+    *self.voices.write().unwrap() = self.original_voices.clone();
 
-    // Restore locked param values.
+    // Restore per-entity locked param values.
     {
-      let mut voice = self.voice.write().unwrap();
-      for (name, value) in &locked_values {
-        set_voice_param(&mut voice, name, *value);
+      let mut voices = self.voices.write().unwrap();
+      for (owner, vals) in &locked_values {
+        if let Some(voice) = voices.get_mut(owner) {
+          for (name, value) in vals {
+            set_voice_param(voice, name, *value);
+          }
+        }
       }
     }
 
@@ -640,7 +734,8 @@ mod tests {
   struct StateContract {
     #[serde(rename = "type")]
     msg_type: String,
-    voice: serde_json::Map<String, serde_json::Value>,
+    heartbeat_voice: serde_json::Map<String, serde_json::Value>,
+    heartbeat_locked_params: Vec<String>,
     voice_params: Vec<VoiceParamContract>,
     muted: bool,
     heartbeat_volume: f64,
@@ -648,7 +743,6 @@ mod tests {
     boop_count: u64,
     checks: Vec<CheckContract>,
     drones: Vec<DroneContract>,
-    locked_params: Vec<String>,
     locked_drones: Vec<u64>,
     boop_specs: Vec<BoopSpecContract>,
     boop_spec_ranges: BoopSpecRangesContract,
@@ -681,6 +775,8 @@ mod tests {
     boops: u64,
     register: String,
     overridden: bool,
+    voice: serde_json::Map<String, serde_json::Value>,
+    locked_params: Vec<String>,
   }
 
   #[derive(Deserialize)]
@@ -798,5 +894,101 @@ mod tests {
     let parsed: DroneConfigChangedContract = serde_json::from_str(&msg)
       .expect("drone_config_changed with null base_freq should still decode");
     assert_eq!(parsed.base_freq, None);
+  }
+
+  #[test]
+  fn heartbeat_voice_change_does_not_affect_drone() {
+    let preview = test_preview();
+    let original_drone_freq = {
+      let voices = preview.voices.read().unwrap();
+      voices[&VoiceOwner::Drone(0)].base_freq
+    };
+    {
+      let mut voices = preview.voices.write().unwrap();
+      let hb = voices.get_mut(&VoiceOwner::Heartbeat).unwrap();
+      set_voice_param(hb, "base_freq", 999.0);
+    }
+    let voices = preview.voices.read().unwrap();
+    assert!(
+      (voices[&VoiceOwner::Heartbeat].base_freq - 999.0).abs() < f64::EPSILON,
+    );
+    assert!(
+      (voices[&VoiceOwner::Drone(0)].base_freq - original_drone_freq).abs()
+        < f64::EPSILON,
+    );
+  }
+
+  #[test]
+  fn drone_voice_change_does_not_affect_heartbeat() {
+    let preview = test_preview();
+    let original_hb_freq = {
+      let voices = preview.voices.read().unwrap();
+      voices[&VoiceOwner::Heartbeat].base_freq
+    };
+    {
+      let mut voices = preview.voices.write().unwrap();
+      let drone = voices.get_mut(&VoiceOwner::Drone(0)).unwrap();
+      set_voice_param(drone, "base_freq", 777.0);
+    }
+    let voices = preview.voices.read().unwrap();
+    assert!(
+      (voices[&VoiceOwner::Drone(0)].base_freq - 777.0).abs() < f64::EPSILON,
+    );
+    assert!(
+      (voices[&VoiceOwner::Heartbeat].base_freq - original_hb_freq).abs()
+        < f64::EPSILON,
+    );
+  }
+
+  #[test]
+  fn per_entity_lock_survives_revert() {
+    let preview = test_preview();
+    // Change heartbeat voice and lock it.
+    {
+      let mut voices = preview.voices.write().unwrap();
+      let hb = voices.get_mut(&VoiceOwner::Heartbeat).unwrap();
+      set_voice_param(hb, "base_freq", 555.0);
+    }
+    preview
+      .locked_params
+      .write()
+      .unwrap()
+      .entry(VoiceOwner::Heartbeat)
+      .or_default()
+      .insert("base_freq".to_string());
+
+    preview.revert();
+
+    let voices = preview.voices.read().unwrap();
+    assert!(
+      (voices[&VoiceOwner::Heartbeat].base_freq - 555.0).abs() < f64::EPSILON,
+      "Locked heartbeat base_freq should survive revert",
+    );
+  }
+
+  #[test]
+  fn state_snapshot_encodes_all_voices() {
+    let preview = test_preview();
+    // Set heartbeat and drone to different values.
+    {
+      let mut voices = preview.voices.write().unwrap();
+      set_voice_param(
+        voices.get_mut(&VoiceOwner::Heartbeat).unwrap(),
+        "base_freq",
+        111.0,
+      );
+      set_voice_param(
+        voices.get_mut(&VoiceOwner::Drone(0)).unwrap(),
+        "base_freq",
+        222.0,
+      );
+    }
+    let json = preview.state_snapshot();
+    let state: StateContract =
+      serde_json::from_str(&json).expect("state_snapshot should decode");
+    let hb_freq = state.heartbeat_voice["base_freq"].as_f64().unwrap();
+    let drone_freq = state.drones[0].voice["base_freq"].as_f64().unwrap();
+    assert!((hb_freq - 111.0).abs() < f64::EPSILON);
+    assert!((drone_freq - 222.0).abs() < f64::EPSILON);
   }
 }

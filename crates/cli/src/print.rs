@@ -12,67 +12,80 @@ fn float_lit(v: f64) -> String {
   }
 }
 
-/// Format voice parameters as a TOML `[voice]` block suitable for
-/// pasting into `config.toml`.
+/// Append TOML voice fields under a given table header.
+fn voice_toml_lines(lines: &mut Vec<String>, header: &str, voice: &Voice) {
+  lines.push(format!("[{header}]"));
+  lines.push(format!("base_freq = {}", float_lit(voice.base_freq)));
+  lines.push(format!("sine_ratio = {}", float_lit(voice.sine_ratio)));
+  lines.push(format!("tri_ratio = {}", float_lit(voice.tri_ratio)));
+  lines.push(format!("saw_ratio = {}", float_lit(voice.saw_ratio)));
+  lines.push(format!("attack_ms = {}", float_lit(voice.attack_ms)));
+  lines.push(format!("release_ms = {}", float_lit(voice.release_ms)));
+  lines.push(format!("chirp_ratio = {}", float_lit(voice.chirp_ratio)));
+  lines.push(format!("stereo_pan = {}", float_lit(voice.stereo_pan)));
+  lines.push(format!("reverb_mix = {}", float_lit(voice.reverb_mix)));
+  lines.push(format!("note_seed = {}", float_lit(voice.note_seed)));
+  lines.push(format!("echo_delay = {}", float_lit(voice.echo_delay)));
+  lines.push(format!("echo_mix = {}", float_lit(voice.echo_mix)));
+  lines.push(format!("brightness = {}", float_lit(voice.brightness)));
+  lines.push(format!("resonance = {}", float_lit(voice.resonance)));
+  lines.push(format!("sub_octave = {}", float_lit(voice.sub_octave)));
+}
+
+/// Format all voices as a TOML document suitable for pasting into
+/// `config.toml`.
 pub(crate) fn format_toml(
-  voice: &Voice,
+  heartbeat_voice: &Voice,
+  drone_voices: &[(String, Voice)],
   scale_key: &str,
   boops: &[BoopSpec],
 ) -> String {
-  let mut lines = vec![
-    "[voice]".to_string(),
-    format!("scale_key = \"{scale_key}\""),
-    format!("base_freq = {}", float_lit(voice.base_freq)),
-    format!("sine_ratio = {}", float_lit(voice.sine_ratio)),
-    format!("tri_ratio = {}", float_lit(voice.tri_ratio)),
-    format!("saw_ratio = {}", float_lit(voice.saw_ratio)),
-    format!("attack_ms = {}", float_lit(voice.attack_ms)),
-    format!("release_ms = {}", float_lit(voice.release_ms)),
-    format!("chirp_ratio = {}", float_lit(voice.chirp_ratio)),
-    format!("stereo_pan = {}", float_lit(voice.stereo_pan)),
-    format!("reverb_mix = {}", float_lit(voice.reverb_mix)),
-    format!("note_seed = {}", float_lit(voice.note_seed)),
-    format!("echo_delay = {}", float_lit(voice.echo_delay)),
-    format!("echo_mix = {}", float_lit(voice.echo_mix)),
-    format!("brightness = {}", float_lit(voice.brightness)),
-    format!("resonance = {}", float_lit(voice.resonance)),
-    format!("sub_octave = {}", float_lit(voice.sub_octave)),
-  ];
+  let mut lines = vec![format!("scale_key = \"{scale_key}\"")];
+  lines.push(String::new());
+  voice_toml_lines(&mut lines, "heartbeat.voice", heartbeat_voice);
   for spec in boops {
     lines.push(String::new());
     lines.push("[[heartbeat.notes]]".to_string());
     lines.push(format!("freq = {}", float_lit(spec.freq)));
     lines.push(format!("duration = {}", float_lit(spec.duration)));
   }
+  for (name, voice) in drone_voices {
+    lines.push(String::new());
+    voice_toml_lines(&mut lines, &format!("drone_voices.{name}"), voice);
+  }
   lines.join("\n")
 }
 
-/// Format voice parameters as a Nix attribute set.
+/// Append Nix voice attribute set lines.
+fn voice_nix_lines(lines: &mut Vec<String>, prefix: &str, voice: &Voice) {
+  lines.push(format!("{prefix} = {{"));
+  lines.push(format!("  base_freq = {};", float_lit(voice.base_freq)));
+  lines.push(format!("  sine_ratio = {};", float_lit(voice.sine_ratio)));
+  lines.push(format!("  tri_ratio = {};", float_lit(voice.tri_ratio)));
+  lines.push(format!("  saw_ratio = {};", float_lit(voice.saw_ratio)));
+  lines.push(format!("  attack_ms = {};", float_lit(voice.attack_ms)));
+  lines.push(format!("  release_ms = {};", float_lit(voice.release_ms)));
+  lines.push(format!("  chirp_ratio = {};", float_lit(voice.chirp_ratio)));
+  lines.push(format!("  stereo_pan = {};", float_lit(voice.stereo_pan)));
+  lines.push(format!("  reverb_mix = {};", float_lit(voice.reverb_mix)));
+  lines.push(format!("  note_seed = {};", float_lit(voice.note_seed)));
+  lines.push(format!("  echo_delay = {};", float_lit(voice.echo_delay)));
+  lines.push(format!("  echo_mix = {};", float_lit(voice.echo_mix)));
+  lines.push(format!("  brightness = {};", float_lit(voice.brightness)));
+  lines.push(format!("  resonance = {};", float_lit(voice.resonance)));
+  lines.push(format!("  sub_octave = {};", float_lit(voice.sub_octave)));
+  lines.push("};".to_string());
+}
+
+/// Format all voices as Nix attribute sets.
 pub(crate) fn format_nix(
-  voice: &Voice,
+  heartbeat_voice: &Voice,
+  drone_voices: &[(String, Voice)],
   scale_key: &str,
   boops: &[BoopSpec],
 ) -> String {
-  let mut lines = vec![
-    "voice = {".to_string(),
-    format!("  scale_key = \"{scale_key}\";"),
-    format!("  base_freq = {};", float_lit(voice.base_freq)),
-    format!("  sine_ratio = {};", float_lit(voice.sine_ratio)),
-    format!("  tri_ratio = {};", float_lit(voice.tri_ratio)),
-    format!("  saw_ratio = {};", float_lit(voice.saw_ratio)),
-    format!("  attack_ms = {};", float_lit(voice.attack_ms)),
-    format!("  release_ms = {};", float_lit(voice.release_ms)),
-    format!("  chirp_ratio = {};", float_lit(voice.chirp_ratio)),
-    format!("  stereo_pan = {};", float_lit(voice.stereo_pan)),
-    format!("  reverb_mix = {};", float_lit(voice.reverb_mix)),
-    format!("  note_seed = {};", float_lit(voice.note_seed)),
-    format!("  echo_delay = {};", float_lit(voice.echo_delay)),
-    format!("  echo_mix = {};", float_lit(voice.echo_mix)),
-    format!("  brightness = {};", float_lit(voice.brightness)),
-    format!("  resonance = {};", float_lit(voice.resonance)),
-    format!("  sub_octave = {};", float_lit(voice.sub_octave)),
-    "};".to_string(),
-  ];
+  let mut lines = vec![format!("scale_key = \"{scale_key}\";")];
+  voice_nix_lines(&mut lines, "heartbeat.voice", heartbeat_voice);
   if !boops.is_empty() {
     lines.push("heartbeat.notes = [".to_string());
     for spec in boops {
@@ -84,42 +97,57 @@ pub(crate) fn format_nix(
     }
     lines.push("];".to_string());
   }
+  for (name, voice) in drone_voices {
+    voice_nix_lines(&mut lines, &format!("drone_voices.{name}"), voice);
+  }
   lines.join("\n")
 }
 
-/// Format voice parameters as a pretty-printed JSON object.
+fn voice_to_json_value(voice: &Voice) -> serde_json::Value {
+  json!({
+    "base_freq": voice.base_freq,
+    "sine_ratio": voice.sine_ratio,
+    "tri_ratio": voice.tri_ratio,
+    "saw_ratio": voice.saw_ratio,
+    "attack_ms": voice.attack_ms,
+    "release_ms": voice.release_ms,
+    "chirp_ratio": voice.chirp_ratio,
+    "stereo_pan": voice.stereo_pan,
+    "reverb_mix": voice.reverb_mix,
+    "note_seed": voice.note_seed,
+    "echo_delay": voice.echo_delay,
+    "echo_mix": voice.echo_mix,
+    "brightness": voice.brightness,
+    "resonance": voice.resonance,
+    "sub_octave": voice.sub_octave,
+  })
+}
+
+/// Format all voices as a pretty-printed JSON object.
 pub(crate) fn format_json(
-  voice: &Voice,
+  heartbeat_voice: &Voice,
+  drone_voices: &[(String, Voice)],
   scale_key: &str,
   boops: &[BoopSpec],
 ) -> String {
-  let mut obj = json!({
-    "voice": {
-      "scale_key": scale_key,
-      "base_freq": voice.base_freq,
-      "sine_ratio": voice.sine_ratio,
-      "tri_ratio": voice.tri_ratio,
-      "saw_ratio": voice.saw_ratio,
-      "attack_ms": voice.attack_ms,
-      "release_ms": voice.release_ms,
-      "chirp_ratio": voice.chirp_ratio,
-      "stereo_pan": voice.stereo_pan,
-      "reverb_mix": voice.reverb_mix,
-      "note_seed": voice.note_seed,
-      "echo_delay": voice.echo_delay,
-      "echo_mix": voice.echo_mix,
-      "brightness": voice.brightness,
-      "resonance": voice.resonance,
-      "sub_octave": voice.sub_octave,
-    }
-  });
+  let mut heartbeat_obj =
+    json!({ "voice": voice_to_json_value(heartbeat_voice) });
   if !boops.is_empty() {
     let notes_arr: Vec<_> = boops
       .iter()
       .map(|s| json!({"freq": s.freq, "duration": s.duration}))
       .collect();
-    obj["heartbeat"] = json!({"notes": notes_arr});
+    heartbeat_obj["notes"] = json!(notes_arr);
   }
+  let mut drone_voices_obj = json!({});
+  for (name, voice) in drone_voices {
+    drone_voices_obj[name] = voice_to_json_value(voice);
+  }
+  let obj = json!({
+    "scale_key": scale_key,
+    "heartbeat": heartbeat_obj,
+    "drone_voices": drone_voices_obj,
+  });
   serde_json::to_string_pretty(&obj).unwrap()
 }
 

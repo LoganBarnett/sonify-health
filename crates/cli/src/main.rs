@@ -359,7 +359,6 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let daemon_handle = tokio::task::spawn_blocking(move || {
     daemon::run_daemon(daemon::DaemonContext {
       config: &daemon_config,
-      voice: &voice,
       scale: &scale,
       audio_device: audio_device.as_deref(),
       muted: daemon_muted,
@@ -647,8 +646,8 @@ fn run_print(
   let voice = voice_args.resolve_voice(config);
   let scale_key = voice_args.effective_scale_key(config);
   let output = match format {
-    PrintFormat::Toml => print::format_toml(&voice, &scale_key, &[]),
-    PrintFormat::Nix => print::format_nix(&voice, &scale_key, &[]),
+    PrintFormat::Toml => print::format_toml(&voice, &[], &scale_key, &[]),
+    PrintFormat::Nix => print::format_nix(&voice, &[], &scale_key, &[]),
     PrintFormat::Cli => print::format_cli(&voice, &scale_key),
   };
   println!("{output}");

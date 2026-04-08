@@ -1,4 +1,4 @@
-use crate::preview_state::{self, PreviewState};
+use crate::preview_state::{self, PreviewState, VoiceOwner};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -116,17 +116,26 @@ fn broadcast_boop_specs(preview: &PreviewState) {
   );
 }
 
-/// Broadcast current locked params to all connected clients.
-fn broadcast_locked_params(preview: &PreviewState) {
+/// Broadcast locked params for a specific entity to all connected
+/// clients.
+fn broadcast_locked_params(preview: &PreviewState, owner: &VoiceOwner) {
   let locked = preview.locked_params.read().unwrap();
-  let locked_json: Vec<_> = locked.iter().collect();
-  let _ = preview.broadcast_tx.send(
-    json!({
-      "type": "locked_params_changed",
-      "params": locked_json,
-    })
-    .to_string(),
-  );
+  let params: Vec<_> = locked
+    .get(owner)
+    .map(|s| s.iter().collect())
+    .unwrap_or_default();
+  let mut msg = json!({
+    "type": "locked_params_changed",
+    "layer": match owner {
+      VoiceOwner::Heartbeat => "heartbeat",
+      VoiceOwner::Drone(_) => "drone",
+    },
+    "params": params,
+  });
+  if let VoiceOwner::Drone(i) = owner {
+    msg["index"] = json!(i);
+  }
+  let _ = preview.broadcast_tx.send(msg.to_string());
 }
 
 /// Broadcast current locked drone indices to all connected clients.
@@ -142,6 +151,17 @@ fn broadcast_locked_drones(preview: &PreviewState) {
   );
 }
 
+/// Parse a `VoiceOwner` from the `layer` and optional `index`
+/// fields of a WebSocket message.
+fn parse_voice_owner(msg: &serde_json::Value) -> Option<VoiceOwner> {
+  let layer = msg.get("layer").and_then(|v| v.as_str())?;
+  let index = msg
+    .get("index")
+    .and_then(|v| v.as_u64())
+    .map(|v| v as usize);
+  VoiceOwner::from_layer_index(layer, index)
+}
+
 /// Dispatch a single client message.  Returns `Some(reply)` for
 /// messages that should go only to the requesting client.
 /// Broadcast side-effects are fired inline.
@@ -153,23 +173,32 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
     "get_state" => Some(preview.state_snapshot()),
 
     "set_voice_param" => {
+      let owner = parse_voice_owner(&msg)?;
       let param = msg.get("param").and_then(|v| v.as_str())?;
       let value = msg.get("value").and_then(|v| v.as_f64())?;
       {
-        let mut voice = preview.voice.write().unwrap();
-        if !preview_state::set_voice_param(&mut voice, param, value) {
+        let mut voices = preview.voices.write().unwrap();
+        let voice = voices.get_mut(&owner)?;
+        if !preview_state::set_voice_param(voice, param, value) {
           return None;
         }
       }
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "param_changed",
-          "param": param,
-          "value": value,
-        })
-        .to_string(),
-      );
-      if matches!(param, "note_seed" | "base_freq") {
+      let mut broadcast = json!({
+        "type": "param_changed",
+        "layer": match &owner {
+          VoiceOwner::Heartbeat => "heartbeat",
+          VoiceOwner::Drone(_) => "drone",
+        },
+        "param": param,
+        "value": value,
+      });
+      if let VoiceOwner::Drone(i) = &owner {
+        broadcast["index"] = json!(i);
+      }
+      let _ = preview.broadcast_tx.send(broadcast.to_string());
+      if owner == VoiceOwner::Heartbeat
+        && matches!(param, "note_seed" | "base_freq")
+      {
         preview.recompute_boop_specs();
         broadcast_boop_specs(preview);
       }
@@ -401,6 +430,7 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
     }
 
     "lock_param" => {
+      let owner = parse_voice_owner(&msg)?;
       let param = msg.get("param").and_then(|v| v.as_str())?;
       if !preview_state::VOICE_PARAMS.iter().any(|p| p.name == param) {
         return None;
@@ -409,22 +439,39 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         .locked_params
         .write()
         .unwrap()
+        .entry(owner.clone())
+        .or_default()
         .insert(param.to_string());
-      broadcast_locked_params(preview);
+      broadcast_locked_params(preview, &owner);
       None
     }
 
     "unlock_param" => {
+      let owner = parse_voice_owner(&msg)?;
       let param = msg.get("param").and_then(|v| v.as_str())?;
-      preview.locked_params.write().unwrap().remove(param);
-      broadcast_locked_params(preview);
+      {
+        let mut locked = preview.locked_params.write().unwrap();
+        if let Some(set) = locked.get_mut(&owner) {
+          set.remove(param);
+        }
+      }
+      broadcast_locked_params(preview, &owner);
       None
     }
 
     "unlock_all" => {
+      let owners: Vec<VoiceOwner> = preview
+        .locked_params
+        .read()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
       preview.locked_params.write().unwrap().clear();
       preview.locked_drones.write().unwrap().clear();
-      broadcast_locked_params(preview);
+      for owner in &owners {
+        broadcast_locked_params(preview, owner);
+      }
       broadcast_locked_drones(preview);
       None
     }
@@ -497,8 +544,8 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
     "import_config" => {
       let text = msg.get("text").and_then(|v| v.as_str())?;
       match parse_import(text) {
-        Ok((overrides, boops)) => {
-          apply_import(preview, &overrides, &boops);
+        Ok(data) => {
+          apply_import(preview, &data);
           None
         }
         Err(e) => Some(
@@ -543,6 +590,7 @@ struct ImportBoop {
 
 #[derive(Default, serde::Deserialize)]
 struct ImportHeartbeatSection {
+  voice: Option<ImportVoice>,
   notes: Option<Vec<ImportBoop>>,
 }
 
@@ -550,18 +598,27 @@ struct ImportHeartbeatSection {
 struct ImportToml {
   voice: Option<ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
+  drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
 }
 
 #[derive(serde::Deserialize)]
 struct ImportJson {
   voice: Option<ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
+  drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
 }
 
-/// Parsed voice param overrides paired with optional boop specs.
-type ImportResult = Result<(Vec<(&'static str, f64)>, Vec<BoopSpec>), String>;
+/// Per-entity voice overrides plus heartbeat boop specs.
+struct ImportData {
+  heartbeat_params: Vec<(&'static str, f64)>,
+  drone_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
+  boops: Vec<BoopSpec>,
+}
 
-/// Auto-detect format and parse into voice param overrides + boop specs.
+type ImportResult = Result<ImportData, String>;
+
+/// Auto-detect format and parse into per-entity voice param overrides
+/// + boop specs.
 fn parse_import(text: &str) -> ImportResult {
   let trimmed = text.trim();
   if trimmed.starts_with('{') {
@@ -631,53 +688,101 @@ fn boops_from_import(raw: &[ImportBoop]) -> Vec<BoopSpec> {
     .collect()
 }
 
-fn parse_import_json(text: &str) -> ImportResult {
-  let parsed: ImportJson =
-    serde_json::from_str(text).map_err(|e| format!("JSON parse error: {e}"))?;
-  let params = parsed.voice.as_ref().map(voice_fields).unwrap_or_default();
-  let boops = parsed
-    .heartbeat
+fn build_import_data(
+  legacy_voice: Option<&ImportVoice>,
+  heartbeat: Option<ImportHeartbeatSection>,
+  drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+) -> ImportData {
+  // Heartbeat voice: prefer heartbeat.voice, fall back to bare [voice]
+  // for backwards compatibility.
+  let heartbeat_params = heartbeat
+    .as_ref()
+    .and_then(|hb| hb.voice.as_ref())
+    .or(legacy_voice)
+    .map(voice_fields)
+    .unwrap_or_default();
+
+  let boops = heartbeat
     .and_then(|hb| hb.notes)
     .as_deref()
     .map(boops_from_import)
     .unwrap_or_default();
-  Ok((params, boops))
+
+  let drone_params = drone_voices
+    .unwrap_or_default()
+    .iter()
+    .map(|(name, v)| (name.clone(), voice_fields(v)))
+    .collect();
+
+  ImportData {
+    heartbeat_params,
+    drone_params,
+    boops,
+  }
+}
+
+fn parse_import_json(text: &str) -> ImportResult {
+  let parsed: ImportJson =
+    serde_json::from_str(text).map_err(|e| format!("JSON parse error: {e}"))?;
+  Ok(build_import_data(
+    parsed.voice.as_ref(),
+    parsed.heartbeat,
+    parsed.drone_voices,
+  ))
 }
 
 fn parse_import_toml(text: &str) -> ImportResult {
   let parsed: ImportToml =
     toml::from_str(text).map_err(|e| format!("TOML parse error: {e}"))?;
-  let params = parsed.voice.as_ref().map(voice_fields).unwrap_or_default();
-  let boops = parsed
-    .heartbeat
-    .and_then(|hb| hb.notes)
-    .as_deref()
-    .map(boops_from_import)
-    .unwrap_or_default();
-  Ok((params, boops))
+  Ok(build_import_data(
+    parsed.voice.as_ref(),
+    parsed.heartbeat,
+    parsed.drone_voices,
+  ))
 }
 
-/// Apply imported voice params and boop specs to preview state.
-/// Locked params are skipped.  Imported boops are pinned.
-fn apply_import(
-  preview: &PreviewState,
-  params: &[(&str, f64)],
-  boops: &[BoopSpec],
-) {
+/// Apply imported per-entity voice params and boop specs to preview
+/// state.  Per-entity locked params are respected.  Imported boops
+/// are pinned.
+fn apply_import(preview: &PreviewState, data: &ImportData) {
   let locked = preview.locked_params.read().unwrap().clone();
+
+  let is_locked = |owner: &VoiceOwner, name: &str| -> bool {
+    locked.get(owner).map(|s| s.contains(name)).unwrap_or(false)
+  };
+
   {
-    let mut voice = preview.voice.write().unwrap();
-    for &(name, value) in params {
-      if !locked.contains(name) {
-        preview_state::set_voice_param(&mut voice, name, value);
+    let mut voices = preview.voices.write().unwrap();
+
+    // Heartbeat voice params.
+    if let Some(voice) = voices.get_mut(&VoiceOwner::Heartbeat) {
+      for &(name, value) in &data.heartbeat_params {
+        if !is_locked(&VoiceOwner::Heartbeat, name) {
+          preview_state::set_voice_param(voice, name, value);
+        }
+      }
+    }
+
+    // Drone voice params (matched by name).
+    let drone_infos = preview.drone_infos.read().unwrap();
+    for (i, info) in drone_infos.iter().enumerate() {
+      if let Some(params) = data.drone_params.get(&info.name) {
+        let owner = VoiceOwner::Drone(i);
+        if let Some(voice) = voices.get_mut(&owner) {
+          for &(name, value) in params {
+            if !is_locked(&owner, name) {
+              preview_state::set_voice_param(voice, name, value);
+            }
+          }
+        }
       }
     }
   }
 
-  if !boops.is_empty() {
+  if !data.boops.is_empty() {
     let mut specs = preview.boop_specs.write().unwrap();
     let mut pins = preview.boop_pins.write().unwrap();
-    for (i, boop) in boops.iter().enumerate() {
+    for (i, boop) in data.boops.iter().enumerate() {
       if i < specs.len() {
         specs[i] = boop.clone();
         if i < pins.len() {
@@ -712,11 +817,10 @@ mod tests {
         duration: 0.15,
       },
     ];
-    let toml = print::format_toml(&voice, "C", &notes);
-    let (_, imported) =
-      parse_import(&toml).expect("round-trip TOML should parse");
-    assert_eq!(imported.len(), notes.len());
-    for (orig, imp) in notes.iter().zip(imported.iter()) {
+    let toml = print::format_toml(&voice, &[], "C", &notes);
+    let data = parse_import(&toml).expect("round-trip TOML should parse");
+    assert_eq!(data.boops.len(), notes.len());
+    for (orig, imp) in notes.iter().zip(data.boops.iter()) {
       assert!(
         (orig.freq - imp.freq).abs() < f64::EPSILON,
         "freq mismatch: {} vs {}",
@@ -745,11 +849,10 @@ mod tests {
         duration: 0.15,
       },
     ];
-    let json = print::format_json(&voice, "C", &notes);
-    let (_, imported) =
-      parse_import(&json).expect("round-trip JSON should parse");
-    assert_eq!(imported.len(), notes.len());
-    for (orig, imp) in notes.iter().zip(imported.iter()) {
+    let json = print::format_json(&voice, &[], "C", &notes);
+    let data = parse_import(&json).expect("round-trip JSON should parse");
+    assert_eq!(data.boops.len(), notes.len());
+    for (orig, imp) in notes.iter().zip(data.boops.iter()) {
       assert!(
         (orig.freq - imp.freq).abs() < f64::EPSILON,
         "freq mismatch: {} vs {}",
