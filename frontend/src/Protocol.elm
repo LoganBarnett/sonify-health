@@ -37,6 +37,7 @@ import Json.Encode as E
 
 type alias VoiceParam =
     { name : String
+    , description : String
     , value : Float
     , min : Float
     , max : Float
@@ -231,10 +232,11 @@ voiceDecoder =
     D.keyValuePairs D.float
 
 
-voiceParamMetaDecoder : D.Decoder { name : String, min : Float, max : Float, step : Float }
+voiceParamMetaDecoder : D.Decoder { name : String, description : String, min : Float, max : Float, step : Float }
 voiceParamMetaDecoder =
-    D.map4 (\n mn mx s -> { name = n, min = mn, max = mx, step = s })
+    D.map5 (\n d mn mx s -> { name = n, description = d, min = mn, max = mx, step = s })
         (D.field "name" D.string)
+        (D.field "description" D.string)
         (D.field "min" D.float)
         (D.field "max" D.float)
         (D.field "step" D.float)
@@ -242,7 +244,7 @@ voiceParamMetaDecoder =
 
 mergeVoiceParams :
     List ( String, Float )
-    -> List { name : String, min : Float, max : Float, step : Float }
+    -> List { name : String, description : String, min : Float, max : Float, step : Float }
     -> List VoiceParam
 mergeVoiceParams values metas =
     let
@@ -262,6 +264,7 @@ mergeVoiceParams values metas =
     List.map
         (\m ->
             { name = m.name
+            , description = m.description
             , value = lookup m.name
             , min = m.min
             , max = m.max

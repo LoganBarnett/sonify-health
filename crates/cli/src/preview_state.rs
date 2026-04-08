@@ -19,6 +19,7 @@ use tokio::sync::broadcast;
 /// Voice parameter metadata matching `#[voice_param]` ranges.
 pub struct VoiceParamMeta {
   pub name: &'static str,
+  pub description: &'static str,
   pub min: f64,
   pub max: f64,
   pub step: f64,
@@ -27,74 +28,92 @@ pub struct VoiceParamMeta {
 pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
   VoiceParamMeta {
     name: "base_freq",
+    description: "Root pitch in Hz. All boop notes derive from this frequency.",
     min: 100.0,
     max: 12000.0,
     step: 1.0,
   },
   VoiceParamMeta {
     name: "sine_ratio",
-    min: 0.5,
+    description: "Relative weight of the sine oscillator. Smooth, pure tone.",
+    min: 0.0,
     max: 1.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "tri_ratio",
+    description:
+      "Relative weight of the triangle oscillator. Hollow, flute-like.",
     min: 0.0,
-    max: 0.3,
+    max: 1.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "saw_ratio",
+    description:
+      "Relative weight of the sawtooth oscillator. Bright, buzzy edge.",
     min: 0.0,
-    max: 0.15,
-    step: 0.001,
+    max: 1.0,
+    step: 0.01,
   },
   VoiceParamMeta {
     name: "attack_ms",
-    min: 20.0,
-    max: 80.0,
+    description:
+      "Fade-in time in milliseconds. Low = snappy click, high = soft swell.",
+    min: 1.0,
+    max: 500.0,
     step: 1.0,
   },
   VoiceParamMeta {
     name: "release_ms",
-    min: 80.0,
-    max: 250.0,
+    description:
+      "Fade-out time in milliseconds. Low = staccato, high = lingering tail.",
+    min: 10.0,
+    max: 1000.0,
     step: 1.0,
   },
   VoiceParamMeta {
     name: "chirp_ratio",
-    min: 1.0,
-    max: 1.5,
+    description:
+      "Pitch bend at note onset. 1.0 = none, <1 = downward, >1 = upward chirp.",
+    min: 0.5,
+    max: 4.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "stereo_pan",
-    min: -0.3,
-    max: 0.3,
+    description: "Left/right stereo position. -1 = full left, +1 = full right.",
+    min: -1.0,
+    max: 1.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "reverb_mix",
-    min: 0.3,
-    max: 0.6,
+    description: "Wet/dry reverb blend. 0 = fully dry, 1 = fully wet.",
+    min: 0.0,
+    max: 1.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "note_seed",
+    description: "Seed for boop note selection within the pentatonic scale.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "echo_delay",
-    min: 0.05,
-    max: 0.25,
+    description:
+      "Delay time in seconds. Short = slapback, long = distinct repeats.",
+    min: 0.01,
+    max: 1.0,
     step: 0.01,
   },
   VoiceParamMeta {
     name: "echo_mix",
+    description: "Echo wet/dry blend. 0 = no echo, 1 = full echo.",
     min: 0.0,
-    max: 0.4,
+    max: 1.0,
     step: 0.01,
   },
 ];
@@ -286,6 +305,7 @@ impl PreviewState {
       .map(|p| {
         json!({
           "name": p.name,
+          "description": p.description,
           "min": p.min,
           "max": p.max,
           "step": p.step,

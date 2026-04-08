@@ -24,37 +24,37 @@ pub struct Voice {
   #[voice_param(order = 0, range = 100.0..12000.0)]
   pub base_freq: f64,
 
-  #[voice_param(order = 1, range = 0.5..1.0)]
+  #[voice_param(order = 1, range = 0.0..1.0)]
   pub sine_ratio: f64,
 
-  #[voice_param(order = 2, range = 0.0..0.3)]
+  #[voice_param(order = 2, range = 0.0..1.0)]
   pub tri_ratio: f64,
 
-  #[voice_param(order = 3, range = 0.0..0.15)]
+  #[voice_param(order = 3, range = 0.0..1.0)]
   pub saw_ratio: f64,
 
-  #[voice_param(order = 4, range = 20.0..80.0)]
+  #[voice_param(order = 4, range = 1.0..500.0)]
   pub attack_ms: f64,
 
-  #[voice_param(order = 5, range = 80.0..250.0)]
+  #[voice_param(order = 5, range = 10.0..1000.0)]
   pub release_ms: f64,
 
-  #[voice_param(order = 6, range = 1.0..1.5)]
+  #[voice_param(order = 6, range = 0.5..4.0)]
   pub chirp_ratio: f64,
 
-  #[voice_param(order = 7, range = -0.3..0.3)]
+  #[voice_param(order = 7, range = -1.0..1.0)]
   pub stereo_pan: f64,
 
-  #[voice_param(order = 8, range = 0.3..0.6)]
+  #[voice_param(order = 8, range = 0.0..1.0)]
   pub reverb_mix: f64,
 
   #[voice_param(order = 9, range = 0.0..1.0)]
   pub note_seed: f64,
 
-  #[voice_param(order = 10, range = 0.05..0.25)]
+  #[voice_param(order = 10, range = 0.01..1.0)]
   pub echo_delay: f64,
 
-  #[voice_param(order = 11, range = 0.0..0.4)]
+  #[voice_param(order = 11, range = 0.0..1.0)]
   pub echo_mix: f64,
 }
 
@@ -308,17 +308,17 @@ mod tests {
     for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
       let v = Voice::from_hostname(name);
       assert!((100.0..12000.0).contains(&v.base_freq));
-      assert!((0.5..1.0).contains(&v.sine_ratio));
-      assert!((0.0..0.3).contains(&v.tri_ratio));
-      assert!((0.0..0.15).contains(&v.saw_ratio));
-      assert!((20.0..80.0).contains(&v.attack_ms));
-      assert!((80.0..250.0).contains(&v.release_ms));
-      assert!((1.0..1.5).contains(&v.chirp_ratio));
-      assert!((-0.3..0.3).contains(&v.stereo_pan));
-      assert!((0.3..0.6).contains(&v.reverb_mix));
+      assert!((0.0..1.0).contains(&v.sine_ratio));
+      assert!((0.0..1.0).contains(&v.tri_ratio));
+      assert!((0.0..1.0).contains(&v.saw_ratio));
+      assert!((1.0..500.0).contains(&v.attack_ms));
+      assert!((10.0..1000.0).contains(&v.release_ms));
+      assert!((0.5..4.0).contains(&v.chirp_ratio));
+      assert!((-1.0..1.0).contains(&v.stereo_pan));
+      assert!((0.0..1.0).contains(&v.reverb_mix));
       assert!((0.0..1.0).contains(&v.note_seed));
-      assert!((0.05..0.25).contains(&v.echo_delay));
-      assert!((0.0..0.4).contains(&v.echo_mix));
+      assert!((0.01..1.0).contains(&v.echo_delay));
+      assert!((0.0..1.0).contains(&v.echo_mix));
     }
   }
 
@@ -409,7 +409,7 @@ mod tests {
     let mut rng = Xoshiro256StarStar::from_seed(seed);
 
     let expected_base_freq: f64 = rng.gen_range(100.0..12000.0);
-    let expected_sine_ratio: f64 = rng.gen_range(0.5..1.0);
+    let expected_sine_ratio: f64 = rng.gen_range(0.0..1.0);
 
     let derived = Voice::from_hostname("silicon");
     assert_eq!(derived.base_freq, expected_base_freq);

@@ -744,7 +744,7 @@ viewVoiceSlider locked param =
                     "U"
                 )
             ]
-        , label [ class "slider-label" ]
+        , label [ class "slider-label", title param.description ]
             [ text (formatParamName param.name) ]
         , input
             [ type_ "range"
