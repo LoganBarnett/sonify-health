@@ -1,7 +1,7 @@
 #+title:     sonify-health Tasks
 #+language:  en
 
-* TODO Sync with rust-template (420397e..c3d6e14+)
+* DONE Sync with rust-template (420397e..c3d6e14+)
 Forward-port changes from rust-template that landed after the last synced
 commit (=5f606c5=).  The following commits need review:
 
@@ -23,6 +23,23 @@ commit (=5f606c5=).  The following commits need review:
 Also include any commits that land after =c3d6e14= before this task is started.
 
 After syncing, update =rust-template.json= with the final synced hash.
+
+* TODO Pre-commit hook formats entire tree instead of staged files only
+The =.cargo-husky/hooks/pre-commit= hook passes staged filenames as
+positional arguments to =treefmt=, but treefmt may ignore positional arguments
+and use its own tree walker.  This means =treefmt $STAGED_FILES= could format
+every file in the repository, not just the staged ones.  Unstaged files get
+reformatted on disk but are not re-staged, leaving dirty working tree
+artifacts that have to be committed separately.
+
+Forward-ported from rust-template (=420397e=).  The current treefmt version
+shows =<paths>...= as a positional argument in =treefmt --help=, so the bug
+may already be resolved.  Verify before implementing a fix.
+
+Fix (if needed): use =treefmt --paths= (or the appropriate flag for limiting
+treefmt to specific files) so only staged files are reformatted.  If treefmt
+does not support per-file invocation, consider an alternative approach such as
+running the language-specific formatters directly on the staged files.
 
 * TODO Filter slope (pole count)
 Discrete choice (2/4 poles).  4-pole = 24 dB/oct, much steeper cutoff.

@@ -78,6 +78,8 @@
       pkgs.elm2nix
       # CSS formatting
       pkgs.prettier
+      # Task runner
+      pkgs.just
     ];
   in {
     devShells = forAllSystems (system: let
