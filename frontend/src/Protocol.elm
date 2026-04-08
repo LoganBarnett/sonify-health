@@ -24,6 +24,7 @@ module Protocol exposing
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
+    , encodeSetMasterVolume
     , encodeSetMuted
     , encodeSetVoiceParam
     , encodeTriggerHeartbeat
@@ -99,6 +100,7 @@ type ServerMsg
     = StateMsg
         { voice : List VoiceParam
         , muted : Bool
+        , masterVolume : Float
         , heartbeatVolume : Float
         , heartbeatLoop : Bool
         , boopCount : Int
@@ -206,12 +208,13 @@ stateDecoderWithMeta :
     List { name : String, description : String, min : Float, max : Float, step : Float }
     -> D.Decoder ServerMsg
 stateDecoderWithMeta metas =
-    D.map7
-        (\voice muted hbVol hbLoop boopCount checks drones ->
+    D.map8
+        (\voice muted masterVol hbVol hbLoop boopCount checks drones ->
             \locked lockedDrones boopSpecs ranges ->
                 StateMsg
                     { voice = voice
                     , muted = muted
+                    , masterVolume = masterVol
                     , heartbeatVolume = hbVol
                     , heartbeatLoop = hbLoop
                     , boopCount = boopCount
@@ -227,6 +230,7 @@ stateDecoderWithMeta metas =
             |> D.map (\vals -> mergeVoiceParams vals metas)
         )
         (D.field "muted" D.bool)
+        (D.field "master_volume" D.float)
         (D.field "heartbeat_volume" D.float)
         (D.field "heartbeat_loop" D.bool)
         (D.field "boop_count" D.int)
@@ -485,6 +489,15 @@ encodeSetMuted muted =
     E.object
         [ ( "type", E.string "set_muted" )
         , ( "muted", E.bool muted )
+        ]
+        |> E.encode 0
+
+
+encodeSetMasterVolume : Float -> String
+encodeSetMasterVolume vol =
+    E.object
+        [ ( "type", E.string "set_master_volume" )
+        , ( "volume", E.float vol )
         ]
         |> E.encode 0
 

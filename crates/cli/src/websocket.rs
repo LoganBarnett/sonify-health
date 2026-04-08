@@ -209,15 +209,33 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       let muted = msg.get("muted").and_then(|v| v.as_bool())?;
       preview.muted.store(muted, Ordering::Relaxed);
       preview.update_all_combined_volumes();
+      preview.update_effective_heartbeat_volume();
       let _ = preview
         .broadcast_tx
         .send(json!({"type": "mute_changed", "muted": muted}).to_string());
       None
     }
 
+    "set_master_volume" => {
+      let vol = msg.get("volume").and_then(|v| v.as_f64())? as f32;
+      preview.master_volume.set_value(vol.clamp(0.0, 1.0));
+      preview.update_all_combined_volumes();
+      preview.update_effective_heartbeat_volume();
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "volume_changed",
+          "layer": "master",
+          "volume": vol,
+        })
+        .to_string(),
+      );
+      None
+    }
+
     "set_heartbeat_volume" => {
       let vol = msg.get("volume").and_then(|v| v.as_f64())? as f32;
       preview.heartbeat_volume.set_value(vol.clamp(0.0, 1.0));
+      preview.update_effective_heartbeat_volume();
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "volume_changed",
@@ -556,6 +574,12 @@ struct ImportVoice {
   brightness: Option<f64>,
   resonance: Option<f64>,
   sub_octave: Option<f64>,
+  note_spread: Option<f64>,
+  vibrato_rate: Option<f64>,
+  vibrato_depth: Option<f64>,
+  tremolo_rate: Option<f64>,
+  tremolo_depth: Option<f64>,
+  amplitude: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -650,6 +674,24 @@ fn voice_fields(v: &ImportVoice) -> Vec<(&'static str, f64)> {
   }
   if let Some(x) = v.sub_octave {
     out.push(("sub_octave", x));
+  }
+  if let Some(x) = v.note_spread {
+    out.push(("note_spread", x));
+  }
+  if let Some(x) = v.vibrato_rate {
+    out.push(("vibrato_rate", x));
+  }
+  if let Some(x) = v.vibrato_depth {
+    out.push(("vibrato_depth", x));
+  }
+  if let Some(x) = v.tremolo_rate {
+    out.push(("tremolo_rate", x));
+  }
+  if let Some(x) = v.tremolo_depth {
+    out.push(("tremolo_depth", x));
+  }
+  if let Some(x) = v.amplitude {
+    out.push(("amplitude", x));
   }
   out
 }

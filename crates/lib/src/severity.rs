@@ -16,7 +16,7 @@ pub struct BoopProfile {
   /// Detuning in cents applied alternately +/- to successive boops.
   /// Creates beating and lost harmonization at higher values.
   pub detune_cents: f64,
-  /// Amplitude scaling (0.08 gentle background to 0.18 noticeable).
+  /// Amplitude scaling (always 1.0 now; voice.amplitude controls level).
   pub amplitude: f64,
   /// Saw-wave bleed-in weight (0.0 pure voice blend to 0.6 buzzy).
   pub harshness: f64,
@@ -29,33 +29,16 @@ pub struct BoopProfile {
 }
 
 impl Severity {
-  /// Severity-driven timbre profile replacing the former pitch-only
-  /// model.  Healthy sounds warm and chipper; degraded adds nasal
-  /// edge and beating; down is harsh, dissonant, and attention-
-  /// grabbing without becoming a klaxon.
+  /// Neutral timbre profile.  Severity no longer drives the sound;
+  /// all shaping is done via per-voice parameters.
   pub fn profile(self) -> BoopProfile {
-    match self {
-      Severity::Healthy => BoopProfile {
-        detune_cents: 0.0,
-        amplitude: 0.08,
-        harshness: 0.0,
-        filter_cutoff: 13.0,
-        filter_q: 0.5,
-      },
-      Severity::Degraded => BoopProfile {
-        detune_cents: 12.0,
-        amplitude: 0.14,
-        harshness: 0.25,
-        filter_cutoff: 9.0,
-        filter_q: 1.2,
-      },
-      Severity::Down => BoopProfile {
-        detune_cents: 25.0,
-        amplitude: 0.18,
-        harshness: 0.6,
-        filter_cutoff: 6.0,
-        filter_q: 2.0,
-      },
+    let _ = self;
+    BoopProfile {
+      detune_cents: 0.0,
+      amplitude: 1.0,
+      harshness: 0.0,
+      filter_cutoff: 13.0,
+      filter_q: 0.5,
     }
   }
 }
@@ -146,47 +129,12 @@ mod tests {
   }
 
   #[test]
-  fn profile_amplitude_rises_with_severity() {
+  fn profiles_are_uniform_across_severities() {
     let h = Severity::Healthy.profile();
     let d = Severity::Degraded.profile();
     let w = Severity::Down.profile();
-    assert!(h.amplitude < d.amplitude);
-    assert!(d.amplitude < w.amplitude);
-  }
-
-  #[test]
-  fn profile_harshness_rises_with_severity() {
-    let h = Severity::Healthy.profile();
-    let d = Severity::Degraded.profile();
-    let w = Severity::Down.profile();
-    assert!(h.harshness < d.harshness);
-    assert!(d.harshness < w.harshness);
-  }
-
-  #[test]
-  fn profile_detune_rises_with_severity() {
-    let h = Severity::Healthy.profile();
-    let d = Severity::Degraded.profile();
-    let w = Severity::Down.profile();
-    assert!(h.detune_cents < d.detune_cents);
-    assert!(d.detune_cents < w.detune_cents);
-  }
-
-  #[test]
-  fn profile_cutoff_drops_with_severity() {
-    let h = Severity::Healthy.profile();
-    let d = Severity::Degraded.profile();
-    let w = Severity::Down.profile();
-    assert!(h.filter_cutoff > d.filter_cutoff);
-    assert!(d.filter_cutoff > w.filter_cutoff);
-  }
-
-  #[test]
-  fn profile_q_rises_with_severity() {
-    let h = Severity::Healthy.profile();
-    let d = Severity::Degraded.profile();
-    let w = Severity::Down.profile();
-    assert!(h.filter_q < d.filter_q);
-    assert!(d.filter_q < w.filter_q);
+    assert_eq!(h.amplitude, d.amplitude);
+    assert_eq!(d.amplitude, w.amplitude);
+    assert_eq!(h.amplitude, 1.0);
   }
 }

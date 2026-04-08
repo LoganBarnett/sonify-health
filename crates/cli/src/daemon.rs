@@ -318,6 +318,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         info!("Audio unmuted via API");
       }
       preview.update_all_combined_volumes();
+      preview.update_effective_heartbeat_volume();
       was_muted = is_muted;
     }
 
@@ -452,7 +453,7 @@ fn play_heartbeat_preview(
     &voice,
     &severities,
     &specs,
-    Some(&preview.heartbeat_volume),
+    Some(&preview.effective_heartbeat_volume),
   );
   let attack_secs = voice.attack_ms / 1000.0;
   let release_secs = voice.release_ms / 1000.0;

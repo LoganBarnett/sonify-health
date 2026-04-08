@@ -35,7 +35,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     name: "sine_ratio",
     description: "Relative weight of the sine oscillator. Smooth, pure tone.",
     min: 0.0,
-    max: 1.0,
+    max: 3.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -43,7 +43,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     description:
       "Relative weight of the triangle oscillator. Hollow, flute-like.",
     min: 0.0,
-    max: 1.0,
+    max: 3.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -51,7 +51,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     description:
       "Relative weight of the sawtooth oscillator. Bright, buzzy edge.",
     min: 0.0,
-    max: 1.0,
+    max: 3.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -119,7 +119,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     description:
       "Lowpass cutoff scaler. 1.0 = full brightness, lower = darker tone.",
     min: 0.05,
-    max: 1.0,
+    max: 2.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -127,7 +127,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     description:
       "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak.",
     min: 0.1,
-    max: 3.0,
+    max: 5.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -136,6 +136,14 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
       "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body.",
     min: 0.0,
     max: 1.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "note_spread",
+    description:
+      "Range in octaves around base frequency for note selection.",
+    min: 0.0,
+    max: 2.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -149,7 +157,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     name: "vibrato_depth",
     description: "Vibrato depth (semitones)",
     min: 0.0,
-    max: 1.0,
+    max: 2.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -162,6 +170,13 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
   VoiceParamMeta {
     name: "tremolo_depth",
     description: "Tremolo depth (fraction)",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "amplitude",
+    description: "Output amplitude. 0 = silent, 1 = full scale.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
@@ -211,7 +226,9 @@ pub struct PreviewState {
   pub drone_volumes: Vec<Shared>,
   /// `mute_factor * per_metric_volume`, wired into audio graphs.
   pub combined_volumes: Vec<Shared>,
+  pub master_volume: Shared,
   pub heartbeat_volume: Shared,
+  pub effective_heartbeat_volume: Shared,
   pub heartbeat_state: Arc<HeartbeatState>,
   pub drone_state: Arc<DroneState>,
   pub heartbeat_overrides: RwLock<Vec<Option<Severity>>>,
@@ -292,7 +309,9 @@ impl PreviewState {
       muted,
       drone_volumes,
       combined_volumes,
+      master_volume: shared(1.0),
       heartbeat_volume: shared(1.0),
+      effective_heartbeat_volume: shared(1.0),
       heartbeat_state: Arc::new(HeartbeatState::new(check_count)),
       drone_state: Arc::new(DroneState::new(drone_count)),
       heartbeat_overrides: RwLock::new(vec![None; check_count]),
@@ -314,26 +333,42 @@ impl PreviewState {
     }
   }
 
-  /// Recompute `combined_volumes[index]` from mute flag and
-  /// per-metric volume.
+  /// Recompute `combined_volumes[index]` from mute flag, master
+  /// volume, and per-metric volume.
   pub fn update_combined_volume(&self, index: usize) {
     let mute_factor = if self.muted.load(Ordering::Relaxed) {
       0.0
     } else {
       1.0
     };
+    let master = self.master_volume.value();
     if let (Some(dv), Some(cv)) =
       (self.drone_volumes.get(index), self.combined_volumes.get(index))
     {
-      cv.set_value(mute_factor * dv.value());
+      cv.set_value(mute_factor * master * dv.value());
     }
   }
 
-  /// Update every combined volume (after mute toggle).
+  /// Update every combined volume (after mute toggle or master
+  /// volume change).
   pub fn update_all_combined_volumes(&self) {
     for i in 0..self.drone_volumes.len() {
       self.update_combined_volume(i);
     }
+  }
+
+  /// Recompute the effective heartbeat volume from mute flag,
+  /// master volume, and heartbeat volume.
+  pub fn update_effective_heartbeat_volume(&self) {
+    let mute_factor = if self.muted.load(Ordering::Relaxed) {
+      0.0
+    } else {
+      1.0
+    };
+    let master = self.master_volume.value();
+    self
+      .effective_heartbeat_volume
+      .set_value(mute_factor * master * self.heartbeat_volume.value());
   }
 
   /// Recompute materialized boop specs from the current voice,
@@ -471,6 +506,7 @@ impl PreviewState {
       "locked_params": heartbeat_locked,
       "voice_params": voice_params_json,
       "muted": self.muted.load(Ordering::Relaxed),
+      "master_volume": self.master_volume.value(),
       "heartbeat_volume": self.heartbeat_volume.value(),
       "heartbeat_loop": self.heartbeat_loop.load(Ordering::Relaxed),
       "boop_count": self.boop_count.load(Ordering::Relaxed),
@@ -620,8 +656,10 @@ impl PreviewState {
         self.drone_volumes[*i].set_value(*vol);
       }
     }
+    self.master_volume.set_value(1.0);
     self.heartbeat_volume.set_value(1.0);
     self.update_all_combined_volumes();
+    self.update_effective_heartbeat_volume();
 
     {
       let mut hb = self.heartbeat_overrides.write().unwrap();
@@ -669,6 +707,8 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "vibrato_depth" => Some(voice.vibrato_depth),
     "tremolo_rate" => Some(voice.tremolo_rate),
     "tremolo_depth" => Some(voice.tremolo_depth),
+    "amplitude" => Some(voice.amplitude),
+    "note_spread" => Some(voice.note_spread),
     _ => None,
   }
 }
@@ -694,6 +734,8 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "vibrato_depth" => voice.vibrato_depth = value,
     "tremolo_rate" => voice.tremolo_rate = value,
     "tremolo_depth" => voice.tremolo_depth = value,
+    "amplitude" => voice.amplitude = value,
+    "note_spread" => voice.note_spread = value,
     _ => return false,
   }
   true
@@ -720,6 +762,8 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "vibrato_depth": voice.vibrato_depth,
     "tremolo_rate": voice.tremolo_rate,
     "tremolo_depth": voice.tremolo_depth,
+    "amplitude": voice.amplitude,
+    "note_spread": voice.note_spread,
   })
 }
 
@@ -756,6 +800,7 @@ mod tests {
     locked_params: Vec<String>,
     voice_params: Vec<VoiceParamContract>,
     muted: bool,
+    master_volume: f64,
     heartbeat_volume: f64,
     heartbeat_loop: bool,
     boop_count: u64,

@@ -35,6 +35,7 @@ fn voice_toml_lines(lines: &mut Vec<String>, header: &str, voice: &Voice) {
   lines.push(format!("vibrato_depth = {}", float_lit(voice.vibrato_depth)));
   lines.push(format!("tremolo_rate = {}", float_lit(voice.tremolo_rate)));
   lines.push(format!("tremolo_depth = {}", float_lit(voice.tremolo_depth)));
+  lines.push(format!("amplitude = {}", float_lit(voice.amplitude)));
 }
 
 /// Format all voices as a TOML document suitable for pasting into
@@ -84,6 +85,7 @@ fn voice_nix_lines(lines: &mut Vec<String>, prefix: &str, voice: &Voice) {
   lines.push(format!("  vibrato_depth = {};", float_lit(voice.vibrato_depth)));
   lines.push(format!("  tremolo_rate = {};", float_lit(voice.tremolo_rate)));
   lines.push(format!("  tremolo_depth = {};", float_lit(voice.tremolo_depth)));
+  lines.push(format!("  amplitude = {};", float_lit(voice.amplitude)));
   lines.push("};".to_string());
 }
 
@@ -135,6 +137,7 @@ fn voice_to_json_value(voice: &Voice) -> serde_json::Value {
     "vibrato_depth": voice.vibrato_depth,
     "tremolo_rate": voice.tremolo_rate,
     "tremolo_depth": voice.tremolo_depth,
+    "amplitude": voice.amplitude,
   })
 }
 
@@ -191,6 +194,7 @@ pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
     format!("--vibrato-depth {}", voice.vibrato_depth),
     format!("--tremolo-rate {}", voice.tremolo_rate),
     format!("--tremolo-depth {}", voice.tremolo_depth),
+    format!("--amplitude {}", voice.amplitude),
   ]
   .join(" ")
 }

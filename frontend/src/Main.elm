@@ -57,6 +57,7 @@ type alias Model =
     , connected : Bool
     , voice : List VoiceParam
     , muted : Bool
+    , masterVolume : Float
     , heartbeatVolume : Float
     , heartbeatLoop : Bool
     , boopCount : Int
@@ -84,6 +85,8 @@ type Msg
     | SetVoiceParam String (Maybe Int) String String
     | VoiceDebounce String (Maybe Int) String Int Float
     | ToggleMute
+    | SetMasterVolume String
+    | MasterVolDebounce Int Float
     | SetHeartbeatVolume String
     | HeartbeatVolDebounce Int Float
     | SetBoopCount String
@@ -139,6 +142,7 @@ init _ url key =
       , connected = False
       , voice = []
       , muted = False
+      , masterVolume = 1.0
       , heartbeatVolume = 1.0
       , heartbeatLoop = False
       , boopCount = 1
@@ -304,6 +308,33 @@ update msg model =
             ( { model | muted = newMuted }
             , Ports.websocketSend (encodeSetMuted newMuted)
             )
+
+        SetMasterVolume valStr ->
+            case String.toFloat valStr of
+                Just vol ->
+                    let
+                        id =
+                            model.nextDebounce
+                    in
+                    ( { model
+                        | masterVolume = vol
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform (\_ -> MasterVolDebounce id vol)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        MasterVolDebounce id vol ->
+            if id == model.nextDebounce - 1 || True then
+                ( model
+                , Ports.websocketSend (encodeSetMasterVolume vol)
+                )
+
+            else
+                ( model, Cmd.none )
 
         SetHeartbeatVolume valStr ->
             case String.toFloat valStr of
@@ -676,6 +707,7 @@ handleServerMsg raw model =
             ( { model
                 | voice = s.voice
                 , muted = s.muted
+                , masterVolume = s.masterVolume
                 , heartbeatVolume = s.heartbeatVolume
                 , heartbeatLoop = s.heartbeatLoop
                 , boopCount = s.boopCount
@@ -726,6 +758,9 @@ handleServerMsg raw model =
 
         Just (VolumeChanged layer maybeIndex vol) ->
             case layer of
+                "master" ->
+                    ( { model | masterVolume = vol }, Cmd.none )
+
                 "heartbeat" ->
                     ( { model | heartbeatVolume = vol }, Cmd.none )
 
@@ -986,6 +1021,27 @@ viewToolbar model =
                         "Mute"
                     )
                 ]
+            , label [ class "slider-label" ] [ text "Master" ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max "1"
+                , step "0.01"
+                , value (String.fromFloat model.masterVolume)
+                , onInput SetMasterVolume
+                , class "slider"
+                ]
+                []
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max "1"
+                , step "0.01"
+                , value (String.fromFloat model.masterVolume)
+                , onInput SetMasterVolume
+                , class "slider-value-input"
+                ]
+                []
             , button [ class "btn-action", onClick RevertAll ]
                 [ text "Revert" ]
             , button [ class "btn-action", onClick UnlockAll ]
@@ -1033,8 +1089,16 @@ viewVoiceSlider layer maybeIndex locked param =
             , class "slider"
             ]
             []
-        , span [ class "slider-value" ]
-            [ text (formatFloat param.value) ]
+        , input
+            [ type_ "number"
+            , Html.Attributes.min (String.fromFloat param.min)
+            , Html.Attributes.max (String.fromFloat param.max)
+            , step (String.fromFloat param.step)
+            , value (String.fromFloat param.value)
+            , onInput (SetVoiceParam layer maybeIndex param.name)
+            , class "slider-value-input"
+            ]
+            []
         ]
 
 
@@ -1054,8 +1118,16 @@ viewHeartbeatPanel model =
                 , class "slider"
                 ]
                 []
-            , span [ class "slider-value" ]
-                [ text (formatFloat model.heartbeatVolume) ]
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max "1"
+                , step "0.01"
+                , value (String.fromFloat model.heartbeatVolume)
+                , onInput SetHeartbeatVolume
+                , class "slider-value-input"
+                ]
+                []
             ]
         , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Boops" ]
@@ -1154,8 +1226,16 @@ viewBoopRow boopCount checks ranges index spec =
             , class "slider"
             ]
             []
-        , span [ class "slider-value" ]
-            [ text (formatFloat spec.freq) ]
+        , input
+            [ type_ "number"
+            , Html.Attributes.min (String.fromFloat ranges.freqMin)
+            , Html.Attributes.max (String.fromFloat ranges.freqMax)
+            , step (String.fromFloat ranges.freqStep)
+            , value (String.fromFloat spec.freq)
+            , onInput (SetBoopFreq index)
+            , class "slider-value-input"
+            ]
+            []
         , label [ class "slider-label" ] [ text "Dur" ]
         , input
             [ type_ "range"
@@ -1167,8 +1247,16 @@ viewBoopRow boopCount checks ranges index spec =
             , class "slider"
             ]
             []
-        , span [ class "slider-value" ]
-            [ text (formatFloat spec.duration) ]
+        , input
+            [ type_ "number"
+            , Html.Attributes.min (String.fromFloat ranges.durationMin)
+            , Html.Attributes.max (String.fromFloat ranges.durationMax)
+            , step (String.fromFloat ranges.durationStep)
+            , value (String.fromFloat spec.duration)
+            , onInput (SetBoopDuration index)
+            , class "slider-value-input"
+            ]
+            []
         , if spec.pinned then
             button
                 [ class "btn-live"
@@ -1289,8 +1377,16 @@ viewDrone lockedDrones index drone =
                 , class "slider"
                 ]
                 []
-            , span [ class "slider-value" ]
-                [ text (formatFloat drone.volume) ]
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max "1"
+                , step "0.01"
+                , value (String.fromFloat drone.volume)
+                , onInput (SetDroneVolume index)
+                , class "slider-value-input"
+                ]
+                []
             ]
         , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Value" ]

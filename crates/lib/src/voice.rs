@@ -79,6 +79,9 @@ pub struct Voice {
 
   #[voice_param(order = 19, range = 0.0..1.0)]
   pub tremolo_depth: f64,
+
+  #[voice_param(order = 20, range = 0.1..0.5)]
+  pub amplitude: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -164,6 +167,9 @@ impl Voice {
     }
     if let Some(v) = o.tremolo_depth {
       self.tremolo_depth = v;
+    }
+    if let Some(v) = o.amplitude {
+      self.amplitude = v;
     }
     self
   }
@@ -368,6 +374,7 @@ pub struct VoiceOverrides {
   pub vibrato_depth: Option<f64>,
   pub tremolo_rate: Option<f64>,
   pub tremolo_depth: Option<f64>,
+  pub amplitude: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -390,7 +397,8 @@ impl fmt::Display for Voice {
     writeln!(f, "vibrato_rate: {:.3} Hz", self.vibrato_rate)?;
     writeln!(f, "vibrato_depth:{:.3} st", self.vibrato_depth)?;
     writeln!(f, "tremolo_rate: {:.3} Hz", self.tremolo_rate)?;
-    write!(f, "tremolo_depth:{:.3}", self.tremolo_depth)
+    writeln!(f, "tremolo_depth:{:.3}", self.tremolo_depth)?;
+    write!(f, "amplitude:    {:.3}", self.amplitude)
   }
 }
 
@@ -444,6 +452,7 @@ mod tests {
       assert!((0.0..1.0).contains(&v.vibrato_depth));
       assert!((0.0..20.0).contains(&v.tremolo_rate));
       assert!((0.0..1.0).contains(&v.tremolo_depth));
+      assert!((0.1..0.5).contains(&v.amplitude));
     }
   }
 

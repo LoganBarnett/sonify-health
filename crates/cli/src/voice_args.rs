@@ -93,6 +93,10 @@ pub(crate) struct CliVoiceOverrides {
   /// Override tremolo depth (0.0–1.0 fraction).
   #[arg(long, help_heading = "Voice overrides")]
   tremolo_depth: Option<f64>,
+
+  /// Override amplitude (0.0–1.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  amplitude: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -127,6 +131,7 @@ impl CliVoiceOverrides {
       vibrato_depth: self.vibrato_depth,
       tremolo_rate: self.tremolo_rate,
       tremolo_depth: self.tremolo_depth,
+      amplitude: self.amplitude,
     }
   }
 

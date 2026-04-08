@@ -112,6 +112,7 @@ pub fn heartbeat_graph_with_volume(
   let brightness = voice.brightness as f32;
   let resonance = voice.resonance as f32;
   let sub_mix = voice.sub_octave as f32;
+  let voice_amplitude = voice.amplitude as f32;
   let vibrato_rate = voice.vibrato_rate;
   let vibrato_depth = voice.vibrato_depth;
   let tremolo_rate = voice.tremolo_rate;
@@ -142,7 +143,7 @@ pub fn heartbeat_graph_with_volume(
     let freq = (specs[i].freq
       * cents_to_ratio(profile.detune_cents * detune_sign))
       as f32;
-    let amp = profile.amplitude as f32;
+    let amp = voice_amplitude * profile.amplitude as f32;
     let dur = specs[i].duration as f32;
     let attack = voice.attack_ms as f32 / 1000.0;
     let release = voice.release_ms as f32 / 1000.0;
@@ -321,7 +322,7 @@ pub fn boop_graph(
 ) -> Box<dyn AudioUnit> {
   let profile = severity.profile();
   let freq = (voice.base_freq * cents_to_ratio(profile.detune_cents)) as f32;
-  let amp = profile.amplitude as f32;
+  let amp = voice.amplitude as f32 * profile.amplitude as f32;
   let harshness = profile.harshness as f32;
   let attack = (voice.attack_ms / 1000.0) as f32;
   let release = (voice.release_ms / 1000.0).min(duration_secs * 0.5) as f32;
@@ -396,7 +397,7 @@ mod tests {
   }
 
   #[test]
-  fn severity_down_louder_than_healthy() {
+  fn severity_profiles_produce_equal_amplitude() {
     let voice = Voice::from_hostname("test");
 
     let mut healthy = boop_graph(&voice, Severity::Healthy, 0.5);
@@ -416,8 +417,9 @@ mod tests {
       .fold(0.0f32, f32::max);
 
     assert!(
-      down_peak > healthy_peak,
-      "Down peak ({}) should exceed healthy peak ({})",
+      (down_peak - healthy_peak).abs() < 0.01,
+      "Flattened profiles should produce similar amplitude: \
+       down={}, healthy={}",
       down_peak,
       healthy_peak
     );
