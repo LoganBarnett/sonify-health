@@ -37,6 +37,12 @@ fn voice_toml_lines(lines: &mut Vec<String>, header: &str, voice: &Voice) {
   lines.push(format!("tremolo_rate = {}", float_lit(voice.tremolo_rate)));
   lines.push(format!("tremolo_depth = {}", float_lit(voice.tremolo_depth)));
   lines.push(format!("amplitude = {}", float_lit(voice.amplitude)));
+  lines.push(format!("drive = {}", float_lit(voice.drive)));
+  lines.push(format!("noise_mix = {}", float_lit(voice.noise_mix)));
+  lines.push(format!("crush = {}", float_lit(voice.crush)));
+  lines.push(format!("fm_ratio = {}", float_lit(voice.fm_ratio)));
+  lines.push(format!("fm_depth = {}", float_lit(voice.fm_depth)));
+  lines.push(format!("downsample = {}", float_lit(voice.downsample)));
 }
 
 /// Format all voices as a TOML document suitable for pasting into
@@ -88,6 +94,12 @@ fn voice_nix_lines(lines: &mut Vec<String>, prefix: &str, voice: &Voice) {
   lines.push(format!("  tremolo_rate = {};", float_lit(voice.tremolo_rate)));
   lines.push(format!("  tremolo_depth = {};", float_lit(voice.tremolo_depth)));
   lines.push(format!("  amplitude = {};", float_lit(voice.amplitude)));
+  lines.push(format!("  drive = {};", float_lit(voice.drive)));
+  lines.push(format!("  noise_mix = {};", float_lit(voice.noise_mix)));
+  lines.push(format!("  crush = {};", float_lit(voice.crush)));
+  lines.push(format!("  fm_ratio = {};", float_lit(voice.fm_ratio)));
+  lines.push(format!("  fm_depth = {};", float_lit(voice.fm_depth)));
+  lines.push(format!("  downsample = {};", float_lit(voice.downsample)));
   lines.push("};".to_string());
 }
 
@@ -141,6 +153,12 @@ fn voice_to_json_value(voice: &Voice) -> serde_json::Value {
     "tremolo_rate": voice.tremolo_rate,
     "tremolo_depth": voice.tremolo_depth,
     "amplitude": voice.amplitude,
+    "drive": voice.drive,
+    "noise_mix": voice.noise_mix,
+    "crush": voice.crush,
+    "fm_ratio": voice.fm_ratio,
+    "fm_depth": voice.fm_depth,
+    "downsample": voice.downsample,
   })
 }
 
@@ -199,6 +217,12 @@ pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
     format!("--tremolo-rate {}", voice.tremolo_rate),
     format!("--tremolo-depth {}", voice.tremolo_depth),
     format!("--amplitude {}", voice.amplitude),
+    format!("--drive {}", voice.drive),
+    format!("--noise-mix {}", voice.noise_mix),
+    format!("--crush {}", voice.crush),
+    format!("--fm-ratio {}", voice.fm_ratio),
+    format!("--fm-depth {}", voice.fm_depth),
+    format!("--downsample {}", voice.downsample),
   ]
   .join(" ")
 }

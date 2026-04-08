@@ -46,19 +46,27 @@ running the language-specific formatters directly on the staged files.
   structs mirroring the Elm frontend decoders.  Demonstrate it catches
   the texture→base_freq/boops drift that broke the UI.
 
-* TODO Filter slope (pole count)
-Discrete choice (2/4 poles).  4-pole = 24 dB/oct, much steeper cutoff.
-Chain two =lowpass()= nodes with same cutoff/Q.  Could be a voice param with
-discrete steps or a boolean "steep filter".
+* DONE Filter slope (pole count)
+Replaced =lowpass()= with =moog()= 4-pole ladder filter.  Q scaled by 0.2
+to map =resonance= range into moog's 0..1 parameter space.
 
-* TODO Square/pulse oscillator
-Add square wave option for hollow, odd-harmonic tone (warp core character).
-Either a fourth oscillator weight (=square_ratio=) or replace saw with a
-pulse-width param.
+* DONE Square/pulse oscillator
+Added =square_ratio= voice parameter (commit =c04cd4e=).
 
-* TODO Vibrato depth + rate
-LFO pitch modulation after chirp onset.  Two params: =vibrato_depth= (cents)
-and =vibrato_rate= (Hz).  Adds "living machine" movement to long sustains.
+* DONE Vibrato depth + rate
+Added =vibrato_rate= and =vibrato_depth= voice parameters (commit =59c4e3d=).
+Extended ranges: rate up to 200 Hz, depth up to 12 semitones for FM-like effects.
+
+* DONE Drive, noise, crush, FM synthesis, downsample
+Added six new voice parameters for gritty/textured sound:
+- =drive= — pre-filter tanh saturation with normalized gain.
+- =noise_mix= — pink noise blended before filter.
+- =crush= — post-filter bitcrushing (exponential level mapping).
+- =fm_ratio= — FM modulator frequency ratio.
+- =fm_depth= — FM modulation index.
+- =downsample= — sample rate reduction via hold_hz.
+Also: rich sub-oscillator (weighted waveform mix instead of pure sine),
+moog ladder filter replacing lowpass.
 
 * TODO Voice-level detune
 User-facing detune offset (cents) applied to all boops, independent of

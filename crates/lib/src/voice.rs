@@ -85,6 +85,24 @@ pub struct Voice {
 
   #[voice_param(order = 21, range = 0.0..1.0)]
   pub square_ratio: f64,
+
+  #[voice_param(order = 22, range = 0.5..2.0)]
+  pub drive: f64,
+
+  #[voice_param(order = 23, range = 0.0..0.03)]
+  pub noise_mix: f64,
+
+  #[voice_param(order = 24, range = 0.0..0.01)]
+  pub crush: f64,
+
+  #[voice_param(order = 25, range = 0.0..0.1)]
+  pub fm_ratio: f64,
+
+  #[voice_param(order = 26, range = 0.0..0.1)]
+  pub fm_depth: f64,
+
+  #[voice_param(order = 27, range = 0.0..0.01)]
+  pub downsample: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -176,6 +194,24 @@ impl Voice {
     }
     if let Some(v) = o.square_ratio {
       self.square_ratio = v;
+    }
+    if let Some(v) = o.drive {
+      self.drive = v;
+    }
+    if let Some(v) = o.noise_mix {
+      self.noise_mix = v;
+    }
+    if let Some(v) = o.crush {
+      self.crush = v;
+    }
+    if let Some(v) = o.fm_ratio {
+      self.fm_ratio = v;
+    }
+    if let Some(v) = o.fm_depth {
+      self.fm_depth = v;
+    }
+    if let Some(v) = o.downsample {
+      self.downsample = v;
     }
     self
   }
@@ -382,6 +418,12 @@ pub struct VoiceOverrides {
   pub tremolo_depth: Option<f64>,
   pub amplitude: Option<f64>,
   pub square_ratio: Option<f64>,
+  pub drive: Option<f64>,
+  pub noise_mix: Option<f64>,
+  pub crush: Option<f64>,
+  pub fm_ratio: Option<f64>,
+  pub fm_depth: Option<f64>,
+  pub downsample: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -406,7 +448,13 @@ impl fmt::Display for Voice {
     writeln!(f, "tremolo_rate: {:.3} Hz", self.tremolo_rate)?;
     writeln!(f, "tremolo_depth:{:.3}", self.tremolo_depth)?;
     writeln!(f, "amplitude:    {:.3}", self.amplitude)?;
-    write!(f, "square_ratio: {:.3}", self.square_ratio)
+    writeln!(f, "square_ratio: {:.3}", self.square_ratio)?;
+    writeln!(f, "drive:        {:.3}", self.drive)?;
+    writeln!(f, "noise_mix:    {:.3}", self.noise_mix)?;
+    writeln!(f, "crush:        {:.3}", self.crush)?;
+    writeln!(f, "fm_ratio:     {:.3}", self.fm_ratio)?;
+    writeln!(f, "fm_depth:     {:.3}", self.fm_depth)?;
+    write!(f, "downsample:   {:.3}", self.downsample)
   }
 }
 
@@ -462,6 +510,12 @@ mod tests {
       assert!((0.0..1.0).contains(&v.tremolo_depth));
       assert!((0.1..0.5).contains(&v.amplitude));
       assert!((0.0..1.0).contains(&v.square_ratio));
+      assert!((0.5..2.0).contains(&v.drive));
+      assert!((0.0..0.03).contains(&v.noise_mix));
+      assert!((0.0..0.01).contains(&v.crush));
+      assert!((0.0..0.1).contains(&v.fm_ratio));
+      assert!((0.0..0.1).contains(&v.fm_depth));
+      assert!((0.0..0.01).contains(&v.downsample));
     }
   }
 

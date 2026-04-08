@@ -113,10 +113,19 @@ pub fn heartbeat_graph_with_volume(
   let resonance = voice.resonance as f32;
   let sub_mix = voice.sub_octave as f32;
   let voice_amplitude = voice.amplitude as f32;
+  let drive = (voice.drive as f32).max(0.01);
+  let drive_norm = 1.0 / drive.tanh();
+  let noise_mix = voice.noise_mix as f32;
+  let crush_param = voice.crush as f32;
+  let crush_levels = 2.0_f32.powf(1.0 + 15.0 * (1.0 - crush_param));
+  let downsample = voice.downsample as f32;
+  let ds_rate = 100_000.0_f32 / 2.0_f32.powf(downsample * 8.0);
   let vibrato_rate = voice.vibrato_rate;
   let vibrato_depth = voice.vibrato_depth;
   let tremolo_rate = voice.tremolo_rate;
   let tremolo_depth = voice.tremolo_depth;
+  let fm_ratio = voice.fm_ratio as f32;
+  let fm_depth = voice.fm_depth as f32;
 
   let total_ratio =
     voice.sine_ratio + voice.tri_ratio + voice.saw_ratio + voice.square_ratio;
@@ -188,7 +197,10 @@ pub fn heartbeat_graph_with_volume(
             * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
             / 12.0,
         ) as f32;
-        return base * vib;
+        let fm_freq = base * fm_ratio;
+        let fm_mod =
+          fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+        return (base * vib + fm_mod).max(0.01);
       }
     }
     0.01
@@ -274,12 +286,19 @@ pub fn heartbeat_graph_with_volume(
             * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
             / 12.0,
         ) as f32;
-        return base * vib;
+        let fm_freq = base * fm_ratio;
+        let fm_mod =
+          fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+        return (base * vib + fm_mod).max(0.01);
       }
     }
     0.01
   });
-  let sub_osc = sub_freq_env >> sine();
+  let sub_waveform = (sine() * sine_w)
+    & (triangle() * tri_w)
+    & (saw() * saw_w)
+    & (square() * square_w);
+  let sub_osc = sub_freq_env >> sub_waveform;
 
   // Lowpass Q: higher resonance at worse severity creates a
   // honky, nasal peak — shrill without just being high-pitched.
@@ -306,8 +325,14 @@ pub fn heartbeat_graph_with_volume(
     & (triangle() * tri_w)
     & (saw() * saw_w_env)
     & (square() * square_w);
-  let signal = (freq_env >> waveform) + (sub_osc * sub_mix);
-  let mono = (signal | cutoff_env | q_env) >> (lowpass() * amp_env * ext_vol);
+  let signal = ((freq_env >> waveform) + (sub_osc * sub_mix))
+    >> (shape(Tanh(drive)) * drive_norm)
+    >> (pass() + (pink() * noise_mix));
+  let moog_q = q_env * 0.2;
+  let mono = (signal | cutoff_env | moog_q)
+    >> (moog() * amp_env * ext_vol)
+    >> shape(Crush(crush_levels))
+    >> hold_hz(ds_rate, 0.0);
   let with_echo =
     mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
   let stereo = with_echo
@@ -345,18 +370,48 @@ pub fn boop_graph(
   let saw_w = voice.saw_ratio as f32 * norm + harshness;
   let square_w = voice.square_ratio as f32 * norm;
 
-  let sub = sine_hz(freq * 0.5) * voice.sub_octave as f32;
-  let waveform = sine_hz(freq) * sine_w
-    + triangle_hz(freq) * tri_w
-    + saw_hz(freq) * saw_w
-    + square_hz(freq) * square_w
-    + sub;
+  let drive = (voice.drive as f32).max(0.01);
+  let drive_norm = 1.0 / drive.tanh();
+  let noise_mix = voice.noise_mix as f32;
+  let crush_param = voice.crush as f32;
+  let crush_levels = 2.0_f32.powf(1.0 + 15.0 * (1.0 - crush_param));
+  let fm_ratio = voice.fm_ratio as f32;
+  let fm_depth = voice.fm_depth as f32;
+  let downsample = voice.downsample as f32;
+  let ds_rate = 100_000.0_f32 / 2.0_f32.powf(downsample * 8.0);
+
+  let fm_freq = freq * fm_ratio;
+  let freq_source = lfo(move |t: f32| {
+    let fm_mod =
+      fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+    (freq + fm_mod).max(0.01)
+  });
+  let waveform = (sine() * sine_w)
+    & (triangle() * tri_w)
+    & (saw() * saw_w)
+    & (square() * square_w);
+  let main_osc = freq_source >> waveform;
+
+  let sub_half = freq * 0.5;
+  let sub_fm_freq = sub_half * fm_ratio;
+  let sub_freq_source = lfo(move |t: f32| {
+    let fm_mod =
+      fm_depth * sub_fm_freq * (std::f32::consts::TAU * sub_fm_freq * t).sin();
+    (sub_half + fm_mod).max(0.01)
+  });
+  let sub_waveform = (sine() * sine_w)
+    & (triangle() * tri_w)
+    & (saw() * saw_w)
+    & (square() * square_w);
+  let sub_osc = (sub_freq_source >> sub_waveform) * voice.sub_octave as f32;
+  let combined = main_osc + sub_osc;
 
   let cutoff = dc(
     (freq * profile.filter_cutoff as f32 * voice.brightness as f32)
       .min(MAX_CUTOFF),
   );
-  let q_val = dc(profile.filter_q as f32 * voice.resonance as f32);
+  let q_val =
+    dc((profile.filter_q as f32 * voice.resonance as f32 * 0.2).min(0.95));
 
   let env = envelope(move |t: f32| {
     let fade_in = if attack > 0.0 {
@@ -376,7 +431,13 @@ pub fn boop_graph(
   let echo_delay = voice.echo_delay as f32;
   let echo_mix = voice.echo_mix as f32;
 
-  let mono = (waveform | cutoff | q_val) >> (lowpass() * env);
+  let driven = combined
+    >> (shape(Tanh(drive)) * drive_norm)
+    >> (pass() + (pink() * noise_mix));
+  let mono = (driven | cutoff | q_val)
+    >> (moog() * env)
+    >> shape(Crush(crush_levels))
+    >> hold_hz(ds_rate, 0.0);
   Box::new(mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix)))
 }
 

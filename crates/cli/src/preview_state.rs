@@ -148,16 +148,16 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
   },
   VoiceParamMeta {
     name: "vibrato_rate",
-    description: "Vibrato speed (Hz)",
+    description: "Vibrato speed (Hz). Above ~30 Hz becomes FM synthesis.",
     min: 0.0,
-    max: 20.0,
+    max: 200.0,
     step: 0.1,
   },
   VoiceParamMeta {
     name: "vibrato_depth",
-    description: "Vibrato depth (semitones)",
+    description: "Vibrato depth (semitones). Large values produce FM sidebands.",
     min: 0.0,
-    max: 2.0,
+    max: 12.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -187,6 +187,53 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
       "Relative weight of the square oscillator. Hollow, reedy tone.",
     min: 0.0,
     max: 3.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "drive",
+    description:
+      "Pre-filter saturation. Low = clean, high = heavy distortion.",
+    min: 0.01,
+    max: 20.0,
+    step: 0.1,
+  },
+  VoiceParamMeta {
+    name: "noise_mix",
+    description:
+      "Pink noise mixed before the filter for texture and breath.",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "crush",
+    description: "Bitcrush intensity. 0 = clean, higher = grungier.",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "fm_ratio",
+    description:
+      "FM modulator frequency as a ratio of the carrier. 1.0 = unison, 2.0 = octave.",
+    min: 0.0,
+    max: 8.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "fm_depth",
+    description:
+      "FM modulation index. 0 = clean, higher = richer metallic warble.",
+    min: 0.0,
+    max: 10.0,
+    step: 0.1,
+  },
+  VoiceParamMeta {
+    name: "downsample",
+    description:
+      "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier.",
+    min: 0.0,
+    max: 1.0,
     step: 0.01,
   },
 ];
@@ -768,6 +815,12 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "amplitude" => Some(voice.amplitude),
     "square_ratio" => Some(voice.square_ratio),
     "note_spread" => Some(voice.note_spread),
+    "drive" => Some(voice.drive),
+    "noise_mix" => Some(voice.noise_mix),
+    "crush" => Some(voice.crush),
+    "fm_ratio" => Some(voice.fm_ratio),
+    "fm_depth" => Some(voice.fm_depth),
+    "downsample" => Some(voice.downsample),
     _ => None,
   }
 }
@@ -796,6 +849,12 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "amplitude" => voice.amplitude = value,
     "square_ratio" => voice.square_ratio = value,
     "note_spread" => voice.note_spread = value,
+    "drive" => voice.drive = value,
+    "noise_mix" => voice.noise_mix = value,
+    "crush" => voice.crush = value,
+    "fm_ratio" => voice.fm_ratio = value,
+    "fm_depth" => voice.fm_depth = value,
+    "downsample" => voice.downsample = value,
     _ => return false,
   }
   true
@@ -825,6 +884,12 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "amplitude": voice.amplitude,
     "square_ratio": voice.square_ratio,
     "note_spread": voice.note_spread,
+    "drive": voice.drive,
+    "noise_mix": voice.noise_mix,
+    "crush": voice.crush,
+    "fm_ratio": voice.fm_ratio,
+    "fm_depth": voice.fm_depth,
+    "downsample": voice.downsample,
   })
 }
 

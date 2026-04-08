@@ -629,6 +629,12 @@ struct ImportVoice {
   tremolo_depth: Option<f64>,
   amplitude: Option<f64>,
   square_ratio: Option<f64>,
+  drive: Option<f64>,
+  noise_mix: Option<f64>,
+  crush: Option<f64>,
+  fm_ratio: Option<f64>,
+  fm_depth: Option<f64>,
+  downsample: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -744,6 +750,24 @@ fn voice_fields(v: &ImportVoice) -> Vec<(&'static str, f64)> {
   }
   if let Some(x) = v.square_ratio {
     out.push(("square_ratio", x));
+  }
+  if let Some(x) = v.drive {
+    out.push(("drive", x));
+  }
+  if let Some(x) = v.noise_mix {
+    out.push(("noise_mix", x));
+  }
+  if let Some(x) = v.crush {
+    out.push(("crush", x));
+  }
+  if let Some(x) = v.fm_ratio {
+    out.push(("fm_ratio", x));
+  }
+  if let Some(x) = v.fm_depth {
+    out.push(("fm_depth", x));
+  }
+  if let Some(x) = v.downsample {
+    out.push(("downsample", x));
   }
   out
 }

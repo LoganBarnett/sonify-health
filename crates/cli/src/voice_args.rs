@@ -101,6 +101,30 @@ pub(crate) struct CliVoiceOverrides {
   /// Override square oscillator ratio.
   #[arg(long, help_heading = "Voice overrides")]
   square_ratio: Option<f64>,
+
+  /// Override drive (pre-filter saturation, 0.01–20.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  drive: Option<f64>,
+
+  /// Override noise mix (pink noise blend, 0.0–1.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  noise_mix: Option<f64>,
+
+  /// Override crush (bitcrush intensity, 0.0–1.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  crush: Option<f64>,
+
+  /// Override FM modulator ratio (0.0–8.0, ratio of carrier freq).
+  #[arg(long, help_heading = "Voice overrides")]
+  fm_ratio: Option<f64>,
+
+  /// Override FM modulation depth (0.0–10.0, modulation index).
+  #[arg(long, help_heading = "Voice overrides")]
+  fm_depth: Option<f64>,
+
+  /// Override downsample (lo-fi sample rate reduction, 0.0–1.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  downsample: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -137,6 +161,12 @@ impl CliVoiceOverrides {
       tremolo_depth: self.tremolo_depth,
       amplitude: self.amplitude,
       square_ratio: self.square_ratio,
+      drive: self.drive,
+      noise_mix: self.noise_mix,
+      crush: self.crush,
+      fm_ratio: self.fm_ratio,
+      fm_depth: self.fm_depth,
+      downsample: self.downsample,
     }
   }
 
