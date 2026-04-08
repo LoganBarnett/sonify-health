@@ -77,6 +77,22 @@ pub(crate) struct CliVoiceOverrides {
   /// Override note spread (0.0–1.0, octaves around base frequency).
   #[arg(long, help_heading = "Voice overrides")]
   note_spread: Option<f64>,
+
+  /// Override vibrato rate (0.0–20.0 Hz).
+  #[arg(long, help_heading = "Voice overrides")]
+  vibrato_rate: Option<f64>,
+
+  /// Override vibrato depth (0.0–1.0 semitones).
+  #[arg(long, help_heading = "Voice overrides")]
+  vibrato_depth: Option<f64>,
+
+  /// Override tremolo rate (0.0–20.0 Hz).
+  #[arg(long, help_heading = "Voice overrides")]
+  tremolo_rate: Option<f64>,
+
+  /// Override tremolo depth (0.0–1.0 fraction).
+  #[arg(long, help_heading = "Voice overrides")]
+  tremolo_depth: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -107,6 +123,10 @@ impl CliVoiceOverrides {
       resonance: self.resonance,
       sub_octave: self.sub_octave,
       note_spread: self.note_spread,
+      vibrato_rate: self.vibrato_rate,
+      vibrato_depth: self.vibrato_depth,
+      tremolo_rate: self.tremolo_rate,
+      tremolo_depth: self.tremolo_depth,
     }
   }
 

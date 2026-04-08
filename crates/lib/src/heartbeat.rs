@@ -112,6 +112,10 @@ pub fn heartbeat_graph_with_volume(
   let brightness = voice.brightness as f32;
   let resonance = voice.resonance as f32;
   let sub_mix = voice.sub_octave as f32;
+  let vibrato_rate = voice.vibrato_rate;
+  let vibrato_depth = voice.vibrato_depth;
+  let tremolo_rate = voice.tremolo_rate;
+  let tremolo_depth = voice.tremolo_depth;
 
   let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
   let norm = if total_ratio > 0.0 {
@@ -174,8 +178,14 @@ pub fn heartbeat_graph_with_volume(
       if t >= p.start && t < p.tail_end {
         let body_t = (t - p.start - p.attack).max(0.0);
         let chirp_t = (body_t / 0.04).min(1.0);
-        return p.freq * chirp_ratio
-          + (p.freq - p.freq * chirp_ratio) * chirp_t;
+        let base =
+          p.freq * chirp_ratio + (p.freq - p.freq * chirp_ratio) * chirp_t;
+        let vib = 2f64.powf(
+          vibrato_depth
+            * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
+            / 12.0,
+        ) as f32;
+        return base * vib;
       }
     }
     0.01
@@ -201,7 +211,11 @@ pub fn heartbeat_graph_with_volume(
         } else {
           1.0
         };
-        return fade_in * fade_out * p.amp;
+        let trem = (1.0
+          - tremolo_depth
+            * (1.0 - (std::f64::consts::TAU * tremolo_rate * t as f64).sin())
+            / 2.0) as f32;
+        return fade_in * fade_out * p.amp * trem;
       }
     }
     0.0
@@ -250,8 +264,14 @@ pub fn heartbeat_graph_with_volume(
       if t >= p.start && t < p.tail_end {
         let body_t = (t - p.start - p.attack).max(0.0);
         let chirp_t = (body_t / 0.04).min(1.0);
-        let base = p.freq * 0.5;
-        return base * chirp_ratio + (base - base * chirp_ratio) * chirp_t;
+        let half = p.freq * 0.5;
+        let base = half * chirp_ratio + (half - half * chirp_ratio) * chirp_t;
+        let vib = 2f64.powf(
+          vibrato_depth
+            * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
+            / 12.0,
+        ) as f32;
+        return base * vib;
       }
     }
     0.01

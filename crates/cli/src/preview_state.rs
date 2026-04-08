@@ -4,7 +4,6 @@ use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
-  drone::DroneRegister,
   state::{DroneState, HeartbeatState},
   BoopSpec, PentatonicScale, Severity, Voice,
 };
@@ -139,13 +138,40 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
+  VoiceParamMeta {
+    name: "vibrato_rate",
+    description: "Vibrato speed (Hz)",
+    min: 0.0,
+    max: 20.0,
+    step: 0.1,
+  },
+  VoiceParamMeta {
+    name: "vibrato_depth",
+    description: "Vibrato depth (semitones)",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "tremolo_rate",
+    description: "Tremolo speed (Hz)",
+    min: 0.0,
+    max: 20.0,
+    step: 0.1,
+  },
+  VoiceParamMeta {
+    name: "tremolo_depth",
+    description: "Tremolo depth (fraction)",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
 ];
 
 /// Metadata for a configured drone metric.
 #[derive(Clone)]
 pub struct DroneMetricInfo {
   pub name: String,
-  pub register: DroneRegister,
   pub base_freq: Option<f64>,
   pub boops: usize,
 }
@@ -232,7 +258,6 @@ impl PreviewState {
       .iter()
       .map(|m| DroneMetricInfo {
         name: m.name.clone(),
-        register: m.register,
         base_freq: m.base_freq,
         boops: m.boops.unwrap_or(1),
       })
@@ -414,7 +439,6 @@ impl PreviewState {
           "volume": self.drone_volumes[i].value(),
           "base_freq": info.base_freq,
           "boops": info.boops,
-          "register": register_str(info.register),
           "overridden": drone_overrides[i].is_some(),
           "voice": drone_voice,
           "locked_params": drone_locked,
@@ -641,6 +665,10 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "brightness" => Some(voice.brightness),
     "resonance" => Some(voice.resonance),
     "sub_octave" => Some(voice.sub_octave),
+    "vibrato_rate" => Some(voice.vibrato_rate),
+    "vibrato_depth" => Some(voice.vibrato_depth),
+    "tremolo_rate" => Some(voice.tremolo_rate),
+    "tremolo_depth" => Some(voice.tremolo_depth),
     _ => None,
   }
 }
@@ -662,6 +690,10 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "brightness" => voice.brightness = value,
     "resonance" => voice.resonance = value,
     "sub_octave" => voice.sub_octave = value,
+    "vibrato_rate" => voice.vibrato_rate = value,
+    "vibrato_depth" => voice.vibrato_depth = value,
+    "tremolo_rate" => voice.tremolo_rate = value,
+    "tremolo_depth" => voice.tremolo_depth = value,
     _ => return false,
   }
   true
@@ -684,6 +716,10 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "brightness": voice.brightness,
     "resonance": voice.resonance,
     "sub_octave": voice.sub_octave,
+    "vibrato_rate": voice.vibrato_rate,
+    "vibrato_depth": voice.vibrato_depth,
+    "tremolo_rate": voice.tremolo_rate,
+    "tremolo_depth": voice.tremolo_depth,
   })
 }
 
@@ -695,23 +731,6 @@ pub fn severity_from_shared(value: f32) -> Severity {
   }
 }
 
-pub fn register_str(r: DroneRegister) -> &'static str {
-  match r {
-    DroneRegister::Low => "low",
-    DroneRegister::Mid => "mid",
-    DroneRegister::High => "high",
-  }
-}
-
-pub fn register_from_str(s: &str) -> Option<DroneRegister> {
-  match s {
-    "low" => Some(DroneRegister::Low),
-    "mid" => Some(DroneRegister::Mid),
-    "high" => Some(DroneRegister::High),
-    _ => None,
-  }
-}
-
 #[cfg(test)]
 #[allow(dead_code)]
 mod tests {
@@ -719,7 +738,6 @@ mod tests {
   use serde::Deserialize;
   use sonify_health_lib::{
     check::{DroneMetricConfig, HeartbeatCheckConfig, ResultMode},
-    drone::DroneRegister,
     Voice,
   };
 
@@ -773,7 +791,6 @@ mod tests {
     volume: f64,
     base_freq: Option<f64>,
     boops: u64,
-    register: String,
     overridden: bool,
     voice: serde_json::Map<String, serde_json::Value>,
     locked_params: Vec<String>,
@@ -804,7 +821,6 @@ mod tests {
     index: u64,
     base_freq: Option<f64>,
     boops: u64,
-    register: String,
   }
 
   fn test_preview() -> PreviewState {
@@ -819,7 +835,6 @@ mod tests {
       name: "load".to_string(),
       command: "echo 0.5".to_string(),
       result_mode: ResultMode::Stdout,
-      register: DroneRegister::Mid,
       base_freq: None,
       boops: Some(2),
     }];
@@ -849,21 +864,18 @@ mod tests {
     assert_eq!(state.drones.len(), 1);
     assert_eq!(state.drones[0].name, "load");
     assert_eq!(state.drones[0].boops, 2);
-    assert_eq!(state.drones[0].register, "mid");
   }
 
   #[test]
   fn drone_config_changed_matches_frontend_contract() {
     let info = DroneMetricInfo {
       name: "load".to_string(),
-      register: DroneRegister::Mid,
       base_freq: Some(220.0),
       boops: 3,
     };
     let msg = serde_json::json!({
       "type": "drone_config_changed",
       "index": 0,
-      "register": register_str(info.register),
       "base_freq": info.base_freq,
       "boops": info.boops,
     })
@@ -877,7 +889,6 @@ mod tests {
     assert_eq!(parsed.msg_type, "drone_config_changed");
     assert_eq!(parsed.base_freq, Some(220.0));
     assert_eq!(parsed.boops, 3);
-    assert_eq!(parsed.register, "mid");
   }
 
   #[test]
@@ -885,7 +896,6 @@ mod tests {
     let msg = serde_json::json!({
       "type": "drone_config_changed",
       "index": 0,
-      "register": "low",
       "base_freq": null,
       "boops": 1,
     })

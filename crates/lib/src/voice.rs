@@ -67,6 +67,18 @@ pub struct Voice {
 
   #[voice_param(order = 15, range = 0.0..1.0)]
   pub note_spread: f64,
+
+  #[voice_param(order = 16, range = 0.0..20.0)]
+  pub vibrato_rate: f64,
+
+  #[voice_param(order = 17, range = 0.0..1.0)]
+  pub vibrato_depth: f64,
+
+  #[voice_param(order = 18, range = 0.0..20.0)]
+  pub tremolo_rate: f64,
+
+  #[voice_param(order = 19, range = 0.0..1.0)]
+  pub tremolo_depth: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -140,6 +152,18 @@ impl Voice {
     }
     if let Some(v) = o.note_spread {
       self.note_spread = v;
+    }
+    if let Some(v) = o.vibrato_rate {
+      self.vibrato_rate = v;
+    }
+    if let Some(v) = o.vibrato_depth {
+      self.vibrato_depth = v;
+    }
+    if let Some(v) = o.tremolo_rate {
+      self.tremolo_rate = v;
+    }
+    if let Some(v) = o.tremolo_depth {
+      self.tremolo_depth = v;
     }
     self
   }
@@ -340,6 +364,10 @@ pub struct VoiceOverrides {
   pub resonance: Option<f64>,
   pub sub_octave: Option<f64>,
   pub note_spread: Option<f64>,
+  pub vibrato_rate: Option<f64>,
+  pub vibrato_depth: Option<f64>,
+  pub tremolo_rate: Option<f64>,
+  pub tremolo_depth: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -358,7 +386,11 @@ impl fmt::Display for Voice {
     writeln!(f, "brightness:   {:.3}", self.brightness)?;
     writeln!(f, "resonance:    {:.3}", self.resonance)?;
     writeln!(f, "sub_octave:   {:.3}", self.sub_octave)?;
-    write!(f, "note_spread:  {:.3}", self.note_spread)
+    writeln!(f, "note_spread:  {:.3}", self.note_spread)?;
+    writeln!(f, "vibrato_rate: {:.3} Hz", self.vibrato_rate)?;
+    writeln!(f, "vibrato_depth:{:.3} st", self.vibrato_depth)?;
+    writeln!(f, "tremolo_rate: {:.3} Hz", self.tremolo_rate)?;
+    write!(f, "tremolo_depth:{:.3}", self.tremolo_depth)
   }
 }
 
@@ -408,6 +440,10 @@ mod tests {
       assert!((0.2..2.0).contains(&v.resonance));
       assert!((0.0..0.6).contains(&v.sub_octave));
       assert!((0.0..1.0).contains(&v.note_spread));
+      assert!((0.0..20.0).contains(&v.vibrato_rate));
+      assert!((0.0..1.0).contains(&v.vibrato_depth));
+      assert!((0.0..20.0).contains(&v.tremolo_rate));
+      assert!((0.0..1.0).contains(&v.tremolo_depth));
     }
   }
 

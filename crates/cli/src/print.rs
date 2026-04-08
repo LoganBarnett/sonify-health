@@ -30,6 +30,11 @@ fn voice_toml_lines(lines: &mut Vec<String>, header: &str, voice: &Voice) {
   lines.push(format!("brightness = {}", float_lit(voice.brightness)));
   lines.push(format!("resonance = {}", float_lit(voice.resonance)));
   lines.push(format!("sub_octave = {}", float_lit(voice.sub_octave)));
+  lines.push(format!("note_spread = {}", float_lit(voice.note_spread)));
+  lines.push(format!("vibrato_rate = {}", float_lit(voice.vibrato_rate)));
+  lines.push(format!("vibrato_depth = {}", float_lit(voice.vibrato_depth)));
+  lines.push(format!("tremolo_rate = {}", float_lit(voice.tremolo_rate)));
+  lines.push(format!("tremolo_depth = {}", float_lit(voice.tremolo_depth)));
 }
 
 /// Format all voices as a TOML document suitable for pasting into
@@ -74,6 +79,11 @@ fn voice_nix_lines(lines: &mut Vec<String>, prefix: &str, voice: &Voice) {
   lines.push(format!("  brightness = {};", float_lit(voice.brightness)));
   lines.push(format!("  resonance = {};", float_lit(voice.resonance)));
   lines.push(format!("  sub_octave = {};", float_lit(voice.sub_octave)));
+  lines.push(format!("  note_spread = {};", float_lit(voice.note_spread)));
+  lines.push(format!("  vibrato_rate = {};", float_lit(voice.vibrato_rate)));
+  lines.push(format!("  vibrato_depth = {};", float_lit(voice.vibrato_depth)));
+  lines.push(format!("  tremolo_rate = {};", float_lit(voice.tremolo_rate)));
+  lines.push(format!("  tremolo_depth = {};", float_lit(voice.tremolo_depth)));
   lines.push("};".to_string());
 }
 
@@ -120,6 +130,11 @@ fn voice_to_json_value(voice: &Voice) -> serde_json::Value {
     "brightness": voice.brightness,
     "resonance": voice.resonance,
     "sub_octave": voice.sub_octave,
+    "note_spread": voice.note_spread,
+    "vibrato_rate": voice.vibrato_rate,
+    "vibrato_depth": voice.vibrato_depth,
+    "tremolo_rate": voice.tremolo_rate,
+    "tremolo_depth": voice.tremolo_depth,
   })
 }
 
@@ -171,6 +186,11 @@ pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
     format!("--brightness {}", voice.brightness),
     format!("--resonance {}", voice.resonance),
     format!("--sub-octave {}", voice.sub_octave),
+    format!("--note-spread {}", voice.note_spread),
+    format!("--vibrato-rate {}", voice.vibrato_rate),
+    format!("--vibrato-depth {}", voice.vibrato_depth),
+    format!("--tremolo-rate {}", voice.tremolo_rate),
+    format!("--tremolo-depth {}", voice.tremolo_depth),
   ]
   .join(" ")
 }
