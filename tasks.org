@@ -1,0 +1,25 @@
+#+title:     sonify-health Tasks
+#+language:  en
+
+* TODO Sync with rust-template (420397e..c3d6e14+)
+Forward-port changes from rust-template that landed after the last synced
+commit (=5f606c5=).  The following commits need review:
+
+- =420397e= docs: add task for pre-commit hook treefmt scoping bug
+  - =tasks.org= only — no code to forward-port, but check if the treefmt
+    scoping bug applies to sonify-health's pre-commit hook too.
+- =2d71318= feat: use native CA store for TLS instead of webpki-roots
+  - Already applied directly to sonify-health (=5330281=).  No action needed.
+- =e681440= fix: use Debug format for OIDC discovery error to preserve cause chain
+  - Already applied directly to sonify-health (=cea961d=).  No action needed.
+- =66d819e= feat: add justfile with build, test, and run recipes
+  - Add =pkgs.just= to =flake.nix= devShell.
+  - Create a =justfile= adapted for sonify-health (crate names, Elm paths).
+  - The Elm import fix (=Url.Parser.map=/=s=) is template-specific and does not
+    apply here.
+- =c3d6e14= fix: pass all args through in justfile run recipe
+  - Include when creating the justfile above.
+
+Also include any commits that land after =c3d6e14= before this task is started.
+
+After syncing, update =rust-template.json= with the final synced hash.
