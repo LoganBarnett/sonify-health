@@ -1,5 +1,6 @@
 module Protocol exposing
     ( BoopSpecInfo
+    , BoopSpecRanges
     , CheckInfo
     , CheckLogEntry
     , DroneInfo
@@ -76,6 +77,16 @@ type alias BoopSpecInfo =
     }
 
 
+type alias BoopSpecRanges =
+    { freqMin : Float
+    , freqMax : Float
+    , freqStep : Float
+    , durationMin : Float
+    , durationMax : Float
+    , durationStep : Float
+    }
+
+
 
 -- Server messages (incoming)
 
@@ -92,6 +103,7 @@ type ServerMsg
         , lockedParams : List String
         , lockedDrones : List Int
         , boopSpecs : List BoopSpecInfo
+        , boopSpecRanges : BoopSpecRanges
         }
     | ParamChanged String Float
     | MuteChanged Bool
@@ -180,7 +192,7 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map7
         (\voice muted hbVol hbLoop boopCount checks drones ->
-            \locked lockedDrones boopSpecs ->
+            \locked lockedDrones boopSpecs ranges ->
                 StateMsg
                     { voice = voice
                     , muted = muted
@@ -192,6 +204,7 @@ stateDecoder =
                     , lockedParams = locked
                     , lockedDrones = lockedDrones
                     , boopSpecs = boopSpecs
+                    , boopSpecRanges = ranges
                     }
         )
         (D.field "voice" voiceDecoder
@@ -210,6 +223,7 @@ stateDecoder =
         |> andMap (D.field "locked_params" (D.list D.string))
         |> andMap (D.field "locked_drones" (D.list D.int))
         |> andMap (D.field "boop_specs" (D.list boopSpecInfoDecoder))
+        |> andMap (D.field "boop_spec_ranges" boopSpecRangesDecoder)
 
 
 voiceDecoder : D.Decoder (List ( String, Float ))
@@ -361,6 +375,17 @@ boopSpecInfoDecoder =
         (D.field "freq" D.float)
         (D.field "duration" D.float)
         (D.field "pinned" D.bool)
+
+
+boopSpecRangesDecoder : D.Decoder BoopSpecRanges
+boopSpecRangesDecoder =
+    D.map6 BoopSpecRanges
+        (D.field "freq_min" D.float)
+        (D.field "freq_max" D.float)
+        (D.field "freq_step" D.float)
+        (D.field "duration_min" D.float)
+        (D.field "duration_max" D.float)
+        (D.field "duration_step" D.float)
 
 
 lockedParamsChangedDecoder : D.Decoder ServerMsg

@@ -340,6 +340,9 @@ impl PreviewState {
       })
       .collect();
 
+    let base_freq_meta =
+      VOICE_PARAMS.iter().find(|p| p.name == "base_freq").unwrap();
+
     json!({
       "type": "state",
       "voice": voice_json,
@@ -353,6 +356,14 @@ impl PreviewState {
       "locked_params": locked_json,
       "locked_drones": locked_drones_json,
       "boop_specs": boop_specs_json,
+      "boop_spec_ranges": {
+        "freq_min": base_freq_meta.min / 2.0,
+        "freq_max": base_freq_meta.max,
+        "freq_step": 1.0,
+        "duration_min": 0.05,
+        "duration_max": heartbeat::TOTAL_BOOP_TIME,
+        "duration_step": 0.01,
+      },
     })
     .to_string()
   }

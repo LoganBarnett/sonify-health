@@ -29,6 +29,7 @@ type alias Model =
     , lockedParams : Set String
     , lockedDrones : Set Int
     , boopSpecs : List BoopSpecInfo
+    , boopSpecRanges : BoopSpecRanges
     }
 
 
@@ -92,6 +93,14 @@ init =
       , lockedParams = Set.empty
       , lockedDrones = Set.empty
       , boopSpecs = []
+      , boopSpecRanges =
+            { freqMin = 50.0
+            , freqMax = 12000.0
+            , freqStep = 1.0
+            , durationMin = 0.05
+            , durationMax = 1.2
+            , durationStep = 0.01
+            }
       }
     , Cmd.none
     )
@@ -486,6 +495,7 @@ handleServerMsg raw model =
                 , lockedParams = Set.fromList s.lockedParams
                 , lockedDrones = Set.fromList s.lockedDrones
                 , boopSpecs = s.boopSpecs
+                , boopSpecRanges = s.boopSpecRanges
                 , connected = True
               }
             , Cmd.none
@@ -801,7 +811,7 @@ viewHeartbeatPanel model =
                 ]
                 [ text "Play Now" ]
             ]
-        , viewBoopSpecs model.boopCount model.checks model.boopSpecs
+        , viewBoopSpecs model.boopCount model.checks model.boopSpecs model.boopSpecRanges
         , if List.isEmpty model.checks then
             text ""
 
@@ -813,20 +823,20 @@ viewHeartbeatPanel model =
         ]
 
 
-viewBoopSpecs : Int -> List CheckInfo -> List BoopSpecInfo -> Html Msg
-viewBoopSpecs boopCount checks specs =
+viewBoopSpecs : Int -> List CheckInfo -> List BoopSpecInfo -> BoopSpecRanges -> Html Msg
+viewBoopSpecs boopCount checks specs ranges =
     if List.isEmpty specs then
         text ""
 
     else
         div [ class "boop-specs" ]
             (h3 [ class "panel-subheading" ] [ text "Boop Specs" ]
-                :: List.indexedMap (viewBoopRow boopCount checks) specs
+                :: List.indexedMap (viewBoopRow boopCount checks ranges) specs
             )
 
 
-viewBoopRow : Int -> List CheckInfo -> Int -> BoopSpecInfo -> Html Msg
-viewBoopRow boopCount checks index spec =
+viewBoopRow : Int -> List CheckInfo -> BoopSpecRanges -> Int -> BoopSpecInfo -> Html Msg
+viewBoopRow boopCount checks ranges index spec =
     let
         checkIdx =
             if boopCount > 0 then
@@ -849,9 +859,9 @@ viewBoopRow boopCount checks index spec =
         , label [ class "slider-label" ] [ text "Freq" ]
         , input
             [ type_ "range"
-            , Html.Attributes.min "60"
-            , Html.Attributes.max "12000"
-            , step "1"
+            , Html.Attributes.min (String.fromFloat ranges.freqMin)
+            , Html.Attributes.max (String.fromFloat ranges.freqMax)
+            , step (String.fromFloat ranges.freqStep)
             , value (String.fromFloat spec.freq)
             , onInput (SetBoopFreq index)
             , class "slider"
@@ -862,9 +872,9 @@ viewBoopRow boopCount checks index spec =
         , label [ class "slider-label" ] [ text "Dur" ]
         , input
             [ type_ "range"
-            , Html.Attributes.min "0.05"
-            , Html.Attributes.max "1.2"
-            , step "0.01"
+            , Html.Attributes.min (String.fromFloat ranges.durationMin)
+            , Html.Attributes.max (String.fromFloat ranges.durationMax)
+            , step (String.fromFloat ranges.durationStep)
             , value (String.fromFloat spec.duration)
             , onInput (SetBoopDuration index)
             , class "slider"
