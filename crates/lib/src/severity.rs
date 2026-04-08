@@ -10,24 +10,50 @@ pub enum Severity {
   Down = 2,
 }
 
-impl Severity {
-  /// Pitch multiplier relative to the voice's base frequency.
-  /// Uses just intonation ratios for harmonic compatibility.
-  pub fn pitch_ratio(self) -> f64 {
-    match self {
-      Severity::Healthy => 1.0,
-      Severity::Degraded => 6.0 / 5.0, // minor third
-      Severity::Down => 45.0 / 32.0,   // tritone
-    }
-  }
+/// Timbre profile for a single boop, driven by severity.
+#[derive(Debug, Clone, Copy)]
+pub struct BoopProfile {
+  /// Detuning in cents applied alternately +/- to successive boops.
+  /// Creates beating and lost harmonization at higher values.
+  pub detune_cents: f64,
+  /// Amplitude scaling (0.08 gentle background to 0.18 noticeable).
+  pub amplitude: f64,
+  /// Saw-wave bleed-in weight (0.0 pure voice blend to 0.6 buzzy).
+  pub harshness: f64,
+  /// Lowpass cutoff in Hz (4000 open/bright to 1800 narrow/nasal).
+  pub filter_cutoff: f64,
+  /// Lowpass resonance Q (0.5 flat to 2.0 honky resonant peak).
+  pub filter_q: f64,
+}
 
-  /// Amplitude scaling — distress raises energy, but stays
-  /// background-level even at worst severity.
-  pub fn amplitude(self) -> f64 {
+impl Severity {
+  /// Severity-driven timbre profile replacing the former pitch-only
+  /// model.  Healthy sounds warm and chipper; degraded adds nasal
+  /// edge and beating; down is harsh, dissonant, and attention-
+  /// grabbing without becoming a klaxon.
+  pub fn profile(self) -> BoopProfile {
     match self {
-      Severity::Healthy => 0.08,
-      Severity::Degraded => 0.14,
-      Severity::Down => 0.22,
+      Severity::Healthy => BoopProfile {
+        detune_cents: 0.0,
+        amplitude: 0.08,
+        harshness: 0.0,
+        filter_cutoff: 4000.0,
+        filter_q: 0.5,
+      },
+      Severity::Degraded => BoopProfile {
+        detune_cents: 12.0,
+        amplitude: 0.14,
+        harshness: 0.25,
+        filter_cutoff: 2800.0,
+        filter_q: 1.2,
+      },
+      Severity::Down => BoopProfile {
+        detune_cents: 25.0,
+        amplitude: 0.18,
+        harshness: 0.6,
+        filter_cutoff: 1800.0,
+        filter_q: 2.0,
+      },
     }
   }
 }
@@ -118,10 +144,47 @@ mod tests {
   }
 
   #[test]
-  fn severity_ordering() {
-    assert!(Severity::Healthy.amplitude() < Severity::Degraded.amplitude());
-    assert!(Severity::Degraded.amplitude() < Severity::Down.amplitude());
-    assert!(Severity::Degraded.pitch_ratio() > Severity::Healthy.pitch_ratio());
-    assert!(Severity::Down.pitch_ratio() > Severity::Degraded.pitch_ratio());
+  fn profile_amplitude_rises_with_severity() {
+    let h = Severity::Healthy.profile();
+    let d = Severity::Degraded.profile();
+    let w = Severity::Down.profile();
+    assert!(h.amplitude < d.amplitude);
+    assert!(d.amplitude < w.amplitude);
+  }
+
+  #[test]
+  fn profile_harshness_rises_with_severity() {
+    let h = Severity::Healthy.profile();
+    let d = Severity::Degraded.profile();
+    let w = Severity::Down.profile();
+    assert!(h.harshness < d.harshness);
+    assert!(d.harshness < w.harshness);
+  }
+
+  #[test]
+  fn profile_detune_rises_with_severity() {
+    let h = Severity::Healthy.profile();
+    let d = Severity::Degraded.profile();
+    let w = Severity::Down.profile();
+    assert!(h.detune_cents < d.detune_cents);
+    assert!(d.detune_cents < w.detune_cents);
+  }
+
+  #[test]
+  fn profile_cutoff_drops_with_severity() {
+    let h = Severity::Healthy.profile();
+    let d = Severity::Degraded.profile();
+    let w = Severity::Down.profile();
+    assert!(h.filter_cutoff > d.filter_cutoff);
+    assert!(d.filter_cutoff > w.filter_cutoff);
+  }
+
+  #[test]
+  fn profile_q_rises_with_severity() {
+    let h = Severity::Healthy.profile();
+    let d = Severity::Degraded.profile();
+    let w = Severity::Down.profile();
+    assert!(h.filter_q < d.filter_q);
+    assert!(d.filter_q < w.filter_q);
   }
 }

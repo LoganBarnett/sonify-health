@@ -11,6 +11,11 @@ pub const TOTAL_BOOP_TIME: f64 = 1.2;
 /// proportionally with the shorter of the two adjacent boops.
 const GAP_SECS: f64 = 0.1;
 
+/// Convert a cent offset to a frequency multiplier.
+fn cents_to_ratio(cents: f64) -> f64 {
+  2.0_f64.powf(cents / 1200.0)
+}
+
 /// Compute the gap between two adjacent boops.  Proportional to
 /// the shorter duration so that quick boops cluster tightly while
 /// long boops get breathing room.
@@ -22,8 +27,10 @@ fn gap_between(dur_a: f64, dur_b: f64, max_dur: f64) -> f64 {
 }
 
 /// Total wall-clock duration of a heartbeat sequence including
-/// proportional gaps and a small release tail.
-pub fn heartbeat_duration(specs: &[BoopSpec]) -> Duration {
+/// proportional gaps and the release tail of the last note.
+/// `release_secs` is the voice's release time; the last note's
+/// decay extends past its slot by this amount.
+pub fn heartbeat_duration(specs: &[BoopSpec], release_secs: f64) -> Duration {
   if specs.is_empty() {
     return Duration::ZERO;
   }
@@ -36,19 +43,23 @@ pub fn heartbeat_duration(specs: &[BoopSpec]) -> Duration {
     .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
     .sum();
 
-  Duration::from_secs_f64(boop_sum + gap_sum + 0.05)
+  Duration::from_secs_f64(boop_sum + gap_sum + release_secs + 0.05)
 }
 
 /// Parameters for a single boop inside the heartbeat closure.
 #[derive(Clone)]
 struct BoopTiming {
   start: f32,
-  end: f32,
+  /// End including the release tail (start + dur + release).
+  tail_end: f32,
   freq: f32,
   amp: f32,
   dur: f32,
   attack: f32,
   release: f32,
+  harshness: f32,
+  filter_cutoff: f32,
+  filter_q: f32,
 }
 
 /// Build a complete heartbeat audio graph (no external volume).
@@ -62,8 +73,10 @@ pub fn heartbeat_graph(
 
 /// Build a heartbeat audio graph with optional external volume
 /// multiplier (used for preview volume control).  Each boop plays
-/// its own pentatonic note at the severity-adjusted pitch, with a
-/// chirp onset sweep, and the output is panned and reverbed.
+/// its own pentatonic note with severity-driven timbre: detuning
+/// for dissonance, harshness via saw bleed-in, and a resonant
+/// lowpass filter.  The chirp onset sweep is preserved at all
+/// severity levels.
 pub fn heartbeat_graph_with_volume(
   voice: &Voice,
   severities: &[Severity],
@@ -93,21 +106,28 @@ pub fn heartbeat_graph_with_volume(
   let mut timings = Vec::with_capacity(count);
   let mut t = 0.0f64;
   for i in 0..count {
-    let freq = (specs[i].freq * severities[i].pitch_ratio()) as f32;
-    let amp = severities[i].amplitude() as f32;
+    let profile = severities[i].profile();
+    let detune_sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+    let freq = (specs[i].freq
+      * cents_to_ratio(profile.detune_cents * detune_sign))
+      as f32;
+    let amp = profile.amplitude as f32;
     let dur = specs[i].duration as f32;
-    let attack = (voice.attack_ms as f32 / 1000.0).min(dur * 0.3);
-    let release = (voice.release_ms as f32 / 1000.0).min(dur * 0.5);
+    let attack = (voice.attack_ms as f32 / 1000.0).min(dur * 0.5);
+    let release = voice.release_ms as f32 / 1000.0;
     let start = t as f32;
 
     timings.push(BoopTiming {
       start,
-      end: start + dur,
+      tail_end: start + dur + release,
       freq,
       amp,
       dur,
       attack,
       release,
+      harshness: profile.harshness as f32,
+      filter_cutoff: profile.filter_cutoff as f32,
+      filter_q: profile.filter_q as f32,
     });
 
     t += specs[i].duration;
@@ -117,11 +137,12 @@ pub fn heartbeat_graph_with_volume(
   }
 
   // Frequency LFO: switches between boop frequencies with chirp
-  // onset sweep, outputs near-zero between boops.
+  // onset sweep, holds frequency through the release tail,
+  // outputs near-zero between boops.
   let freq_timings = timings.clone();
   let freq_env = lfo(move |t: f32| {
     for p in &freq_timings {
-      if t >= p.start && t < p.end {
+      if t >= p.start && t < p.tail_end {
         let local_t = t - p.start;
         let chirp_t = (local_t / 0.04).min(1.0);
         return p.freq * chirp_ratio
@@ -131,16 +152,17 @@ pub fn heartbeat_graph_with_volume(
     0.01
   });
 
-  // Amplitude envelope: attack/release per boop, silence between.
-  let amp_timings = timings;
+  // Amplitude envelope: attack fills the slot body, release
+  // tail bleeds past the slot boundary so short notes decay
+  // naturally rather than being truncated.
+  let amp_timings = timings.clone();
   let amp_env = envelope(move |t: f32| {
     for p in &amp_timings {
-      if t >= p.start && t < p.end {
+      if t >= p.start && t < p.tail_end {
         let local_t = t - p.start;
         let fade_in = (local_t / p.attack).min(1.0);
-        let sustain_end = p.dur - p.release;
-        let fade_out = if local_t > sustain_end && p.release > 0.0 {
-          ((p.dur - local_t) / p.release).max(0.0)
+        let fade_out = if local_t > p.dur && p.release > 0.0 {
+          ((p.dur + p.release - local_t) / p.release).max(0.0)
         } else {
           1.0
         };
@@ -150,14 +172,63 @@ pub fn heartbeat_graph_with_volume(
     0.0
   });
 
+  // Sine weight envelope: reduces with harshness so the tone
+  // loses its pure-voice warmth as severity increases.
+  let sine_timings = timings.clone();
+  let sine_w_env = envelope(move |t: f32| {
+    for p in &sine_timings {
+      if t >= p.start && t < p.tail_end {
+        return sine_w * (1.0 - p.harshness);
+      }
+    }
+    sine_w
+  });
+
+  // Saw weight envelope: increases with harshness, adding buzzy
+  // harmonics that make degraded/down boops sound shrill.
+  let saw_timings = timings.clone();
+  let saw_w_env = envelope(move |t: f32| {
+    for p in &saw_timings {
+      if t >= p.start && t < p.tail_end {
+        return saw_w + p.harshness;
+      }
+    }
+    saw_w
+  });
+
+  // Lowpass cutoff: healthy is open/bright, down is narrow/nasal.
+  let cutoff_timings = timings.clone();
+  let cutoff_env = lfo(move |t: f32| {
+    for p in &cutoff_timings {
+      if t >= p.start && t < p.tail_end {
+        return p.filter_cutoff;
+      }
+    }
+    4000.0
+  });
+
+  // Lowpass Q: higher resonance at worse severity creates a
+  // honky, nasal peak — shrill without just being high-pitched.
+  let q_timings = timings;
+  let q_env = lfo(move |t: f32| {
+    for p in &q_timings {
+      if t >= p.start && t < p.tail_end {
+        return p.filter_q;
+      }
+    }
+    0.5
+  });
+
   let ext = match external_volume {
     Some(s) => s.clone(),
     None => shared(1.0),
   };
   let ext_vol = var(&ext) >> follow(0.1);
 
-  let waveform = (sine() * sine_w) & (triangle() * tri_w) & (saw() * saw_w);
-  let mix = (freq_env >> waveform) * amp_env * ext_vol;
+  let waveform =
+    (sine() * sine_w_env) & (triangle() * tri_w) & (saw() * saw_w_env);
+  let signal = freq_env >> waveform;
+  let mix = (signal | cutoff_env | q_env) >> (lowpass() * amp_env * ext_vol);
   let stereo = mix
     >> pan(voice.stereo_pan as f32)
     >> reverb_stereo(0.3, 0.8, voice.reverb_mix as f32);
@@ -165,14 +236,17 @@ pub fn heartbeat_graph_with_volume(
 }
 
 /// Build an audio graph for a single boop at the given severity
-/// and duration.  The graph includes an attack/release envelope.
+/// and duration.  Applies the same timbre model as the heartbeat
+/// graph: harshness crossfade and resonant lowpass filter.
 pub fn boop_graph(
   voice: &Voice,
   severity: Severity,
   duration_secs: f64,
 ) -> Box<dyn AudioUnit> {
-  let freq = (voice.base_freq * severity.pitch_ratio()) as f32;
-  let amp = severity.amplitude() as f32;
+  let profile = severity.profile();
+  let freq = (voice.base_freq * cents_to_ratio(profile.detune_cents)) as f32;
+  let amp = profile.amplitude as f32;
+  let harshness = profile.harshness as f32;
   let attack = (voice.attack_ms / 1000.0).min(duration_secs * 0.3) as f32;
   let release = (voice.release_ms / 1000.0).min(duration_secs * 0.5) as f32;
   let dur = duration_secs as f32;
@@ -184,12 +258,15 @@ pub fn boop_graph(
     1.0
   } as f32;
 
-  let sine_w = voice.sine_ratio as f32 * norm;
+  let sine_w = voice.sine_ratio as f32 * norm * (1.0 - harshness);
   let tri_w = voice.tri_ratio as f32 * norm;
-  let saw_w = voice.saw_ratio as f32 * norm;
+  let saw_w = voice.saw_ratio as f32 * norm + harshness;
 
   let waveform =
     sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
+
+  let cutoff = dc(profile.filter_cutoff as f32);
+  let q_val = dc(profile.filter_q as f32);
 
   let env = envelope(move |t: f32| {
     let fade_in = (t / attack).min(1.0);
@@ -202,7 +279,7 @@ pub fn boop_graph(
     fade_in * fade_out * amp
   });
 
-  Box::new(waveform * env)
+  Box::new((waveform | cutoff | q_val) >> (lowpass() * env))
 }
 
 #[cfg(test)]
@@ -272,8 +349,8 @@ mod tests {
         duration: 0.4,
       },
     ];
-    let dur = heartbeat_duration(&specs);
-    // 3 × 0.4 = 1.2 boop time, plus gaps and 0.05 tail.
+    let dur = heartbeat_duration(&specs, 0.15);
+    // 3 × 0.4 = 1.2 boop time, plus gaps, release, and 0.05 tail.
     assert!(
       dur.as_secs_f64() > 1.2,
       "Duration should exceed boop sum, got {:.3}",
@@ -283,7 +360,7 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_empty() {
-    assert_eq!(heartbeat_duration(&[]), Duration::ZERO);
+    assert_eq!(heartbeat_duration(&[], 0.15), Duration::ZERO);
   }
 
   #[test]
@@ -292,11 +369,11 @@ mod tests {
       freq: 440.0,
       duration: 1.2,
     }];
-    let dur = heartbeat_duration(&specs);
-    // Single boop: 1.2 + 0.05 tail, no gaps.
+    let dur = heartbeat_duration(&specs, 0.15);
+    // Single boop: 1.2 + 0.15 release + 0.05 tail, no gaps.
     assert!(
-      (dur.as_secs_f64() - 1.25).abs() < 1e-10,
-      "Single boop should be duration + tail, got {:.3}",
+      (dur.as_secs_f64() - 1.4).abs() < 1e-10,
+      "Single boop should be duration + release + tail, got {:.3}",
       dur.as_secs_f64()
     );
   }
@@ -323,7 +400,9 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
-    let samples = (heartbeat_duration(&specs).as_secs_f32() * 44100.0) as usize;
+    let release_secs = voice.release_ms / 1000.0;
+    let samples = (heartbeat_duration(&specs, release_secs).as_secs_f32()
+      * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();
@@ -375,7 +454,9 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
-    let samples = (heartbeat_duration(&specs).as_secs_f32() * 44100.0) as usize;
+    let release_secs = voice.release_ms / 1000.0;
+    let samples = (heartbeat_duration(&specs, release_secs).as_secs_f32()
+      * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();
@@ -389,5 +470,20 @@ mod tests {
        got peak {}",
       peak
     );
+  }
+
+  #[test]
+  fn cents_to_ratio_identity() {
+    assert!((cents_to_ratio(0.0) - 1.0).abs() < 1e-10);
+  }
+
+  #[test]
+  fn cents_to_ratio_octave() {
+    assert!((cents_to_ratio(1200.0) - 2.0).abs() < 1e-10);
+  }
+
+  #[test]
+  fn cents_to_ratio_negative() {
+    assert!((cents_to_ratio(-1200.0) - 0.5).abs() < 1e-10);
   }
 }
