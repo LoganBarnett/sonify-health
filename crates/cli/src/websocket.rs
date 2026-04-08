@@ -268,6 +268,60 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "set_drone_texture" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let value = msg.get("texture").and_then(|v| v.as_str())?;
+      let texture = preview_state::texture_from_str(value)?;
+      {
+        let mut infos = preview.drone_infos.write().unwrap();
+        infos.get_mut(index)?.texture = texture;
+      }
+      preview
+        .drone_rebuild_requested
+        .store(true, Ordering::Relaxed);
+      let register = {
+        let infos = preview.drone_infos.read().unwrap();
+        preview_state::register_str(infos[index].register)
+      };
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_config_changed",
+          "index": index,
+          "texture": value,
+          "register": register,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_drone_register" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let value = msg.get("register").and_then(|v| v.as_str())?;
+      let register = preview_state::register_from_str(value)?;
+      {
+        let mut infos = preview.drone_infos.write().unwrap();
+        infos.get_mut(index)?.register = register;
+      }
+      preview
+        .drone_rebuild_requested
+        .store(true, Ordering::Relaxed);
+      let texture = {
+        let infos = preview.drone_infos.read().unwrap();
+        preview_state::texture_str(infos[index].texture)
+      };
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_config_changed",
+          "index": index,
+          "texture": texture,
+          "register": value,
+        })
+        .to_string(),
+      );
+      None
+    }
+
     "export_toml" => {
       let toml = preview.export_toml();
       Some(json!({"type": "toml_export", "content": toml}).to_string())

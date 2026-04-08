@@ -151,7 +151,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   let mixer = AudioMixer::new(audio_device)?;
 
   let mut drone_slot_ids =
-    build_drone_slots(&mixer, voice, config, scale, &drone_state, &preview);
+    build_drone_slots(&mixer, voice, scale, &drone_state, &preview);
 
   // -- Drone poll threads -----------------------------------------------------
 
@@ -240,7 +240,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         &mixer,
         &mut drone_slot_ids,
         &preview,
-        config,
         scale,
         &drone_state,
       );
@@ -292,7 +291,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             &mixer,
             &mut drone_slot_ids,
             &preview,
-            config,
             scale,
             &drone_state,
           );
@@ -359,38 +357,37 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 fn build_drone_slots(
   mixer: &AudioMixer,
   voice: &Voice,
-  config: &DaemonConfig,
   scale: &PentatonicScale,
   drone_state: &DroneState,
   preview: &PreviewState,
 ) -> Vec<usize> {
-  config
-    .drone_metrics
+  let infos = preview.drone_infos.read().unwrap();
+  infos
     .iter()
     .enumerate()
-    .map(|(i, cfg)| {
-      let texture = cfg.texture.unwrap_or_else(|| voice.drone_texture(i));
-      let notes = if texture == DroneTexture::Arpeggio {
+    .map(|(i, info)| {
+      let notes = if info.texture == DroneTexture::Arpeggio {
         voice.drone_notes(scale, 4)
       } else {
         vec![]
       };
+      let texture = info.texture;
       debug!(
-        metric = cfg.name,
+        metric = info.name,
         ?texture,
         arpeggio_notes = notes.len(),
         "Drone texture resolved"
       );
       let graph = drone::drone_graph_with_volume(
         voice,
-        cfg.register,
-        texture,
+        info.register,
+        info.texture,
         &drone_state.metrics[i],
         &notes,
         Some(&preview.combined_volumes[i]),
       );
       let slot = mixer.add(graph);
-      info!(metric = cfg.name, slot, "Drone added to mixer");
+      info!(metric = info.name, slot, "Drone added to mixer");
       slot
     })
     .collect()
@@ -400,7 +397,6 @@ fn rebuild_drones(
   mixer: &AudioMixer,
   drone_slot_ids: &mut Vec<usize>,
   preview: &PreviewState,
-  config: &DaemonConfig,
   scale: &PentatonicScale,
   drone_state: &DroneState,
 ) {
@@ -410,7 +406,7 @@ fn rebuild_drones(
   let voice = preview.voice.read().unwrap();
   info!("Rebuilding drone audio streams");
   *drone_slot_ids =
-    build_drone_slots(mixer, &voice, config, scale, drone_state, preview);
+    build_drone_slots(mixer, &voice, scale, drone_state, preview);
 }
 
 // -- Heartbeat ---------------------------------------------------------------

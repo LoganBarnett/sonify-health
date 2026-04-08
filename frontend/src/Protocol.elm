@@ -11,6 +11,8 @@ module Protocol exposing
     , encodeOverrideCheck
     , encodeOverrideDrone
     , encodeRevertAll
+    , encodeSetDroneRegister
+    , encodeSetDroneTexture
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
@@ -76,6 +78,7 @@ type ServerMsg
     | VolumeChanged String (Maybe Int) Float
     | OverrideChanged String Int (Maybe String) Bool
     | HeartbeatLoopChanged Bool
+    | DroneConfigChanged Int String String
     | CheckLog CheckLogEntry
     | TomlExport String
     | Connected
@@ -111,6 +114,9 @@ serverMsgDecoder =
 
                     "heartbeat_loop_changed" ->
                         heartbeatLoopChangedDecoder
+
+                    "drone_config_changed" ->
+                        droneConfigChangedDecoder
 
                     "check_log" ->
                         checkLogDecoder
@@ -273,6 +279,14 @@ checkLogDecoder =
         (D.field "overridden" D.bool)
 
 
+droneConfigChangedDecoder : D.Decoder ServerMsg
+droneConfigChangedDecoder =
+    D.map3 DroneConfigChanged
+        (D.field "index" D.int)
+        (D.field "texture" D.string)
+        (D.field "register" D.string)
+
+
 tomlExportDecoder : D.Decoder ServerMsg
 tomlExportDecoder =
     D.map TomlExport (D.field "content" D.string)
@@ -376,6 +390,26 @@ encodeTriggerHeartbeat =
 encodeRevertAll : String
 encodeRevertAll =
     E.object [ ( "type", E.string "revert_all" ) ]
+        |> E.encode 0
+
+
+encodeSetDroneTexture : Int -> String -> String
+encodeSetDroneTexture index texture =
+    E.object
+        [ ( "type", E.string "set_drone_texture" )
+        , ( "index", E.int index )
+        , ( "texture", E.string texture )
+        ]
+        |> E.encode 0
+
+
+encodeSetDroneRegister : Int -> String -> String
+encodeSetDroneRegister index register =
+    E.object
+        [ ( "type", E.string "set_drone_register" )
+        , ( "index", E.int index )
+        , ( "register", E.string register )
+        ]
         |> E.encode 0
 
 

@@ -38,6 +38,8 @@ type Msg
     | DroneVolDebounce Int Int Float
     | OverrideCheck Int String
     | ClearCheckOverride Int
+    | SetDroneTexture Int String
+    | SetDroneRegister Int String
     | OverrideDroneValue Int String
     | ClearDroneOverride Int
     | ToggleHeartbeatLoop
@@ -227,6 +229,18 @@ update msg model =
             , Ports.websocketSend (encodeClearOverride "heartbeat" index)
             )
 
+        SetDroneTexture index texture ->
+            ( model
+            , Ports.websocketSend
+                (Protocol.encodeSetDroneTexture index texture)
+            )
+
+        SetDroneRegister index register ->
+            ( model
+            , Ports.websocketSend
+                (Protocol.encodeSetDroneRegister index register)
+            )
+
         OverrideDroneValue index valStr ->
             case String.toFloat valStr of
                 Just val ->
@@ -380,6 +394,22 @@ handleServerMsg raw model =
 
                 _ ->
                     ( model, Cmd.none )
+
+        Just (DroneConfigChanged index texture register) ->
+            ( { model
+                | drones =
+                    List.indexedMap
+                        (\i d ->
+                            if i == index then
+                                { d | texture = texture, register = register }
+
+                            else
+                                d
+                        )
+                        model.drones
+              }
+            , Cmd.none
+            )
 
         Just (HeartbeatLoopChanged enabled) ->
             ( { model | heartbeatLoop = enabled }, Cmd.none )
@@ -595,8 +625,30 @@ viewDrone index drone =
     div [ class "drone-row" ]
         [ div [ class "drone-header" ]
             [ span [ class "drone-name" ] [ text drone.name ]
-            , span [ class "drone-meta" ]
-                [ text (drone.texture ++ " / " ++ drone.register) ]
+            , select
+                [ onInput (SetDroneTexture index)
+                , class "override-select"
+                ]
+                (List.map
+                    (\t ->
+                        option
+                            [ value t, selected (drone.texture == t) ]
+                            [ text t ]
+                    )
+                    [ "bong", "arpeggio", "thrum", "shimmer", "reactor", "warpcore" ]
+                )
+            , select
+                [ onInput (SetDroneRegister index)
+                , class "override-select"
+                ]
+                (List.map
+                    (\r ->
+                        option
+                            [ value r, selected (drone.register == r) ]
+                            [ text r ]
+                    )
+                    [ "low", "mid", "high" ]
+                )
             ]
         , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Volume" ]

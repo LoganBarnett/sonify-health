@@ -86,6 +86,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
 ];
 
 /// Metadata for a configured drone metric.
+#[derive(Clone)]
 pub struct DroneMetricInfo {
   pub name: String,
   pub register: DroneRegister,
@@ -119,7 +120,8 @@ pub struct PreviewState {
   pub broadcast_tx: broadcast::Sender<String>,
   pub check_log_tx: broadcast::Sender<String>,
   pub check_names: Vec<String>,
-  pub drone_infos: Vec<DroneMetricInfo>,
+  pub drone_infos: RwLock<Vec<DroneMetricInfo>>,
+  original_drone_infos: Vec<DroneMetricInfo>,
 }
 
 impl PreviewState {
@@ -141,7 +143,7 @@ impl PreviewState {
     let (broadcast_tx, _) = broadcast::channel(256);
     let (check_log_tx, _) = broadcast::channel(256);
 
-    let drone_infos = drone_metrics
+    let drone_infos: Vec<DroneMetricInfo> = drone_metrics
       .iter()
       .enumerate()
       .map(|(i, m)| DroneMetricInfo {
@@ -169,7 +171,8 @@ impl PreviewState {
       broadcast_tx,
       check_log_tx,
       check_names: heartbeat_checks.iter().map(|c| c.name.clone()).collect(),
-      drone_infos,
+      original_drone_infos: drone_infos.clone(),
+      drone_infos: RwLock::new(drone_infos),
     }
   }
 
@@ -201,6 +204,7 @@ impl PreviewState {
     let voice = self.voice.read().unwrap();
     let hb_overrides = self.heartbeat_overrides.read().unwrap();
     let drone_overrides = self.drone_overrides.read().unwrap();
+    let drone_infos = self.drone_infos.read().unwrap();
 
     let voice_json = voice_to_json(&voice);
 
@@ -231,8 +235,7 @@ impl PreviewState {
       })
       .collect();
 
-    let drones_json: Vec<_> = self
-      .drone_infos
+    let drones_json: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
@@ -269,6 +272,7 @@ impl PreviewState {
   /// Reset everything to startup values.
   pub fn revert(&self) {
     *self.voice.write().unwrap() = self.original_voice.clone();
+    *self.drone_infos.write().unwrap() = self.original_drone_infos.clone();
 
     for dv in &self.drone_volumes {
       dv.set_value(1.0);
@@ -332,7 +336,7 @@ pub fn severity_from_shared(value: f32) -> Severity {
   }
 }
 
-fn texture_str(t: DroneTexture) -> &'static str {
+pub fn texture_str(t: DroneTexture) -> &'static str {
   match t {
     DroneTexture::Bong => "bong",
     DroneTexture::Arpeggio => "arpeggio",
@@ -343,10 +347,31 @@ fn texture_str(t: DroneTexture) -> &'static str {
   }
 }
 
-fn register_str(r: DroneRegister) -> &'static str {
+pub fn register_str(r: DroneRegister) -> &'static str {
   match r {
     DroneRegister::Low => "low",
     DroneRegister::Mid => "mid",
     DroneRegister::High => "high",
+  }
+}
+
+pub fn texture_from_str(s: &str) -> Option<DroneTexture> {
+  match s {
+    "bong" => Some(DroneTexture::Bong),
+    "arpeggio" => Some(DroneTexture::Arpeggio),
+    "thrum" => Some(DroneTexture::Thrum),
+    "shimmer" => Some(DroneTexture::Shimmer),
+    "reactor" => Some(DroneTexture::Reactor),
+    "warpcore" => Some(DroneTexture::Warpcore),
+    _ => None,
+  }
+}
+
+pub fn register_from_str(s: &str) -> Option<DroneRegister> {
+  match s {
+    "low" => Some(DroneRegister::Low),
+    "mid" => Some(DroneRegister::Mid),
+    "high" => Some(DroneRegister::High),
+    _ => None,
   }
 }
