@@ -95,8 +95,10 @@ type Msg
     | DroneVolDebounce Int Int Float
     | SetDroneRepeatRate Int String
     | DroneRepeatRateDebounce Int Int Float
-    | SetDroneRepeatFactor Int String
-    | DroneRepeatFactorDebounce Int Int Float
+    | SetDroneRepeatCurve Int String
+    | DroneRepeatCurveDebounce Int Int Float
+    | SetDronePhraseGap Int String
+    | DronePhraseGapDebounce Int Int Float
     | OverrideCheck Int String
     | ClearCheckOverride Int
     | SetDroneBoops Int String
@@ -464,9 +466,9 @@ update msg model =
             , Ports.websocketSend (encodeSetDroneRepeatRate index rate)
             )
 
-        SetDroneRepeatFactor index valStr ->
+        SetDroneRepeatCurve index valStr ->
             case String.toFloat valStr of
-                Just factor ->
+                Just curve ->
                     let
                         id =
                             model.nextDebounce
@@ -475,7 +477,7 @@ update msg model =
                             List.indexedMap
                                 (\i d ->
                                     if i == index then
-                                        { d | repeatFactor = factor }
+                                        { d | repeatCurve = curve }
 
                                     else
                                         d
@@ -488,15 +490,50 @@ update msg model =
                       }
                     , Process.sleep 50
                         |> Task.perform
-                            (\_ -> DroneRepeatFactorDebounce id index factor)
+                            (\_ -> DroneRepeatCurveDebounce id index curve)
                     )
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        DroneRepeatFactorDebounce _ index factor ->
+        DroneRepeatCurveDebounce _ index curve ->
             ( model
-            , Ports.websocketSend (encodeSetDroneRepeatFactor index factor)
+            , Ports.websocketSend (encodeSetDroneRepeatCurve index curve)
+            )
+
+        SetDronePhraseGap index valStr ->
+            case String.toFloat valStr of
+                Just gap ->
+                    let
+                        id =
+                            model.nextDebounce
+
+                        newDrones =
+                            List.indexedMap
+                                (\i d ->
+                                    if i == index then
+                                        { d | phraseGap = gap }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                    in
+                    ( { model
+                        | drones = newDrones
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform
+                            (\_ -> DronePhraseGapDebounce id index gap)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DronePhraseGapDebounce _ index gap ->
+            ( model
+            , Ports.websocketSend (encodeSetDronePhraseGap index gap)
             )
 
         OverrideCheck index severity ->
@@ -943,13 +980,29 @@ handleServerMsg raw model =
             , Cmd.none
             )
 
-        Just (DroneRepeatFactorChanged index factor) ->
+        Just (DroneRepeatCurveChanged index curve) ->
             ( { model
                 | drones =
                     List.indexedMap
                         (\i d ->
                             if i == index then
-                                { d | repeatFactor = factor }
+                                { d | repeatCurve = curve }
+
+                            else
+                                d
+                        )
+                        model.drones
+              }
+            , Cmd.none
+            )
+
+        Just (DronePhraseGapChanged index gap) ->
+            ( { model
+                | drones =
+                    List.indexedMap
+                        (\i d ->
+                            if i == index then
+                                { d | phraseGap = gap }
 
                             else
                                 d
@@ -1518,24 +1571,47 @@ viewDrone lockedDrones index drone =
                 []
             ]
         , div [ class "control-row" ]
-            [ label [ class "slider-label" ] [ text "Factor" ]
+            [ label [ class "slider-label" ] [ text "Curve" ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min "0.1"
+                , Html.Attributes.max "5"
+                , step "0.1"
+                , value (String.fromFloat drone.repeatCurve)
+                , onInput (SetDroneRepeatCurve index)
+                , class "slider"
+                ]
+                []
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0.1"
+                , Html.Attributes.max "5"
+                , step "0.1"
+                , value (String.fromFloat drone.repeatCurve)
+                , onInput (SetDroneRepeatCurve index)
+                , class "slider-value-input"
+                ]
+                []
+            ]
+        , div [ class "control-row" ]
+            [ label [ class "slider-label" ] [ text "Gap" ]
             , input
                 [ type_ "range"
                 , Html.Attributes.min "0"
-                , Html.Attributes.max "5"
+                , Html.Attributes.max "16"
                 , step "0.1"
-                , value (String.fromFloat drone.repeatFactor)
-                , onInput (SetDroneRepeatFactor index)
+                , value (String.fromFloat drone.phraseGap)
+                , onInput (SetDronePhraseGap index)
                 , class "slider"
                 ]
                 []
             , input
                 [ type_ "number"
                 , Html.Attributes.min "0"
-                , Html.Attributes.max "5"
+                , Html.Attributes.max "16"
                 , step "0.1"
-                , value (String.fromFloat drone.repeatFactor)
-                , onInput (SetDroneRepeatFactor index)
+                , value (String.fromFloat drone.phraseGap)
+                , onInput (SetDronePhraseGap index)
                 , class "slider-value-input"
                 ]
                 []

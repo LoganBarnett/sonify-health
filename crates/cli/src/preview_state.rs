@@ -234,9 +234,11 @@ pub struct PreviewState {
   pub drone_volumes: Vec<Shared>,
   /// Direct speed multiplier on phrase repetition (0.1..=10.0).
   pub drone_repeat_rates: Vec<Shared>,
-  /// How much the polled metric value contributes to repeat speed
-  /// (0.0..=5.0).
-  pub drone_repeat_factors: Vec<Shared>,
+  /// Power-curve exponent controlling how the metric reshapes the
+  /// gap range (0.1..=5.0).
+  pub drone_repeat_curves: Vec<Shared>,
+  /// Base gap in seconds between drone phrases (0.0..=16.0).
+  pub drone_phrase_gaps: Vec<Shared>,
   /// `mute_factor * per_metric_volume`, wired into audio graphs.
   pub combined_volumes: Vec<Shared>,
   pub master_volume: Shared,
@@ -281,8 +283,10 @@ impl PreviewState {
       (0..drone_count).map(|_| shared(1.0)).collect();
     let drone_repeat_rates: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
-    let drone_repeat_factors: Vec<Shared> =
+    let drone_repeat_curves: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
+    let drone_phrase_gaps: Vec<Shared> =
+      (0..drone_count).map(|_| shared(4.0)).collect();
     let combined_volumes: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
 
@@ -331,7 +335,8 @@ impl PreviewState {
       muted,
       drone_volumes,
       drone_repeat_rates,
-      drone_repeat_factors,
+      drone_repeat_curves,
+      drone_phrase_gaps,
       combined_volumes,
       master_volume: shared(1.0),
       heartbeat_volume: shared(1.0),
@@ -497,7 +502,8 @@ impl PreviewState {
           "value": self.drone_state.metrics[i].value(),
           "volume": self.drone_volumes[i].value(),
           "repeat_rate": self.drone_repeat_rates[i].value(),
-          "repeat_factor": self.drone_repeat_factors[i].value(),
+          "repeat_curve": self.drone_repeat_curves[i].value(),
+          "phrase_gap": self.drone_phrase_gaps[i].value(),
           "base_freq": info.base_freq,
           "boops": info.boops,
           "overridden": drone_overrides[i].is_some(),
@@ -640,7 +646,14 @@ impl PreviewState {
 
     // Snapshot locked drone settings before resetting.
     let locked_drone_indices = self.locked_drones.read().unwrap().clone();
-    let locked_drone_snapshots: Vec<(usize, DroneMetricInfo, f32, f32, f32)> = {
+    let locked_drone_snapshots: Vec<(
+      usize,
+      DroneMetricInfo,
+      f32,
+      f32,
+      f32,
+      f32,
+    )> = {
       let infos = self.drone_infos.read().unwrap();
       locked_drone_indices
         .iter()
@@ -651,7 +664,8 @@ impl PreviewState {
               info.clone(),
               self.drone_volumes[i].value(),
               self.drone_repeat_rates[i].value(),
-              self.drone_repeat_factors[i].value(),
+              self.drone_repeat_curves[i].value(),
+              self.drone_phrase_gaps[i].value(),
             )
           })
         })
@@ -680,20 +694,24 @@ impl PreviewState {
     for rr in &self.drone_repeat_rates {
       rr.set_value(1.0);
     }
-    for rf in &self.drone_repeat_factors {
-      rf.set_value(1.0);
+    for rc in &self.drone_repeat_curves {
+      rc.set_value(1.0);
+    }
+    for pg in &self.drone_phrase_gaps {
+      pg.set_value(4.0);
     }
 
     // Restore locked drone settings.
     {
       let mut infos = self.drone_infos.write().unwrap();
-      for (i, info, vol, rate, factor) in &locked_drone_snapshots {
+      for (i, info, vol, rate, curve, gap) in &locked_drone_snapshots {
         if let Some(entry) = infos.get_mut(*i) {
           *entry = info.clone();
         }
         self.drone_volumes[*i].set_value(*vol);
         self.drone_repeat_rates[*i].set_value(*rate);
-        self.drone_repeat_factors[*i].set_value(*factor);
+        self.drone_repeat_curves[*i].set_value(*curve);
+        self.drone_phrase_gaps[*i].set_value(*gap);
       }
     }
     self.master_volume.set_value(1.0);
@@ -878,7 +896,8 @@ mod tests {
     value: f64,
     volume: f64,
     repeat_rate: f64,
-    repeat_factor: f64,
+    repeat_curve: f64,
+    phrase_gap: f64,
     base_freq: Option<f64>,
     boops: u64,
     overridden: bool,

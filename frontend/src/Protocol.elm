@@ -21,7 +21,8 @@ module Protocol exposing
     , encodeSetBoopSpec
     , encodeSetDroneBoops
     , encodeSetDroneFreq
-    , encodeSetDroneRepeatFactor
+    , encodeSetDronePhraseGap
+    , encodeSetDroneRepeatCurve
     , encodeSetDroneRepeatRate
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
@@ -61,7 +62,8 @@ type alias DroneInfo =
     , value : Float
     , volume : Float
     , repeatRate : Float
-    , repeatFactor : Float
+    , repeatCurve : Float
+    , phraseGap : Float
     , baseFreq : Maybe Float
     , boops : Int
     , overridden : Bool
@@ -123,7 +125,8 @@ type ServerMsg
     | BoopCountChanged Int
     | DroneConfigChanged Int (Maybe Float) Int
     | DroneRepeatRateChanged Int Float
-    | DroneRepeatFactorChanged Int Float
+    | DroneRepeatCurveChanged Int Float
+    | DronePhraseGapChanged Int Float
     | CheckLog CheckLogEntry
     | VoiceExport { toml : String, json : String, nix : String }
     | LockedParamsChanged String (Maybe Int) (List String)
@@ -173,8 +176,11 @@ serverMsgDecoder =
                     "drone_repeat_rate_changed" ->
                         droneRepeatRateChangedDecoder
 
-                    "drone_repeat_factor_changed" ->
-                        droneRepeatFactorChangedDecoder
+                    "drone_repeat_curve_changed" ->
+                        droneRepeatCurveChangedDecoder
+
+                    "drone_phrase_gap_changed" ->
+                        dronePhraseGapChangedDecoder
 
                     "check_log" ->
                         checkLogDecoder
@@ -318,7 +324,8 @@ droneInfoDecoderWithMeta metas =
         |> andMap (D.field "value" D.float)
         |> andMap (D.field "volume" D.float)
         |> andMap (D.field "repeat_rate" D.float)
-        |> andMap (D.field "repeat_factor" D.float)
+        |> andMap (D.field "repeat_curve" D.float)
+        |> andMap (D.field "phrase_gap" D.float)
         |> andMap (D.maybe (D.field "base_freq" D.float))
         |> andMap (D.field "boops" D.int)
         |> andMap (D.field "overridden" D.bool)
@@ -412,11 +419,18 @@ droneRepeatRateChangedDecoder =
         (D.field "rate" D.float)
 
 
-droneRepeatFactorChangedDecoder : D.Decoder ServerMsg
-droneRepeatFactorChangedDecoder =
-    D.map2 DroneRepeatFactorChanged
+droneRepeatCurveChangedDecoder : D.Decoder ServerMsg
+droneRepeatCurveChangedDecoder =
+    D.map2 DroneRepeatCurveChanged
         (D.field "index" D.int)
-        (D.field "factor" D.float)
+        (D.field "curve" D.float)
+
+
+dronePhraseGapChangedDecoder : D.Decoder ServerMsg
+dronePhraseGapChangedDecoder =
+    D.map2 DronePhraseGapChanged
+        (D.field "index" D.int)
+        (D.field "gap" D.float)
 
 
 voiceExportDecoder : D.Decoder ServerMsg
@@ -549,12 +563,22 @@ encodeSetDroneRepeatRate index rate =
         |> E.encode 0
 
 
-encodeSetDroneRepeatFactor : Int -> Float -> String
-encodeSetDroneRepeatFactor index factor =
+encodeSetDroneRepeatCurve : Int -> Float -> String
+encodeSetDroneRepeatCurve index curve =
     E.object
-        [ ( "type", E.string "set_drone_repeat_factor" )
+        [ ( "type", E.string "set_drone_repeat_curve" )
         , ( "index", E.int index )
-        , ( "factor", E.float factor )
+        , ( "curve", E.float curve )
+        ]
+        |> E.encode 0
+
+
+encodeSetDronePhraseGap : Int -> Float -> String
+encodeSetDronePhraseGap index gap =
+    E.object
+        [ ( "type", E.string "set_drone_phrase_gap" )
+        , ( "index", E.int index )
+        , ( "gap", E.float gap )
         ]
         |> E.encode 0
 

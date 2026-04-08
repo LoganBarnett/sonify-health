@@ -580,7 +580,7 @@ fn run_drone_preview(
           break;
         }
 
-        let gap = drone::drone_gap_secs(metric as f32);
+        let gap = drone::phrase_gap_secs(4.0, metric as f32, 1.0, 1.0);
         let deadline = std::time::Instant::now() + Duration::from_secs_f64(gap);
         while std::time::Instant::now() < deadline
           && play_run.load(Ordering::Relaxed)
@@ -617,7 +617,7 @@ fn run_drone_preview(
         break;
       }
 
-      let gap = drone::drone_gap_secs(metric as f32);
+      let gap = drone::phrase_gap_secs(4.0, metric as f32, 1.0, 1.0);
       let gap_deadline =
         std::time::Instant::now() + Duration::from_secs_f64(gap);
       while std::time::Instant::now() < gap_deadline

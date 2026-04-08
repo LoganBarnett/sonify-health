@@ -281,16 +281,32 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_drone_repeat_factor" => {
+    "set_drone_repeat_curve" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let factor = msg.get("factor").and_then(|v| v.as_f64())? as f32;
-      let clamped = factor.clamp(0.0, 5.0);
-      preview.drone_repeat_factors.get(index)?.set_value(clamped);
+      let curve = msg.get("curve").and_then(|v| v.as_f64())? as f32;
+      let clamped = curve.clamp(0.1, 5.0);
+      preview.drone_repeat_curves.get(index)?.set_value(clamped);
       let _ = preview.broadcast_tx.send(
         json!({
-          "type": "drone_repeat_factor_changed",
+          "type": "drone_repeat_curve_changed",
           "index": index,
-          "factor": clamped,
+          "curve": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_drone_phrase_gap" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let gap = msg.get("gap").and_then(|v| v.as_f64())? as f32;
+      let clamped = gap.clamp(0.0, 16.0);
+      preview.drone_phrase_gaps.get(index)?.set_value(clamped);
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_phrase_gap_changed",
+          "index": index,
+          "gap": clamped,
         })
         .to_string(),
       );

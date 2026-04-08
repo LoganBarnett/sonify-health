@@ -289,12 +289,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             break;
           }
 
-          // Gap between phrases, driven by the metric value scaled
-          // by repeat_factor and sped up by repeat_rate.
-          let factor = prev.drone_repeat_factors[i].value().max(0.0);
-          let effective_metric = (metric * factor).clamp(0.0, 1.0);
-          let rate = (prev.drone_repeat_rates[i].value() as f64).max(0.1);
-          let gap = drone::drone_gap_secs(effective_metric) / rate;
+          // Gap between phrases, shaped by repeat_curve and scaled
+          // by repeat_rate.
+          let base_gap = prev.drone_phrase_gaps[i].value() as f64;
+          let curve = prev.drone_repeat_curves[i].value();
+          let rate = prev.drone_repeat_rates[i].value();
+          let gap = drone::phrase_gap_secs(base_gap, metric, curve, rate);
           sleep_checking(&run, Duration::from_secs_f64(gap));
         }
       })
