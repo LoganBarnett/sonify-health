@@ -253,7 +253,10 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
-  let voice = config.voice();
+  let mut voice = config.voice();
+  if let Some(hb_overrides) = &config.daemon.heartbeat_voice_overrides {
+    voice = voice.with_overrides(hb_overrides);
+  }
   let scale = config.scale();
   let scale_key =
     config.scale_key_for(&gethostname::gethostname().to_string_lossy());
@@ -265,6 +268,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     Arc::clone(&muted),
     &config.daemon.heartbeat_checks,
     &config.daemon.drone_metrics,
+    &config.daemon.drone_voice_overrides,
     config.daemon.timing.slot_duration_secs,
     &config.daemon.heartbeat_notes,
   ));

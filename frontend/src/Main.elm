@@ -93,6 +93,10 @@ type Msg
     | BoopCountDebounce Int Int
     | SetDroneVolume Int String
     | DroneVolDebounce Int Int Float
+    | SetDroneRepeatRate Int String
+    | DroneRepeatRateDebounce Int Int Float
+    | SetDroneRepeatFactor Int String
+    | DroneRepeatFactorDebounce Int Int Float
     | OverrideCheck Int String
     | ClearCheckOverride Int
     | SetDroneBoops Int String
@@ -423,6 +427,76 @@ update msg model =
         DroneVolDebounce _ index vol ->
             ( model
             , Ports.websocketSend (encodeSetDroneVolume index vol)
+            )
+
+        SetDroneRepeatRate index valStr ->
+            case String.toFloat valStr of
+                Just rate ->
+                    let
+                        id =
+                            model.nextDebounce
+
+                        newDrones =
+                            List.indexedMap
+                                (\i d ->
+                                    if i == index then
+                                        { d | repeatRate = rate }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                    in
+                    ( { model
+                        | drones = newDrones
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform
+                            (\_ -> DroneRepeatRateDebounce id index rate)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DroneRepeatRateDebounce _ index rate ->
+            ( model
+            , Ports.websocketSend (encodeSetDroneRepeatRate index rate)
+            )
+
+        SetDroneRepeatFactor index valStr ->
+            case String.toFloat valStr of
+                Just factor ->
+                    let
+                        id =
+                            model.nextDebounce
+
+                        newDrones =
+                            List.indexedMap
+                                (\i d ->
+                                    if i == index then
+                                        { d | repeatFactor = factor }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                    in
+                    ( { model
+                        | drones = newDrones
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform
+                            (\_ -> DroneRepeatFactorDebounce id index factor)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DroneRepeatFactorDebounce _ index factor ->
+            ( model
+            , Ports.websocketSend (encodeSetDroneRepeatFactor index factor)
             )
 
         OverrideCheck index severity ->
@@ -844,6 +918,38 @@ handleServerMsg raw model =
                         (\i d ->
                             if i == index then
                                 { d | baseFreq = baseFreq, boops = boops }
+
+                            else
+                                d
+                        )
+                        model.drones
+              }
+            , Cmd.none
+            )
+
+        Just (DroneRepeatRateChanged index rate) ->
+            ( { model
+                | drones =
+                    List.indexedMap
+                        (\i d ->
+                            if i == index then
+                                { d | repeatRate = rate }
+
+                            else
+                                d
+                        )
+                        model.drones
+              }
+            , Cmd.none
+            )
+
+        Just (DroneRepeatFactorChanged index factor) ->
+            ( { model
+                | drones =
+                    List.indexedMap
+                        (\i d ->
+                            if i == index then
+                                { d | repeatFactor = factor }
 
                             else
                                 d
@@ -1384,6 +1490,52 @@ viewDrone lockedDrones index drone =
                 , step "0.01"
                 , value (String.fromFloat drone.volume)
                 , onInput (SetDroneVolume index)
+                , class "slider-value-input"
+                ]
+                []
+            ]
+        , div [ class "control-row" ]
+            [ label [ class "slider-label" ] [ text "Repeat" ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min "0.1"
+                , Html.Attributes.max "10"
+                , step "0.1"
+                , value (String.fromFloat drone.repeatRate)
+                , onInput (SetDroneRepeatRate index)
+                , class "slider"
+                ]
+                []
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0.1"
+                , Html.Attributes.max "10"
+                , step "0.1"
+                , value (String.fromFloat drone.repeatRate)
+                , onInput (SetDroneRepeatRate index)
+                , class "slider-value-input"
+                ]
+                []
+            ]
+        , div [ class "control-row" ]
+            [ label [ class "slider-label" ] [ text "Factor" ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max "5"
+                , step "0.1"
+                , value (String.fromFloat drone.repeatFactor)
+                , onInput (SetDroneRepeatFactor index)
+                , class "slider"
+                ]
+                []
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max "5"
+                , step "0.1"
+                , value (String.fromFloat drone.repeatFactor)
+                , onInput (SetDroneRepeatFactor index)
                 , class "slider-value-input"
                 ]
                 []

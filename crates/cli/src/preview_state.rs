@@ -5,7 +5,7 @@ use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
   state::{DroneState, HeartbeatState},
-  BoopSpec, PentatonicScale, Severity, Voice,
+  BoopSpec, PentatonicScale, Severity, Voice, VoiceOverrides,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{
@@ -224,6 +224,11 @@ pub struct PreviewState {
   pub muted: Arc<AtomicBool>,
   /// Per-metric raw volume set by the UI (0.0..=1.0).
   pub drone_volumes: Vec<Shared>,
+  /// Direct speed multiplier on phrase repetition (0.1..=10.0).
+  pub drone_repeat_rates: Vec<Shared>,
+  /// How much the polled metric value contributes to repeat speed
+  /// (0.0..=5.0).
+  pub drone_repeat_factors: Vec<Shared>,
   /// `mute_factor * per_metric_volume`, wired into audio graphs.
   pub combined_volumes: Vec<Shared>,
   pub master_volume: Shared,
@@ -257,6 +262,7 @@ impl PreviewState {
     muted: Arc<AtomicBool>,
     heartbeat_checks: &[HeartbeatCheckConfig],
     drone_metrics: &[DroneMetricConfig],
+    drone_voice_overrides: &HashMap<String, VoiceOverrides>,
     slot_secs: f64,
     initial_notes: &[BoopSpec],
   ) -> Self {
@@ -264,6 +270,10 @@ impl PreviewState {
     let check_count = heartbeat_checks.len();
 
     let drone_volumes: Vec<Shared> =
+      (0..drone_count).map(|_| shared(1.0)).collect();
+    let drone_repeat_rates: Vec<Shared> =
+      (0..drone_count).map(|_| shared(1.0)).collect();
+    let drone_repeat_factors: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
     let combined_volumes: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
@@ -297,8 +307,12 @@ impl PreviewState {
 
     let mut voices = HashMap::new();
     voices.insert(VoiceOwner::Heartbeat, voice.clone());
-    for i in 0..drone_count {
-      voices.insert(VoiceOwner::Drone(i), voice.clone());
+    for (i, dm) in drone_metrics.iter().enumerate() {
+      let drone_voice = drone_voice_overrides
+        .get(&dm.name)
+        .map(|ovr| voice.clone().with_overrides(ovr))
+        .unwrap_or_else(|| voice.clone());
+      voices.insert(VoiceOwner::Drone(i), drone_voice);
     }
 
     Self {
@@ -308,6 +322,8 @@ impl PreviewState {
       scale_key,
       muted,
       drone_volumes,
+      drone_repeat_rates,
+      drone_repeat_factors,
       combined_volumes,
       master_volume: shared(1.0),
       heartbeat_volume: shared(1.0),
@@ -472,6 +488,8 @@ impl PreviewState {
           "name": info.name,
           "value": self.drone_state.metrics[i].value(),
           "volume": self.drone_volumes[i].value(),
+          "repeat_rate": self.drone_repeat_rates[i].value(),
+          "repeat_factor": self.drone_repeat_factors[i].value(),
           "base_freq": info.base_freq,
           "boops": info.boops,
           "overridden": drone_overrides[i].is_some(),
@@ -614,14 +632,20 @@ impl PreviewState {
 
     // Snapshot locked drone settings before resetting.
     let locked_drone_indices = self.locked_drones.read().unwrap().clone();
-    let locked_drone_snapshots: Vec<(usize, DroneMetricInfo, f32)> = {
+    let locked_drone_snapshots: Vec<(usize, DroneMetricInfo, f32, f32, f32)> = {
       let infos = self.drone_infos.read().unwrap();
       locked_drone_indices
         .iter()
         .filter_map(|&i| {
-          infos
-            .get(i)
-            .map(|info| (i, info.clone(), self.drone_volumes[i].value()))
+          infos.get(i).map(|info| {
+            (
+              i,
+              info.clone(),
+              self.drone_volumes[i].value(),
+              self.drone_repeat_rates[i].value(),
+              self.drone_repeat_factors[i].value(),
+            )
+          })
         })
         .collect()
     };
@@ -645,15 +669,23 @@ impl PreviewState {
     for dv in &self.drone_volumes {
       dv.set_value(1.0);
     }
+    for rr in &self.drone_repeat_rates {
+      rr.set_value(1.0);
+    }
+    for rf in &self.drone_repeat_factors {
+      rf.set_value(1.0);
+    }
 
     // Restore locked drone settings.
     {
       let mut infos = self.drone_infos.write().unwrap();
-      for (i, info, vol) in &locked_drone_snapshots {
+      for (i, info, vol, rate, factor) in &locked_drone_snapshots {
         if let Some(entry) = infos.get_mut(*i) {
           *entry = info.clone();
         }
         self.drone_volumes[*i].set_value(*vol);
+        self.drone_repeat_rates[*i].set_value(*rate);
+        self.drone_repeat_factors[*i].set_value(*factor);
       }
     }
     self.master_volume.set_value(1.0);
@@ -834,6 +866,8 @@ mod tests {
     name: String,
     value: f64,
     volume: f64,
+    repeat_rate: f64,
+    repeat_factor: f64,
     base_freq: Option<f64>,
     boops: u64,
     overridden: bool,
@@ -890,6 +924,7 @@ mod tests {
       Arc::new(AtomicBool::new(false)),
       &checks,
       &drones,
+      &HashMap::new(),
       4.0,
       &[],
     )

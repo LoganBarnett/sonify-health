@@ -40,12 +40,11 @@ command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \
 result_mode = "stdout"
 register = "mid"
 
-[voice]
-scale_key = "local"
+[heartbeat.voice]
 base_freq = 1165.4094037952248
-sine_ratio = 1.0
-tri_ratio = 0.07
-saw_ratio = 0.06
+sine_ratio = 2.37
+tri_ratio = 1.22
+saw_ratio = 0.02
 attack_ms = 6.0
 release_ms = 22.0
 chirp_ratio = 1.01
@@ -54,9 +53,15 @@ reverb_mix = 0.89
 note_seed = 0.16436162216471262
 echo_delay = 0.32
 echo_mix = 0.33
-brightness = 0.08
-resonance = 0.89
+brightness = 1.82
+resonance = 3.72
 sub_octave = 0.03
+note_spread = 0.36612150266283083
+vibrato_rate = 0.0
+vibrato_depth = 0.48924022677787815
+tremolo_rate = 0.0
+tremolo_depth = 0.11162006351727571
+amplitude = 0.3271526204901677
 
 [[heartbeat.notes]]
 freq = 3668.0
@@ -73,3 +78,26 @@ duration = 0.2
 [[heartbeat.notes]]
 freq = 4307.0
 duration = 0.22
+
+[drone_voices.cpu]
+base_freq = 156.0
+sine_ratio = 0.46
+tri_ratio = 1.61
+saw_ratio = 0.3
+attack_ms = 397.0
+release_ms = 1000.0
+chirp_ratio = 1.0
+stereo_pan = -0.42
+reverb_mix = 1.0
+note_seed = 0.16436162216471262
+echo_delay = 0.15
+echo_mix = 0.54
+brightness = 0.32
+resonance = 2.98
+sub_octave = 0.31
+note_spread = 0.61
+vibrato_rate = 1.1
+vibrato_depth = 0.12
+tremolo_rate = 20.0
+tremolo_depth = 0.28
+amplitude = 0.43

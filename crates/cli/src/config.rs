@@ -3,6 +3,7 @@ use sonify_health_lib::{
   check::HeartbeatCheckConfig, timing::TimingConfig, BoopSpec,
   DroneMetricConfig, LogFormat, LogLevel, Voice, VoiceOverrides,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio_listener::ListenerAddress;
@@ -60,6 +61,7 @@ pub(crate) struct ConfigFileRaw {
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
+  drone_voices: Option<HashMap<String, VoiceOverrides>>,
   oidc: Option<OidcSectionRaw>,
 }
 
@@ -79,6 +81,7 @@ struct HeartbeatSectionRaw {
   checks: Vec<HeartbeatCheckConfig>,
   #[serde(default)]
   notes: Vec<NoteSpec>,
+  voice: Option<VoiceOverrides>,
 }
 
 /// A note specification as it appears in the config file under
@@ -132,6 +135,12 @@ pub struct DaemonConfig {
   pub heartbeat_notes: Vec<BoopSpec>,
   pub drone_poll_interval_secs: f64,
   pub drone_metrics: Vec<DroneMetricConfig>,
+  /// Voice overrides from `[heartbeat.voice]`, applied on top of the
+  /// base voice (hostname + `[voice]`).
+  pub heartbeat_voice_overrides: Option<VoiceOverrides>,
+  /// Per-drone voice overrides from `[drone_voices.<name>]`, keyed
+  /// by metric name.
+  pub drone_voice_overrides: HashMap<String, VoiceOverrides>,
 }
 
 impl Default for DaemonConfig {
@@ -142,6 +151,8 @@ impl Default for DaemonConfig {
       heartbeat_notes: Vec::new(),
       drone_poll_interval_secs: 5.0,
       drone_metrics: Vec::new(),
+      heartbeat_voice_overrides: None,
+      drone_voice_overrides: HashMap::new(),
     }
   }
 }
@@ -201,6 +212,8 @@ impl Config {
       .map(|d| (d.poll_interval_secs.unwrap_or(5.0), d.metrics))
       .unwrap_or((5.0, Vec::new()));
 
+    let drone_voice_overrides = file.drone_voices.unwrap_or_default();
+
     let daemon = file
       .heartbeat
       .map(|hb| {
@@ -218,11 +231,14 @@ impl Config {
           heartbeat_notes,
           drone_poll_interval_secs,
           drone_metrics: drone_metrics.clone(),
+          heartbeat_voice_overrides: hb.voice,
+          drone_voice_overrides: drone_voice_overrides.clone(),
         }
       })
       .unwrap_or(DaemonConfig {
         drone_poll_interval_secs,
         drone_metrics,
+        drone_voice_overrides,
         ..DaemonConfig::default()
       });
 
@@ -424,5 +440,245 @@ mod tests {
     assert!((hb.notes[0].duration - 0.25).abs() < f64::EPSILON);
     assert!((hb.notes[1].freq - 880.0).abs() < f64::EPSILON);
     assert!((hb.notes[1].duration - 0.15).abs() < f64::EPSILON);
+  }
+
+  #[test]
+  fn heartbeat_voice_section_parses() {
+    let toml = r#"
+      [heartbeat.voice]
+      base_freq = 440.0
+      sine_ratio = 1.5
+      amplitude = 0.3
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let voice = raw.heartbeat.unwrap().voice.unwrap();
+    assert_eq!(voice.base_freq, Some(440.0));
+    assert_eq!(voice.sine_ratio, Some(1.5));
+    assert_eq!(voice.amplitude, Some(0.3));
+  }
+
+  #[test]
+  fn drone_voices_section_parses() {
+    let toml = r#"
+      [drone_voices.cpu]
+      base_freq = 220.0
+      sine_ratio = 0.5
+
+      [drone_voices.mem]
+      base_freq = 330.0
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let dv = raw.drone_voices.unwrap();
+    assert_eq!(dv.len(), 2);
+    assert_eq!(dv["cpu"].base_freq, Some(220.0));
+    assert_eq!(dv["cpu"].sine_ratio, Some(0.5));
+    assert_eq!(dv["mem"].base_freq, Some(330.0));
+    assert_eq!(dv["mem"].sine_ratio, None);
+  }
+
+  /// The exported TOML format must round-trip through config loading.
+  /// `format_toml` produces `[heartbeat.voice]` and
+  /// `[drone_voices.<name>]` sections; these must be parsed by
+  /// `ConfigFileRaw` so users can paste an export into a config file.
+  #[test]
+  fn export_toml_round_trips_through_config_parser() {
+    let voice = Voice::from_hostname("test");
+    let drone_voice = Voice::from_hostname("drone-test");
+
+    // Simulate what format_toml produces: heartbeat voice, notes,
+    // and drone voices.
+    let exported = format!(
+      r#"scale_key = "C"
+
+[heartbeat.voice]
+base_freq = {hb_base}
+sine_ratio = {hb_sine}
+tri_ratio = {hb_tri}
+saw_ratio = {hb_saw}
+attack_ms = {hb_attack}
+release_ms = {hb_release}
+chirp_ratio = {hb_chirp}
+stereo_pan = {hb_pan}
+reverb_mix = {hb_reverb}
+note_seed = {hb_seed}
+echo_delay = {hb_echo_delay}
+echo_mix = {hb_echo_mix}
+brightness = {hb_brightness}
+resonance = {hb_resonance}
+sub_octave = {hb_sub}
+note_spread = {hb_spread}
+vibrato_rate = {hb_vib_rate}
+vibrato_depth = {hb_vib_depth}
+tremolo_rate = {hb_trem_rate}
+tremolo_depth = {hb_trem_depth}
+amplitude = {hb_amp}
+
+[[heartbeat.notes]]
+freq = 440.0
+duration = 0.25
+
+[[heartbeat.notes]]
+freq = 880.0
+duration = 0.15
+
+[drone_voices.cpu]
+base_freq = {dr_base}
+sine_ratio = {dr_sine}
+tri_ratio = {dr_tri}
+saw_ratio = {dr_saw}
+attack_ms = {dr_attack}
+release_ms = {dr_release}
+chirp_ratio = {dr_chirp}
+stereo_pan = {dr_pan}
+reverb_mix = {dr_reverb}
+note_seed = {dr_seed}
+echo_delay = {dr_echo_delay}
+echo_mix = {dr_echo_mix}
+brightness = {dr_brightness}
+resonance = {dr_resonance}
+sub_octave = {dr_sub}
+note_spread = {dr_spread}
+vibrato_rate = {dr_vib_rate}
+vibrato_depth = {dr_vib_depth}
+tremolo_rate = {dr_trem_rate}
+tremolo_depth = {dr_trem_depth}
+amplitude = {dr_amp}
+"#,
+      hb_base = voice.base_freq,
+      hb_sine = voice.sine_ratio,
+      hb_tri = voice.tri_ratio,
+      hb_saw = voice.saw_ratio,
+      hb_attack = voice.attack_ms,
+      hb_release = voice.release_ms,
+      hb_chirp = voice.chirp_ratio,
+      hb_pan = voice.stereo_pan,
+      hb_reverb = voice.reverb_mix,
+      hb_seed = voice.note_seed,
+      hb_echo_delay = voice.echo_delay,
+      hb_echo_mix = voice.echo_mix,
+      hb_brightness = voice.brightness,
+      hb_resonance = voice.resonance,
+      hb_sub = voice.sub_octave,
+      hb_spread = voice.note_spread,
+      hb_vib_rate = voice.vibrato_rate,
+      hb_vib_depth = voice.vibrato_depth,
+      hb_trem_rate = voice.tremolo_rate,
+      hb_trem_depth = voice.tremolo_depth,
+      hb_amp = voice.amplitude,
+      dr_base = drone_voice.base_freq,
+      dr_sine = drone_voice.sine_ratio,
+      dr_tri = drone_voice.tri_ratio,
+      dr_saw = drone_voice.saw_ratio,
+      dr_attack = drone_voice.attack_ms,
+      dr_release = drone_voice.release_ms,
+      dr_chirp = drone_voice.chirp_ratio,
+      dr_pan = drone_voice.stereo_pan,
+      dr_reverb = drone_voice.reverb_mix,
+      dr_seed = drone_voice.note_seed,
+      dr_echo_delay = drone_voice.echo_delay,
+      dr_echo_mix = drone_voice.echo_mix,
+      dr_brightness = drone_voice.brightness,
+      dr_resonance = drone_voice.resonance,
+      dr_sub = drone_voice.sub_octave,
+      dr_spread = drone_voice.note_spread,
+      dr_vib_rate = drone_voice.vibrato_rate,
+      dr_vib_depth = drone_voice.vibrato_depth,
+      dr_trem_rate = drone_voice.tremolo_rate,
+      dr_trem_depth = drone_voice.tremolo_depth,
+      dr_amp = drone_voice.amplitude,
+    );
+
+    let raw: ConfigFileRaw = toml::from_str(&exported)
+      .expect("Exported TOML must parse as ConfigFileRaw");
+
+    // Heartbeat voice params should survive.
+    let hb_voice = raw
+      .heartbeat
+      .as_ref()
+      .expect("Export should produce a [heartbeat] section")
+      .voice
+      .as_ref()
+      .expect("Export should produce a [heartbeat.voice] section");
+    assert!(
+      (hb_voice.base_freq.unwrap() - voice.base_freq).abs() < f64::EPSILON,
+      "Heartbeat base_freq did not round-trip",
+    );
+    assert!(
+      (hb_voice.amplitude.unwrap() - voice.amplitude).abs() < f64::EPSILON,
+      "Heartbeat amplitude did not round-trip",
+    );
+
+    // Drone voice params should survive.
+    let dv = raw
+      .drone_voices
+      .as_ref()
+      .expect("Export should produce a [drone_voices] section");
+    let cpu_voice = dv.get("cpu").expect("Export should include cpu drone");
+    assert!(
+      (cpu_voice.base_freq.unwrap() - drone_voice.base_freq).abs()
+        < f64::EPSILON,
+      "Drone base_freq did not round-trip",
+    );
+    assert!(
+      (cpu_voice.amplitude.unwrap() - drone_voice.amplitude).abs()
+        < f64::EPSILON,
+      "Drone amplitude did not round-trip",
+    );
+
+    // Heartbeat notes should survive.
+    let hb_notes = &raw.heartbeat.unwrap().notes;
+    assert_eq!(hb_notes.len(), 2);
+    assert!((hb_notes[0].freq - 440.0).abs() < f64::EPSILON);
+    assert!((hb_notes[0].duration - 0.25).abs() < f64::EPSILON);
+  }
+
+  /// The example config files must parse without error, including
+  /// their `[heartbeat.voice]` and `[drone_voices.*]` sections.
+  #[test]
+  fn example_configs_parse() {
+    let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .parent()
+      .unwrap()
+      .join("examples");
+    for entry in
+      std::fs::read_dir(&examples_dir).expect("examples directory should exist")
+    {
+      let path = entry.unwrap().path();
+      if path.extension().map(|e| e == "toml").unwrap_or(false) {
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let raw: ConfigFileRaw = toml::from_str(&contents)
+          .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+        // If the example has [heartbeat.voice], it must parse.
+        if contents.contains("[heartbeat.voice]") {
+          assert!(
+            raw
+              .heartbeat
+              .as_ref()
+              .and_then(|hb| hb.voice.as_ref())
+              .is_some(),
+            "{}: [heartbeat.voice] should parse",
+            path.display()
+          );
+        }
+
+        // If the example has [drone_voices.…], it must parse.
+        if contents.contains("[drone_voices.") {
+          assert!(
+            raw
+              .drone_voices
+              .as_ref()
+              .map(|dv| !dv.is_empty())
+              .unwrap_or(false),
+            "{}: [drone_voices] should parse",
+            path.display()
+          );
+        }
+      }
+    }
   }
 }

@@ -21,6 +21,8 @@ module Protocol exposing
     , encodeSetBoopSpec
     , encodeSetDroneBoops
     , encodeSetDroneFreq
+    , encodeSetDroneRepeatFactor
+    , encodeSetDroneRepeatRate
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
@@ -58,6 +60,8 @@ type alias DroneInfo =
     { name : String
     , value : Float
     , volume : Float
+    , repeatRate : Float
+    , repeatFactor : Float
     , baseFreq : Maybe Float
     , boops : Int
     , overridden : Bool
@@ -118,6 +122,8 @@ type ServerMsg
     | HeartbeatLoopChanged Bool
     | BoopCountChanged Int
     | DroneConfigChanged Int (Maybe Float) Int
+    | DroneRepeatRateChanged Int Float
+    | DroneRepeatFactorChanged Int Float
     | CheckLog CheckLogEntry
     | VoiceExport { toml : String, json : String, nix : String }
     | LockedParamsChanged String (Maybe Int) (List String)
@@ -163,6 +169,12 @@ serverMsgDecoder =
 
                     "drone_config_changed" ->
                         droneConfigChangedDecoder
+
+                    "drone_repeat_rate_changed" ->
+                        droneRepeatRateChangedDecoder
+
+                    "drone_repeat_factor_changed" ->
+                        droneRepeatFactorChangedDecoder
 
                     "check_log" ->
                         checkLogDecoder
@@ -301,28 +313,20 @@ droneInfoDecoderWithMeta :
     List { name : String, description : String, min : Float, max : Float, step : Float }
     -> D.Decoder DroneInfo
 droneInfoDecoderWithMeta metas =
-    D.map8
-        (\name val vol bf boops ovr voice locked ->
-            { name = name
-            , value = val
-            , volume = vol
-            , baseFreq = bf
-            , boops = boops
-            , overridden = ovr
-            , voice = voice
-            , lockedParams = locked
-            }
-        )
-        (D.field "name" D.string)
-        (D.field "value" D.float)
-        (D.field "volume" D.float)
-        (D.maybe (D.field "base_freq" D.float))
-        (D.field "boops" D.int)
-        (D.field "overridden" D.bool)
-        (D.field "voice" voiceDecoder
-            |> D.map (\vals -> mergeVoiceParams vals metas)
-        )
-        (D.field "locked_params" (D.list D.string))
+    D.succeed DroneInfo
+        |> andMap (D.field "name" D.string)
+        |> andMap (D.field "value" D.float)
+        |> andMap (D.field "volume" D.float)
+        |> andMap (D.field "repeat_rate" D.float)
+        |> andMap (D.field "repeat_factor" D.float)
+        |> andMap (D.maybe (D.field "base_freq" D.float))
+        |> andMap (D.field "boops" D.int)
+        |> andMap (D.field "overridden" D.bool)
+        |> andMap
+            (D.field "voice" voiceDecoder
+                |> D.map (\vals -> mergeVoiceParams vals metas)
+            )
+        |> andMap (D.field "locked_params" (D.list D.string))
 
 
 paramChangedDecoder : D.Decoder ServerMsg
@@ -399,6 +403,20 @@ droneConfigChangedDecoder =
         (D.field "index" D.int)
         (D.maybe (D.field "base_freq" D.float))
         (D.field "boops" D.int)
+
+
+droneRepeatRateChangedDecoder : D.Decoder ServerMsg
+droneRepeatRateChangedDecoder =
+    D.map2 DroneRepeatRateChanged
+        (D.field "index" D.int)
+        (D.field "rate" D.float)
+
+
+droneRepeatFactorChangedDecoder : D.Decoder ServerMsg
+droneRepeatFactorChangedDecoder =
+    D.map2 DroneRepeatFactorChanged
+        (D.field "index" D.int)
+        (D.field "factor" D.float)
 
 
 voiceExportDecoder : D.Decoder ServerMsg
@@ -517,6 +535,26 @@ encodeSetDroneVolume index vol =
         [ ( "type", E.string "set_drone_volume" )
         , ( "index", E.int index )
         , ( "volume", E.float vol )
+        ]
+        |> E.encode 0
+
+
+encodeSetDroneRepeatRate : Int -> Float -> String
+encodeSetDroneRepeatRate index rate =
+    E.object
+        [ ( "type", E.string "set_drone_repeat_rate" )
+        , ( "index", E.int index )
+        , ( "rate", E.float rate )
+        ]
+        |> E.encode 0
+
+
+encodeSetDroneRepeatFactor : Int -> Float -> String
+encodeSetDroneRepeatFactor index factor =
+    E.object
+        [ ( "type", E.string "set_drone_repeat_factor" )
+        , ( "index", E.int index )
+        , ( "factor", E.float factor )
         ]
         |> E.encode 0
 

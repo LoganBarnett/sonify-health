@@ -265,6 +265,38 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "set_drone_repeat_rate" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let rate = msg.get("rate").and_then(|v| v.as_f64())? as f32;
+      let clamped = rate.clamp(0.1, 10.0);
+      preview.drone_repeat_rates.get(index)?.set_value(clamped);
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_repeat_rate_changed",
+          "index": index,
+          "rate": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_drone_repeat_factor" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let factor = msg.get("factor").and_then(|v| v.as_f64())? as f32;
+      let clamped = factor.clamp(0.0, 5.0);
+      preview.drone_repeat_factors.get(index)?.set_value(clamped);
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_repeat_factor_changed",
+          "index": index,
+          "factor": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
     "override_check" => {
       let layer = msg.get("layer").and_then(|v| v.as_str())?;
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
