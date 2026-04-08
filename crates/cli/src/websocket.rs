@@ -129,6 +129,19 @@ fn broadcast_locked_params(preview: &PreviewState) {
   );
 }
 
+/// Broadcast current locked drone indices to all connected clients.
+fn broadcast_locked_drones(preview: &PreviewState) {
+  let locked = preview.locked_drones.read().unwrap();
+  let locked_json: Vec<_> = locked.iter().collect();
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": "locked_drones_changed",
+      "indices": locked_json,
+    })
+    .to_string(),
+  );
+}
+
 /// Dispatch a single client message.  Returns `Some(reply)` for
 /// messages that should go only to the requesting client.
 /// Broadcast side-effects are fired inline.
@@ -402,7 +415,26 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     "unlock_all" => {
       preview.locked_params.write().unwrap().clear();
+      preview.locked_drones.write().unwrap().clear();
       broadcast_locked_params(preview);
+      broadcast_locked_drones(preview);
+      None
+    }
+
+    "lock_drone" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      if index >= preview.drone_volumes.len() {
+        return None;
+      }
+      preview.locked_drones.write().unwrap().insert(index);
+      broadcast_locked_drones(preview);
+      None
+    }
+
+    "unlock_drone" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      preview.locked_drones.write().unwrap().remove(&index);
+      broadcast_locked_drones(preview);
       None
     }
 

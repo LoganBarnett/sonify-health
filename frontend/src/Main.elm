@@ -27,6 +27,7 @@ type alias Model =
     , debounces : Dict String Int
     , nextDebounce : Int
     , lockedParams : Set String
+    , lockedDrones : Set Int
     , boopSpecs : List BoopSpecInfo
     }
 
@@ -54,6 +55,7 @@ type Msg
     | ExportToml
     | DismissExport
     | ToggleLockParam String
+    | ToggleLockDrone Int
     | UnlockAll
     | SetBoopFreq Int String
     | BoopFreqDebounce Int Int Float
@@ -88,6 +90,7 @@ init =
       , debounces = Dict.empty
       , nextDebounce = 0
       , lockedParams = Set.empty
+      , lockedDrones = Set.empty
       , boopSpecs = []
       }
     , Cmd.none
@@ -349,8 +352,19 @@ update msg model =
                 , Ports.websocketSend (encodeLockParam param)
                 )
 
+        ToggleLockDrone index ->
+            if Set.member index model.lockedDrones then
+                ( { model | lockedDrones = Set.remove index model.lockedDrones }
+                , Ports.websocketSend (encodeUnlockDrone index)
+                )
+
+            else
+                ( { model | lockedDrones = Set.insert index model.lockedDrones }
+                , Ports.websocketSend (encodeLockDrone index)
+                )
+
         UnlockAll ->
-            ( { model | lockedParams = Set.empty }
+            ( { model | lockedParams = Set.empty, lockedDrones = Set.empty }
             , Ports.websocketSend encodeUnlockAll
             )
 
@@ -470,6 +484,7 @@ handleServerMsg raw model =
                 , checks = s.checks
                 , drones = s.drones
                 , lockedParams = Set.fromList s.lockedParams
+                , lockedDrones = Set.fromList s.lockedDrones
                 , boopSpecs = s.boopSpecs
                 , connected = True
               }
@@ -605,6 +620,9 @@ handleServerMsg raw model =
 
         Just (LockedParamsChanged params) ->
             ( { model | lockedParams = Set.fromList params }, Cmd.none )
+
+        Just (LockedDronesChanged indices) ->
+            ( { model | lockedDrones = Set.fromList indices }, Cmd.none )
 
         Just (BoopSpecsChanged specs) ->
             ( { model | boopSpecs = specs }, Cmd.none )
@@ -914,15 +932,37 @@ viewDronePanel model =
 
           else
             div [ class "drone-list" ]
-                (List.indexedMap viewDrone model.drones)
+                (List.indexedMap (viewDrone model.lockedDrones) model.drones)
         ]
 
 
-viewDrone : Int -> DroneInfo -> Html Msg
-viewDrone index drone =
+viewDrone : Set Int -> Int -> DroneInfo -> Html Msg
+viewDrone lockedDrones index drone =
+    let
+        isLocked =
+            Set.member index lockedDrones
+    in
     div [ class "drone-row" ]
         [ div [ class "drone-header" ]
-            [ span [ class "drone-name" ] [ text drone.name ]
+            [ button
+                [ class
+                    (if isLocked then
+                        "btn-lock-active"
+
+                     else
+                        "btn-lock"
+                    )
+                , onClick (ToggleLockDrone index)
+                ]
+                [ text
+                    (if isLocked then
+                        "L"
+
+                     else
+                        "U"
+                    )
+                ]
+            , span [ class "drone-name" ] [ text drone.name ]
             , select
                 [ onInput (SetDroneTexture index)
                 , class "override-select"

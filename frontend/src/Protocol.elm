@@ -10,6 +10,7 @@ module Protocol exposing
     , encodeClearOverride
     , encodeExportToml
     , encodeGetState
+    , encodeLockDrone
     , encodeLockParam
     , encodeOverrideCheck
     , encodeOverrideDrone
@@ -25,6 +26,7 @@ module Protocol exposing
     , encodeSetVoiceParam
     , encodeTriggerHeartbeat
     , encodeUnlockAll
+    , encodeUnlockDrone
     , encodeUnlockParam
     )
 
@@ -88,6 +90,7 @@ type ServerMsg
         , checks : List CheckInfo
         , drones : List DroneInfo
         , lockedParams : List String
+        , lockedDrones : List Int
         , boopSpecs : List BoopSpecInfo
         }
     | ParamChanged String Float
@@ -100,6 +103,7 @@ type ServerMsg
     | CheckLog CheckLogEntry
     | TomlExport String
     | LockedParamsChanged (List String)
+    | LockedDronesChanged (List Int)
     | BoopSpecsChanged (List BoopSpecInfo)
     | Connected
     | Disconnected
@@ -150,6 +154,9 @@ serverMsgDecoder =
                     "locked_params_changed" ->
                         lockedParamsChangedDecoder
 
+                    "locked_drones_changed" ->
+                        lockedDronesChangedDecoder
+
                     "boop_specs_changed" ->
                         boopSpecsChangedDecoder
 
@@ -173,7 +180,7 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map7
         (\voice muted hbVol hbLoop boopCount checks drones ->
-            \locked boopSpecs ->
+            \locked lockedDrones boopSpecs ->
                 StateMsg
                     { voice = voice
                     , muted = muted
@@ -183,6 +190,7 @@ stateDecoder =
                     , checks = checks
                     , drones = drones
                     , lockedParams = locked
+                    , lockedDrones = lockedDrones
                     , boopSpecs = boopSpecs
                     }
         )
@@ -200,6 +208,7 @@ stateDecoder =
         (D.field "checks" (D.list checkInfoDecoder))
         (D.field "drones" (D.list droneInfoDecoder))
         |> andMap (D.field "locked_params" (D.list D.string))
+        |> andMap (D.field "locked_drones" (D.list D.int))
         |> andMap (D.field "boop_specs" (D.list boopSpecInfoDecoder))
 
 
@@ -357,6 +366,11 @@ boopSpecInfoDecoder =
 lockedParamsChangedDecoder : D.Decoder ServerMsg
 lockedParamsChangedDecoder =
     D.map LockedParamsChanged (D.field "params" (D.list D.string))
+
+
+lockedDronesChangedDecoder : D.Decoder ServerMsg
+lockedDronesChangedDecoder =
+    D.map LockedDronesChanged (D.field "indices" (D.list D.int))
 
 
 boopSpecsChangedDecoder : D.Decoder ServerMsg
@@ -521,6 +535,24 @@ encodeUnlockParam param =
 encodeUnlockAll : String
 encodeUnlockAll =
     E.object [ ( "type", E.string "unlock_all" ) ]
+        |> E.encode 0
+
+
+encodeLockDrone : Int -> String
+encodeLockDrone index =
+    E.object
+        [ ( "type", E.string "lock_drone" )
+        , ( "index", E.int index )
+        ]
+        |> E.encode 0
+
+
+encodeUnlockDrone : Int -> String
+encodeUnlockDrone index =
+    E.object
+        [ ( "type", E.string "unlock_drone" )
+        , ( "index", E.int index )
+        ]
         |> E.encode 0
 
 
