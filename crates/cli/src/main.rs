@@ -499,6 +499,7 @@ fn run_heartbeat_preview(
     graph,
     heartbeat::heartbeat_duration(
       &specs,
+      voice.attack_ms / 1000.0,
       voice.release_ms / 1000.0,
       voice.echo_delay,
       voice.echo_mix,

@@ -41,6 +41,7 @@ fn gap_between(dur_a: f64, dur_b: f64, max_dur: f64) -> f64 {
 /// appended so the last repeat is audible before the slot ends.
 pub fn heartbeat_duration(
   specs: &[BoopSpec],
+  attack_secs: f64,
   release_secs: f64,
   echo_delay: f64,
   echo_mix: f64,
@@ -51,6 +52,7 @@ pub fn heartbeat_duration(
 
   let max_dur = specs.iter().map(|s| s.duration).fold(0.0f64, f64::max);
 
+  let attack_total = attack_secs * specs.len() as f64;
   let boop_sum: f64 = specs.iter().map(|s| s.duration).sum();
   let gap_sum: f64 = specs
     .windows(2)
@@ -63,7 +65,9 @@ pub fn heartbeat_duration(
     0.0
   };
 
-  Duration::from_secs_f64(boop_sum + gap_sum + release_secs + echo_tail + 0.05)
+  Duration::from_secs_f64(
+    attack_total + boop_sum + gap_sum + release_secs + echo_tail + 0.05,
+  )
 }
 
 /// Parameters for a single boop inside the heartbeat closure.
@@ -182,9 +186,14 @@ pub fn heartbeat_graph_with_volume(
     for p in amp_timings.iter().rev() {
       if t >= p.start && t < p.tail_end {
         let local_t = t - p.start;
-        let fade_in = (local_t / p.attack).min(1.0);
-        let fade_out = if local_t > p.dur && p.release > 0.0 {
-          ((p.dur + p.release - local_t) / p.release).max(0.0)
+        let fade_in = if p.attack > 0.0 {
+          (local_t / p.attack).min(1.0)
+        } else {
+          1.0
+        };
+        let body_end = p.attack + p.dur;
+        let fade_out = if local_t > body_end && p.release > 0.0 {
+          ((body_end + p.release - local_t) / p.release).max(0.0)
         } else {
           1.0
         };
@@ -274,7 +283,7 @@ pub fn boop_graph(
   let freq = (voice.base_freq * cents_to_ratio(profile.detune_cents)) as f32;
   let amp = profile.amplitude as f32;
   let harshness = profile.harshness as f32;
-  let attack = (voice.attack_ms / 1000.0).min(duration_secs * 0.3) as f32;
+  let attack = (voice.attack_ms / 1000.0) as f32;
   let release = (voice.release_ms / 1000.0).min(duration_secs * 0.5) as f32;
   let dur = duration_secs as f32;
 
@@ -296,10 +305,14 @@ pub fn boop_graph(
   let q_val = dc(profile.filter_q as f32);
 
   let env = envelope(move |t: f32| {
-    let fade_in = (t / attack).min(1.0);
-    let sustain_end = dur - release;
-    let fade_out = if t > sustain_end && release > 0.0 {
-      ((dur - t) / release).max(0.0)
+    let fade_in = if attack > 0.0 {
+      (t / attack).min(1.0)
+    } else {
+      1.0
+    };
+    let body_end = attack + dur;
+    let fade_out = if t > body_end && release > 0.0 {
+      ((body_end + release - t) / release).max(0.0)
     } else {
       1.0
     };
@@ -380,7 +393,7 @@ mod tests {
         duration: 0.4,
       },
     ];
-    let dur = heartbeat_duration(&specs, 0.15, 0.0, 0.0);
+    let dur = heartbeat_duration(&specs, 0.0, 0.15, 0.0, 0.0);
     // 3 × 0.4 = 1.2 boop time, plus gaps, release, and 0.05 tail.
     assert!(
       dur.as_secs_f64() > 1.2,
@@ -391,7 +404,7 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_empty() {
-    assert_eq!(heartbeat_duration(&[], 0.15, 0.0, 0.0), Duration::ZERO);
+    assert_eq!(heartbeat_duration(&[], 0.0, 0.15, 0.0, 0.0), Duration::ZERO);
   }
 
   #[test]
@@ -400,7 +413,7 @@ mod tests {
       freq: 440.0,
       duration: 1.2,
     }];
-    let dur = heartbeat_duration(&specs, 0.15, 0.0, 0.0);
+    let dur = heartbeat_duration(&specs, 0.0, 0.15, 0.0, 0.0);
     // Single boop: 1.2 + 0.15 release + 0.05 tail, no gaps.
     assert!(
       (dur.as_secs_f64() - 1.4).abs() < 1e-10,
@@ -415,8 +428,8 @@ mod tests {
       freq: 440.0,
       duration: 1.0,
     }];
-    let without_echo = heartbeat_duration(&specs, 0.15, 0.3, 0.0);
-    let with_echo = heartbeat_duration(&specs, 0.15, 0.3, 0.5);
+    let without_echo = heartbeat_duration(&specs, 0.0, 0.15, 0.3, 0.0);
+    let with_echo = heartbeat_duration(&specs, 0.0, 0.15, 0.3, 0.5);
     // Echo adds 4 × echo_delay = 1.2 s.
     assert!(
       (with_echo.as_secs_f64() - without_echo.as_secs_f64() - 1.2).abs()
@@ -448,10 +461,12 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
+    let attack_secs = voice.attack_ms / 1000.0;
     let release_secs = voice.release_ms / 1000.0;
-    let samples = (heartbeat_duration(&specs, release_secs, 0.0, 0.0)
-      .as_secs_f32()
-      * 44100.0) as usize;
+    let samples =
+      (heartbeat_duration(&specs, attack_secs, release_secs, 0.0, 0.0)
+        .as_secs_f32()
+        * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();
@@ -503,10 +518,12 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
+    let attack_secs = voice.attack_ms / 1000.0;
     let release_secs = voice.release_ms / 1000.0;
-    let samples = (heartbeat_duration(&specs, release_secs, 0.0, 0.0)
-      .as_secs_f32()
-      * 44100.0) as usize;
+    let samples =
+      (heartbeat_duration(&specs, attack_secs, release_secs, 0.0, 0.0)
+        .as_secs_f32()
+        * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();

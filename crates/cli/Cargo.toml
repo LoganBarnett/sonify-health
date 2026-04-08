@@ -40,6 +40,7 @@ schemars = { workspace = true }
 sd-notify = { workspace = true }
 futures = { workspace = true }
 openidconnect = { workspace = true }
+reqwest = { workspace = true }
 tower-sessions = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

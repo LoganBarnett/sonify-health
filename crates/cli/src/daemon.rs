@@ -465,10 +465,12 @@ fn play_heartbeat_preview(
     &specs,
     Some(&preview.heartbeat_volume),
   );
+  let attack_secs = voice.attack_ms / 1000.0;
   let release_secs = voice.release_ms / 1000.0;
   let slot = mixer.add(graph);
   std::thread::sleep(heartbeat::heartbeat_duration(
     &specs,
+    attack_secs,
     release_secs,
     voice.echo_delay,
     voice.echo_mix,
