@@ -1,20 +1,60 @@
 module Main exposing (main)
 
 import Browser
+import Browser.Navigation as Nav
 import Dict exposing (Dict)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput)
-import Json.Decode
+import Http
+import Json.Decode as Decode
 import Ports
 import Process
 import Protocol exposing (..)
 import Set exposing (Set)
 import Task
+import Url exposing (Url)
+import Url.Parser exposing (Parser)
+
+
+type Route
+    = Home
+    | Me
+    | NotFound
+
+
+routeParser : Parser (Route -> a) a
+routeParser =
+    Url.Parser.oneOf
+        [ Url.Parser.map Home Url.Parser.top
+        , Url.Parser.map Me (Url.Parser.s "me")
+        ]
+
+
+routeFromUrl : Url -> Route
+routeFromUrl url =
+    Url.Parser.parse routeParser url
+        |> Maybe.withDefault NotFound
+
+
+type alias MeInfo =
+    { name : String
+    , authEnabled : Bool
+    }
+
+
+type MeStatus
+    = MeLoading
+    | MeLoaded MeInfo
+    | MeFailed
 
 
 type alias Model =
-    { connected : Bool
+    { key : Nav.Key
+    , url : Url
+    , route : Route
+    , me : MeStatus
+    , connected : Bool
     , voice : List VoiceParam
     , muted : Bool
     , heartbeatVolume : Float
@@ -35,7 +75,10 @@ type alias Model =
 
 
 type Msg
-    = WebSocketReceived String
+    = UrlRequested Browser.UrlRequest
+    | UrlChanged Url
+    | GotMe (Result Http.Error MeInfo)
+    | WebSocketReceived String
     | SetVoiceParam String String
     | DebounceFired String Int Float
     | ToggleMute
@@ -70,17 +113,27 @@ type Msg
 
 main : Program () Model Msg
 main =
-    Browser.element
-        { init = \_ -> init
+    Browser.application
+        { init = init
         , view = view
         , update = update
         , subscriptions = subscriptions
+        , onUrlRequest = UrlRequested
+        , onUrlChange = UrlChanged
         }
 
 
-init : ( Model, Cmd Msg )
-init =
-    ( { connected = False
+init : () -> Url -> Nav.Key -> ( Model, Cmd Msg )
+init _ url key =
+    let
+        route =
+            routeFromUrl url
+    in
+    ( { key = key
+      , url = url
+      , route = route
+      , me = MeLoading
+      , connected = False
       , voice = []
       , muted = False
       , heartbeatVolume = 1.0
@@ -105,8 +158,33 @@ init =
             , durationStep = 0.01
             }
       }
-    , Cmd.none
+    , cmdForRoute route
     )
+
+
+cmdForRoute : Route -> Cmd Msg
+cmdForRoute route =
+    case route of
+        Me ->
+            fetchMe
+
+        _ ->
+            Cmd.none
+
+
+fetchMe : Cmd Msg
+fetchMe =
+    Http.get
+        { url = "/me"
+        , expect = Http.expectJson GotMe meDecoder
+        }
+
+
+meDecoder : Decode.Decoder MeInfo
+meDecoder =
+    Decode.map2 MeInfo
+        (Decode.field "name" Decode.string)
+        (Decode.field "auth_enabled" Decode.bool)
 
 
 subscriptions : Model -> Sub Msg
@@ -121,6 +199,29 @@ subscriptions _ =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        UrlRequested (Browser.Internal url) ->
+            ( model, Nav.pushUrl model.key (Url.toString url) )
+
+        UrlRequested (Browser.External url) ->
+            ( model, Nav.load url )
+
+        UrlChanged url ->
+            let
+                route =
+                    routeFromUrl url
+            in
+            ( { model | url = url, route = route, me = MeLoading }
+            , cmdForRoute route
+            )
+
+        GotMe result ->
+            case result of
+                Ok info ->
+                    ( { model | me = MeLoaded info }, Cmd.none )
+
+                Err _ ->
+                    ( { model | me = MeFailed }, Cmd.none )
+
         WebSocketReceived raw ->
             handleServerMsg raw model
 
@@ -657,17 +758,79 @@ handleServerMsg raw model =
 -- VIEW
 
 
-view : Model -> Html Msg
+view : Model -> Browser.Document Msg
 view model =
-    div [ class "app" ]
-        [ viewToolbar model
-        , div [ class "panels" ]
-            [ viewVoicePanel model
-            , viewHeartbeatPanel model
-            , viewDronePanel model
-            , viewCheckLog model
+    { title = "sonify-health"
+    , body =
+        [ div [ class "app" ]
+            [ viewNavbar
+            , viewToolbar model
+            , viewPage model
+            , viewExportModal model
             ]
-        , viewExportModal model
+        ]
+    }
+
+
+viewNavbar : Html Msg
+viewNavbar =
+    nav [ class "navbar" ]
+        [ a [ href "/", class "nav-link" ] [ text "Home" ]
+        , a [ href "/me", class "nav-link" ] [ text "Me" ]
+        , a [ href "/scalar", class "nav-link" ] [ text "API Docs" ]
+        ]
+
+
+viewPage : Model -> Html Msg
+viewPage model =
+    case model.route of
+        Home ->
+            div [ class "panels" ]
+                [ viewVoicePanel model
+                , viewHeartbeatPanel model
+                , viewDronePanel model
+                , viewCheckLog model
+                ]
+
+        Me ->
+            viewMePage model.me
+
+        NotFound ->
+            div [ class "panel" ]
+                [ h2 [ class "panel-heading" ] [ text "Not Found" ]
+                , p [ class "text-muted" ]
+                    [ text "The page you requested does not exist." ]
+                ]
+
+
+viewMePage : MeStatus -> Html Msg
+viewMePage status =
+    div [ class "panel" ]
+        [ h2 [ class "panel-heading" ] [ text "Me" ]
+        , case status of
+            MeLoading ->
+                p [ class "text-muted" ] [ text "Loading..." ]
+
+            MeFailed ->
+                p [ class "text-muted" ]
+                    [ text "Failed to load user information." ]
+
+            MeLoaded info ->
+                div []
+                    [ p []
+                        [ text ("Name: " ++ info.name) ]
+                    , p []
+                        [ text
+                            ("Authentication: "
+                                ++ (if info.authEnabled then
+                                        "enabled"
+
+                                    else
+                                        "disabled"
+                                   )
+                            )
+                        ]
+                    ]
         ]
 
 
@@ -710,8 +873,6 @@ viewToolbar model =
                 [ text "Unlock All" ]
             , button [ class "btn-action", onClick Export ]
                 [ text "Export" ]
-            , a [ href "/scalar", class "btn-action" ]
-                [ text "API Docs" ]
             ]
         ]
 

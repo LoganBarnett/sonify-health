@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::metrics::Metrics;
 use crate::preview_state::PreviewState;
 use crate::websocket;
@@ -40,6 +41,10 @@ pub struct AppState {
 }
 
 impl AppState {
+  pub fn auth_enabled(&self) -> bool {
+    self.oidc_client.is_some()
+  }
+
   /// Construct `AppState` with pre-built metrics, shared mute flag,
   /// the path to the compiled frontend assets directory, the preview
   /// state backing the real-time control surface, and an optional
@@ -71,6 +76,36 @@ pub struct HealthResponse {
 async fn healthz() -> Json<HealthResponse> {
   Json(HealthResponse {
     status: "healthy".to_string(),
+  })
+}
+
+// -- Me ----------------------------------------------------------------------
+
+#[derive(Serialize, JsonSchema)]
+pub struct MeResponse {
+  name: String,
+  auth_enabled: bool,
+}
+
+async fn me_handler(
+  State(state): State<AppState>,
+  session: tower_sessions::Session,
+) -> Json<MeResponse> {
+  if !state.auth_enabled() {
+    return Json(MeResponse {
+      name: "admin".to_string(),
+      auth_enabled: false,
+    });
+  }
+
+  let name = auth::current_user(&session)
+    .await
+    .map(|u| u.name)
+    .unwrap_or_else(|| "anonymous".to_string());
+
+  Json(MeResponse {
+    name,
+    auth_enabled: true,
   })
 }
 
@@ -134,9 +169,10 @@ async fn metrics_endpoint(State(state): State<AppState>) -> Response {
 // -- Router ------------------------------------------------------------------
 
 /// Routes that remain public regardless of OIDC configuration:
-/// health check and Prometheus metrics.
+/// health check, Prometheus metrics, and the `/me` endpoint.
 pub fn public_router(state: AppState) -> Router {
   aide::generate::extract_schemas(true);
+  let me_state = state.clone();
   let mut api = OpenApi::default();
 
   let public = ApiRouter::new()
@@ -158,13 +194,16 @@ pub fn public_router(state: AppState) -> Router {
   // Stash the OpenAPI spec in an Arc so it can be shared with the
   // JSON endpoint built by the caller.
   let api = Arc::new(api);
-  Router::new().merge(public).route(
-    "/api-docs/openapi.json",
-    get({
-      let api = api.clone();
-      move || async move { Json((*api).clone()) }
-    }),
-  )
+  Router::new()
+    .merge(public)
+    .route("/me", get(me_handler).with_state(me_state))
+    .route(
+      "/api-docs/openapi.json",
+      get({
+        let api = api.clone();
+        move || async move { Json((*api).clone()) }
+      }),
+    )
 }
 
 /// Routes that are protected when OIDC is enabled: mute API,

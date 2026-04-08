@@ -1,0 +1,90 @@
+#+title:     Contributing to sonify-health
+#+language:  en
+
+Guidelines for contributing to sonify-health.
+
+* Document conventions
+
+- *Root-level UPPER_CASE names* are reserved for the standard set: =README=,
+  =CONTRIBUTING=, =LICENSE=.  All other documentation lives in =docs/= with
+  lower-kebab-case file names (e.g. =docs/systemd.org=).
+- Every document must be reachable — directly or indirectly — from =README.org=.
+- Use org-mode for all new documents.
+
+* Development environment
+
+Enter the Nix dev shell before running any commands:
+
+#+begin_src sh :results none :exports code
+nix develop
+#+end_src
+
+Or, if you use direnv:
+
+#+begin_src sh :results none :exports code
+direnv allow
+#+end_src
+
+* Code style
+
+** Semantic error handling
+
+This project uses *semantic error types* with ~thiserror~ rather than
+generic error wrapping with ~anyhow~.  Every error variant must include
+sufficient context to diagnose the problem without access to the source
+code or the running environment.
+
+See ~crates/cli/src/config.rs~ for examples of well-structured error
+types.
+
+** Comments
+
+Comments must be complete sentences, wrapped at 80 columns, with standard
+punctuation.  Only comment non-obvious intent, invariants, tradeoffs, or
+historical constraints; do not restate control flow.
+
+** Initialisms
+
+Use Pascal initialisms (~Url~) instead of preserved initialisms (~URL~) when
+authoring new identifiers in camel case.
+
+* Systemd secrets
+
+The NixOS module uses systemd's ~LoadCredential~ to pass secret files to
+the service without granting the service user direct read access.  See
+=docs/systemd.org= for the full pattern.
+
+* Logging levels
+
+Use appropriate log levels for different severity:
+
+- ~error!()~ — errors that prevent normal operation.
+- ~warn!()~  — recoverable issues or degraded functionality.
+- ~info!()~  — important state changes.
+- ~debug!()~ — detailed diagnostic information.
+- ~trace!()~ — very verbose debugging.
+
+Never log sensitive data (passwords, tokens, secrets).
+
+* Formatting
+
+Run ~cargo fmt~ before committing.  The pre-commit hook enforces this
+automatically, so commits made outside the Nix shell may be rejected if
+~rustfmt~ is not on ~PATH~.
+
+* Testing
+
+Run the full test suite after every change:
+
+#+begin_src sh :results none :exports code
+nix develop --command cargo test --workspace
+#+end_src
+
+Tests must exit with a proper error code.
+
+* Commit workflow
+
+1. Make your changes on a feature branch.
+2. Ensure ~cargo fmt~ and ~cargo clippy --workspace~ produce no warnings.
+3. Run ~cargo test --workspace~ and confirm all tests pass.
+4. Open a pull request against ~main~.

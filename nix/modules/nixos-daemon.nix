@@ -212,6 +212,11 @@ in {
       '';
     };
 
+    # host and port are separate options (rather than a single "listen"
+    # string) so that other Nix expressions can reference them
+    # individually — e.g. firewall rules need the port, reverse proxy
+    # configs need host:port, and health-check URLs need both.  The
+    # module combines them into the --listen flag internally.
     host = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1";
@@ -340,34 +345,45 @@ in {
       enable = lib.mkEnableOption "OIDC authentication for the web UI and API";
 
       baseUrl = lib.mkOption {
-        type = lib.types.str;
-        default = "";
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "https://sonify.example.com";
         description = ''
           Public base URL of the service, used to construct the OIDC
-          redirect URI (base_url + /auth/callback).
+          redirect URI (base_url + /auth/callback).  Set all three OIDC
+          options or leave all three null for unauthenticated admin mode.
         '';
       };
 
       issuer = lib.mkOption {
-        type = lib.types.str;
-        default = "";
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         example = "https://sso.example.com/application/o/sonify-health/";
-        description = "OIDC issuer URL for provider discovery.";
+        description = ''
+          OIDC issuer URL for provider discovery.  Set all three OIDC
+          options or leave all three null for unauthenticated admin mode.
+        '';
       };
 
       clientId = lib.mkOption {
-        type = lib.types.str;
-        default = "";
-        description = "OIDC client ID.";
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          OIDC client ID.  Set all three OIDC options or leave all three
+          null for unauthenticated admin mode.
+        '';
       };
 
       clientSecretFile = lib.mkOption {
-        type = lib.types.path;
+        type = lib.types.nullOr lib.types.path;
+        default = null;
         example = "/run/secrets/sonify-health-oidc";
         description = ''
-          Path to a file containing the OIDC client secret.  The file
-          is read at daemon startup.
+          Path to a file containing the OIDC client secret.  The module
+          loads this via systemd's LoadCredential, so the service user
+          does not need direct read access to the file.  Set all three
+          OIDC options or leave all three null for unauthenticated admin
+          mode.
         '';
       };
     };
@@ -396,6 +412,21 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = let
+          oidcFields = [cfg.oidc.issuer cfg.oidc.clientId cfg.oidc.clientSecretFile];
+          setCount = lib.count (x: x != null) oidcFields;
+        in
+          !cfg.oidc.enable || setCount == 3;
+        message = ''
+          services.sonify-health: OIDC is enabled but configuration is
+          incomplete.  Set all three of oidc.issuer, oidc.clientId, and
+          oidc.clientSecretFile when oidc.enable is true.
+        '';
+      }
+    ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
@@ -449,7 +480,6 @@ in {
           BASE_URL = cfg.oidc.baseUrl;
           OIDC_ISSUER = cfg.oidc.issuer;
           OIDC_CLIENT_ID = cfg.oidc.clientId;
-          OIDC_CLIENT_SECRET_FILE = cfg.oidc.clientSecretFile;
         };
 
       serviceConfig = {
@@ -468,6 +498,10 @@ in {
           )
           + " --frontend-path ${cfg.frontendPath}"
           + " daemon";
+
+        LoadCredential =
+          lib.mkIf (cfg.oidc.clientSecretFile != null)
+          "oidc-client-secret:${cfg.oidc.clientSecretFile}";
 
         User = cfg.user;
         Group = cfg.group;

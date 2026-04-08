@@ -8,9 +8,8 @@
 //   3. `GET /auth/logout`   → clear session, redirect to /
 //
 // `require_auth` is an Axum middleware that enforces an authenticated
-// session on protected routes.  When `AppState::oidc_client` is `None`
-// (OIDC not configured), the middleware passes every request through
-// unmodified.
+// session on protected routes.  When OIDC is not configured, all
+// requests pass through as implicit admin.
 
 use axum::{
   extract::{Query, Request, State},
@@ -34,6 +33,7 @@ use crate::web_base::AppState;
 const KEY_USER: &str = "user";
 const KEY_OIDC_STATE: &str = "oidc_state";
 const KEY_OIDC_NONCE: &str = "oidc_nonce";
+/// Destination the user was trying to reach before being redirected to login.
 const KEY_RETURN_TO: &str = "return_to";
 
 // ── types ───────────────────────────────────────────────────────────
@@ -51,6 +51,16 @@ pub struct CallbackQuery {
   state: String,
 }
 
+// ── helpers ──────────────────────────────────────────────────────────
+
+fn oidc_disabled_response() -> Response {
+  (
+    StatusCode::NOT_FOUND,
+    "OIDC authentication is not configured on this instance.",
+  )
+    .into_response()
+}
+
 // ── handlers ────────────────────────────────────────────────────────
 
 /// `GET /auth/login` — redirect the user to the OIDC provider.
@@ -60,10 +70,7 @@ pub async fn login_handler(
 ) -> Response {
   let client = match &state.oidc_client {
     Some(c) => c,
-    None => {
-      return (StatusCode::NOT_FOUND, "Authentication not configured")
-        .into_response()
-    }
+    None => return oidc_disabled_response(),
   };
 
   let (auth_url, csrf_token, nonce) = client
@@ -102,10 +109,7 @@ pub async fn callback_handler(
 ) -> Response {
   let client = match &state.oidc_client {
     Some(c) => c,
-    None => {
-      return (StatusCode::NOT_FOUND, "Authentication not configured")
-        .into_response()
-    }
+    None => return oidc_disabled_response(),
   };
 
   // 1. Verify CSRF state.
@@ -255,29 +259,33 @@ pub async fn callback_handler(
 }
 
 /// `GET /auth/logout` — clear the session and return to home.
-pub async fn logout_handler(session: Session) -> impl IntoResponse {
+pub async fn logout_handler(
+  State(state): State<AppState>,
+  session: Session,
+) -> Response {
+  if !state.auth_enabled() {
+    return oidc_disabled_response();
+  }
   if let Err(e) = session.flush().await {
     warn!("Failed to flush session on logout: {e}");
   }
-  Redirect::to("/")
+  Redirect::to("/").into_response()
 }
 
 // ── middleware ───────────────────────────────────────────────────────
 
 /// Middleware that requires an authenticated session.
 ///
-/// When `AppState::oidc_client` is `None`, every request passes through
-/// (OIDC not configured — all routes are public).  Otherwise,
-/// unauthenticated requests are redirected to `/auth/login` with the
-/// original URI saved for post-login redirect.
+/// When OIDC is not configured, all requests pass through immediately
+/// (every request is implicitly admin).  When OIDC is configured,
+/// unauthenticated requests are redirected to `/auth/login`.
 pub async fn require_auth(
   State(state): State<AppState>,
   session: Session,
   req: Request,
   next: Next,
 ) -> Response {
-  // No OIDC configured — pass through.
-  if state.oidc_client.is_none() {
+  if !state.auth_enabled() {
     return next.run(req).await;
   }
 
@@ -292,4 +300,12 @@ pub async fn require_auth(
   }
 
   next.run(req).await
+}
+
+/// Extract the current user from the session, if any.
+///
+/// Returns `None` for unauthenticated sessions rather than failing —
+/// use `require_auth` on routes that must be protected.
+pub async fn current_user(session: &Session) -> Option<AuthUser> {
+  session.get(KEY_USER).await.unwrap_or(None)
 }

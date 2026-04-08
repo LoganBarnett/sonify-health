@@ -32,13 +32,6 @@ pub enum ConfigError {
   #[error("Configuration validation failed: {0}")]
   Validation(String),
 
-  #[error(
-    "Partial OIDC configuration: all four fields (base_url, \
-     oidc_issuer, oidc_client_id, oidc_client_secret_file) must \
-     be set together, but only some were provided"
-  )]
-  OidcPartialConfig,
-
   #[error("Failed to read OIDC client secret from {path:?}: {source}")]
   OidcSecretFileRead {
     path: PathBuf,
@@ -218,23 +211,57 @@ impl Config {
       .map(PathBuf::from)
       .or(oidc_file.client_secret_file);
 
-    let oidc = match (oidc_base, oidc_iss, oidc_cid, oidc_sf) {
-      (Some(base), Some(iss), Some(cid), Some(sf)) => {
-        let secret = std::fs::read_to_string(&sf)
+    let oidc = match (&oidc_base, &oidc_iss, &oidc_cid) {
+      (None, None, None) if oidc_sf.is_none() => None,
+      (Some(base), Some(iss), Some(cid)) => {
+        let secret_file =
+          oidc_sf.or_else(credential_secret_path).ok_or_else(|| {
+            ConfigError::Validation(
+              "oidc_client_secret_file is required when oidc_issuer and \
+               oidc_client_id are set (set it explicitly or run under \
+               systemd with LoadCredential)"
+                .to_string(),
+            )
+          })?;
+
+        let secret = std::fs::read_to_string(&secret_file)
           .map(|s| s.trim().to_string())
           .map_err(|source| ConfigError::OidcSecretFileRead {
-            path: sf,
+            path: secret_file,
             source,
           })?;
         Some(OidcConfig {
-          base_url: base,
-          issuer: iss,
-          client_id: cid,
+          base_url: base.clone(),
+          issuer: iss.clone(),
+          client_id: cid.clone(),
           client_secret: secret,
         })
       }
-      (None, None, None, None) => None,
-      _ => return Err(ConfigError::OidcPartialConfig),
+      _ => {
+        let mut present = Vec::new();
+        let mut missing = Vec::new();
+        for (name, val) in [
+          ("base_url", oidc_base.is_some()),
+          ("oidc_issuer", oidc_iss.is_some()),
+          ("oidc_client_id", oidc_cid.is_some()),
+          (
+            "oidc_client_secret_file",
+            oidc_sf.is_some() || credential_secret_path().is_some(),
+          ),
+        ] {
+          if val {
+            present.push(name);
+          } else {
+            missing.push(name);
+          }
+        }
+        return Err(ConfigError::Validation(format!(
+          "partial OIDC configuration: set all four fields or none. \
+           present: [{}], missing: [{}]",
+          present.join(", "),
+          missing.join(", ")
+        )));
+      }
     };
 
     Ok(Config {
@@ -279,6 +306,15 @@ impl Config {
   fn scale_key(&self) -> String {
     self.scale_key_for(&gethostname::gethostname().to_string_lossy())
   }
+}
+
+/// Returns the path to the `oidc-client-secret` credential file inside
+/// systemd's `CREDENTIALS_DIRECTORY`, if the directory is set and the
+/// file exists.
+fn credential_secret_path() -> Option<PathBuf> {
+  let dir = std::env::var("CREDENTIALS_DIRECTORY").ok()?;
+  let path = PathBuf::from(dir).join("oidc-client-secret");
+  path.exists().then_some(path)
 }
 
 #[cfg(test)]
