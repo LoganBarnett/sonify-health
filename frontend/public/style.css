@@ -488,3 +488,76 @@ a:hover {
   color: var(--color-text-muted);
   font-size: var(--font-base);
 }
+
+/* Lock buttons */
+
+.btn-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.btn-lock:hover {
+  background: var(--color-border);
+}
+
+.btn-lock-active {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.btn-lock-active:hover {
+  opacity: 0.85;
+}
+
+/* Boop specs */
+
+.boop-specs {
+  margin-top: var(--space-md);
+}
+
+.boop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xs) 0;
+}
+
+.boop-index {
+  width: 20px;
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.boop-check-label {
+  width: 60px;
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,16 +1,21 @@
 module Protocol exposing
-    ( CheckInfo
+    ( BoopSpecInfo
+    , CheckInfo
     , CheckLogEntry
     , DroneInfo
     , ServerMsg(..)
     , VoiceParam
     , decodeServerMsg
+    , encodeClearBoopPin
     , encodeClearOverride
     , encodeExportToml
     , encodeGetState
+    , encodeLockParam
     , encodeOverrideCheck
     , encodeOverrideDrone
     , encodeRevertAll
+    , encodeSetBoopCount
+    , encodeSetBoopSpec
     , encodeSetDroneRegister
     , encodeSetDroneTexture
     , encodeSetDroneVolume
@@ -19,6 +24,8 @@ module Protocol exposing
     , encodeSetMuted
     , encodeSetVoiceParam
     , encodeTriggerHeartbeat
+    , encodeUnlockAll
+    , encodeUnlockParam
     )
 
 import Json.Decode as D
@@ -60,6 +67,13 @@ type alias CheckLogEntry =
     }
 
 
+type alias BoopSpecInfo =
+    { freq : Float
+    , duration : Float
+    , pinned : Bool
+    }
+
+
 
 -- Server messages (incoming)
 
@@ -70,17 +84,23 @@ type ServerMsg
         , muted : Bool
         , heartbeatVolume : Float
         , heartbeatLoop : Bool
+        , boopCount : Int
         , checks : List CheckInfo
         , drones : List DroneInfo
+        , lockedParams : List String
+        , boopSpecs : List BoopSpecInfo
         }
     | ParamChanged String Float
     | MuteChanged Bool
     | VolumeChanged String (Maybe Int) Float
     | OverrideChanged String Int (Maybe String) Bool
     | HeartbeatLoopChanged Bool
+    | BoopCountChanged Int
     | DroneConfigChanged Int String String
     | CheckLog CheckLogEntry
     | TomlExport String
+    | LockedParamsChanged (List String)
+    | BoopSpecsChanged (List BoopSpecInfo)
     | Connected
     | Disconnected
 
@@ -115,6 +135,9 @@ serverMsgDecoder =
                     "heartbeat_loop_changed" ->
                         heartbeatLoopChangedDecoder
 
+                    "boop_count_changed" ->
+                        boopCountChangedDecoder
+
                     "drone_config_changed" ->
                         droneConfigChangedDecoder
 
@@ -123,6 +146,12 @@ serverMsgDecoder =
 
                     "toml_export" ->
                         tomlExportDecoder
+
+                    "locked_params_changed" ->
+                        lockedParamsChangedDecoder
+
+                    "boop_specs_changed" ->
+                        boopSpecsChangedDecoder
 
                     "connected" ->
                         D.succeed Connected
@@ -135,18 +164,27 @@ serverMsgDecoder =
             )
 
 
+andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
+andMap =
+    D.map2 (|>)
+
+
 stateDecoder : D.Decoder ServerMsg
 stateDecoder =
-    D.map6
-        (\voice muted hbVol hbLoop checks drones ->
-            StateMsg
-                { voice = voice
-                , muted = muted
-                , heartbeatVolume = hbVol
-                , heartbeatLoop = hbLoop
-                , checks = checks
-                , drones = drones
-                }
+    D.map7
+        (\voice muted hbVol hbLoop boopCount checks drones ->
+            \locked boopSpecs ->
+                StateMsg
+                    { voice = voice
+                    , muted = muted
+                    , heartbeatVolume = hbVol
+                    , heartbeatLoop = hbLoop
+                    , boopCount = boopCount
+                    , checks = checks
+                    , drones = drones
+                    , lockedParams = locked
+                    , boopSpecs = boopSpecs
+                    }
         )
         (D.field "voice" voiceDecoder
             |> D.andThen
@@ -158,8 +196,11 @@ stateDecoder =
         (D.field "muted" D.bool)
         (D.field "heartbeat_volume" D.float)
         (D.field "heartbeat_loop" D.bool)
+        (D.field "boop_count" D.int)
         (D.field "checks" (D.list checkInfoDecoder))
         (D.field "drones" (D.list droneInfoDecoder))
+        |> andMap (D.field "locked_params" (D.list D.string))
+        |> andMap (D.field "boop_specs" (D.list boopSpecInfoDecoder))
 
 
 voiceDecoder : D.Decoder (List ( String, Float ))
@@ -251,7 +292,15 @@ overrideChangedDecoder =
     D.map4 OverrideChanged
         (D.field "layer" D.string)
         (D.field "index" D.int)
-        (D.maybe (D.field "value" D.string))
+        (D.maybe
+            (D.field "value"
+                (D.oneOf
+                    [ D.string
+                    , D.map String.fromFloat D.float
+                    ]
+                )
+            )
+        )
         (D.field "overridden" D.bool)
 
 
@@ -279,6 +328,11 @@ checkLogDecoder =
         (D.field "overridden" D.bool)
 
 
+boopCountChangedDecoder : D.Decoder ServerMsg
+boopCountChangedDecoder =
+    D.map BoopCountChanged (D.field "count" D.int)
+
+
 droneConfigChangedDecoder : D.Decoder ServerMsg
 droneConfigChangedDecoder =
     D.map3 DroneConfigChanged
@@ -290,6 +344,24 @@ droneConfigChangedDecoder =
 tomlExportDecoder : D.Decoder ServerMsg
 tomlExportDecoder =
     D.map TomlExport (D.field "content" D.string)
+
+
+boopSpecInfoDecoder : D.Decoder BoopSpecInfo
+boopSpecInfoDecoder =
+    D.map3 BoopSpecInfo
+        (D.field "freq" D.float)
+        (D.field "duration" D.float)
+        (D.field "pinned" D.bool)
+
+
+lockedParamsChangedDecoder : D.Decoder ServerMsg
+lockedParamsChangedDecoder =
+    D.map LockedParamsChanged (D.field "params" (D.list D.string))
+
+
+boopSpecsChangedDecoder : D.Decoder ServerMsg
+boopSpecsChangedDecoder =
+    D.map BoopSpecsChanged (D.field "specs" (D.list boopSpecInfoDecoder))
 
 
 
@@ -372,6 +444,15 @@ encodeClearOverride layer index =
         |> E.encode 0
 
 
+encodeSetBoopCount : Int -> String
+encodeSetBoopCount count =
+    E.object
+        [ ( "type", E.string "set_boop_count" )
+        , ( "count", E.int count )
+        ]
+        |> E.encode 0
+
+
 encodeSetHeartbeatLoop : Bool -> String
 encodeSetHeartbeatLoop enabled =
     E.object
@@ -416,4 +497,65 @@ encodeSetDroneRegister index register =
 encodeExportToml : String
 encodeExportToml =
     E.object [ ( "type", E.string "export_toml" ) ]
+        |> E.encode 0
+
+
+encodeLockParam : String -> String
+encodeLockParam param =
+    E.object
+        [ ( "type", E.string "lock_param" )
+        , ( "param", E.string param )
+        ]
+        |> E.encode 0
+
+
+encodeUnlockParam : String -> String
+encodeUnlockParam param =
+    E.object
+        [ ( "type", E.string "unlock_param" )
+        , ( "param", E.string param )
+        ]
+        |> E.encode 0
+
+
+encodeUnlockAll : String
+encodeUnlockAll =
+    E.object [ ( "type", E.string "unlock_all" ) ]
+        |> E.encode 0
+
+
+encodeSetBoopSpec : Int -> Maybe Float -> Maybe Float -> String
+encodeSetBoopSpec index maybeFreq maybeDuration =
+    let
+        base =
+            [ ( "type", E.string "set_boop_spec" )
+            , ( "index", E.int index )
+            ]
+
+        freqField =
+            case maybeFreq of
+                Just f ->
+                    [ ( "freq", E.float f ) ]
+
+                Nothing ->
+                    []
+
+        durationField =
+            case maybeDuration of
+                Just d ->
+                    [ ( "duration", E.float d ) ]
+
+                Nothing ->
+                    []
+    in
+    E.object (base ++ freqField ++ durationField)
+        |> E.encode 0
+
+
+encodeClearBoopPin : Int -> String
+encodeClearBoopPin index =
+    E.object
+        [ ( "type", E.string "clear_boop_pin" )
+        , ( "index", E.int index )
+        ]
         |> E.encode 0

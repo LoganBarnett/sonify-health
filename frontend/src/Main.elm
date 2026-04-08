@@ -9,6 +9,7 @@ import Json.Decode
 import Ports
 import Process
 import Protocol exposing (..)
+import Set exposing (Set)
 import Task
 
 
@@ -18,12 +19,15 @@ type alias Model =
     , muted : Bool
     , heartbeatVolume : Float
     , heartbeatLoop : Bool
+    , boopCount : Int
     , checks : List CheckInfo
     , drones : List DroneInfo
     , checkLog : List CheckLogEntry
     , tomlExport : Maybe String
     , debounces : Dict String Int
     , nextDebounce : Int
+    , lockedParams : Set String
+    , boopSpecs : List BoopSpecInfo
     }
 
 
@@ -34,6 +38,8 @@ type Msg
     | ToggleMute
     | SetHeartbeatVolume String
     | HeartbeatVolDebounce Int Float
+    | SetBoopCount String
+    | BoopCountDebounce Int Int
     | SetDroneVolume Int String
     | DroneVolDebounce Int Int Float
     | OverrideCheck Int String
@@ -47,6 +53,13 @@ type Msg
     | RevertAll
     | ExportToml
     | DismissExport
+    | ToggleLockParam String
+    | UnlockAll
+    | SetBoopFreq Int String
+    | BoopFreqDebounce Int Int Float
+    | SetBoopDuration Int String
+    | BoopDurationDebounce Int Int Float
+    | ClearBoopPin Int
     | NoOp
 
 
@@ -67,12 +80,15 @@ init =
       , muted = False
       , heartbeatVolume = 1.0
       , heartbeatLoop = False
+      , boopCount = 1
       , checks = []
       , drones = []
       , checkLog = []
       , tomlExport = Nothing
       , debounces = Dict.empty
       , nextDebounce = 0
+      , lockedParams = Set.empty
+      , boopSpecs = []
       }
     , Cmd.none
     )
@@ -176,6 +192,33 @@ update msg model =
             else
                 ( model, Cmd.none )
 
+        SetBoopCount valStr ->
+            case String.toInt valStr of
+                Just count ->
+                    let
+                        id =
+                            model.nextDebounce
+                    in
+                    ( { model
+                        | boopCount = count
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform (\_ -> BoopCountDebounce id count)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        BoopCountDebounce id count ->
+            if id == model.nextDebounce - 1 then
+                ( model
+                , Ports.websocketSend (encodeSetBoopCount count)
+                )
+
+            else
+                ( model, Cmd.none )
+
         SetDroneVolume index valStr ->
             case String.toFloat valStr of
                 Just vol ->
@@ -244,7 +287,18 @@ update msg model =
         OverrideDroneValue index valStr ->
             case String.toFloat valStr of
                 Just val ->
-                    ( model
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\i d ->
+                                    if i == index then
+                                        { d | value = val }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
                     , Ports.websocketSend
                         (Protocol.encodeOverrideDrone index val)
                     )
@@ -284,6 +338,121 @@ update msg model =
         DismissExport ->
             ( { model | tomlExport = Nothing }, Cmd.none )
 
+        ToggleLockParam param ->
+            if Set.member param model.lockedParams then
+                ( { model | lockedParams = Set.remove param model.lockedParams }
+                , Ports.websocketSend (encodeUnlockParam param)
+                )
+
+            else
+                ( { model | lockedParams = Set.insert param model.lockedParams }
+                , Ports.websocketSend (encodeLockParam param)
+                )
+
+        UnlockAll ->
+            ( { model | lockedParams = Set.empty }
+            , Ports.websocketSend encodeUnlockAll
+            )
+
+        SetBoopFreq index valStr ->
+            case String.toFloat valStr of
+                Just freq ->
+                    let
+                        key =
+                            "boop_freq:" ++ String.fromInt index
+
+                        id =
+                            model.nextDebounce
+
+                        newSpecs =
+                            List.indexedMap
+                                (\i s ->
+                                    if i == index then
+                                        { s | freq = freq, pinned = True }
+
+                                    else
+                                        s
+                                )
+                                model.boopSpecs
+                    in
+                    ( { model
+                        | boopSpecs = newSpecs
+                        , debounces = Dict.insert key id model.debounces
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform (\_ -> BoopFreqDebounce index id freq)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        BoopFreqDebounce index id freq ->
+            let
+                key =
+                    "boop_freq:" ++ String.fromInt index
+            in
+            if Dict.get key model.debounces == Just id then
+                ( model
+                , Ports.websocketSend
+                    (encodeSetBoopSpec index (Just freq) Nothing)
+                )
+
+            else
+                ( model, Cmd.none )
+
+        SetBoopDuration index valStr ->
+            case String.toFloat valStr of
+                Just dur ->
+                    let
+                        key =
+                            "boop_dur:" ++ String.fromInt index
+
+                        id =
+                            model.nextDebounce
+
+                        newSpecs =
+                            List.indexedMap
+                                (\i s ->
+                                    if i == index then
+                                        { s | duration = dur, pinned = True }
+
+                                    else
+                                        s
+                                )
+                                model.boopSpecs
+                    in
+                    ( { model
+                        | boopSpecs = newSpecs
+                        , debounces = Dict.insert key id model.debounces
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform (\_ -> BoopDurationDebounce index id dur)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        BoopDurationDebounce index id dur ->
+            let
+                key =
+                    "boop_dur:" ++ String.fromInt index
+            in
+            if Dict.get key model.debounces == Just id then
+                ( model
+                , Ports.websocketSend
+                    (encodeSetBoopSpec index Nothing (Just dur))
+                )
+
+            else
+                ( model, Cmd.none )
+
+        ClearBoopPin index ->
+            ( model
+            , Ports.websocketSend (encodeClearBoopPin index)
+            )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -297,8 +466,11 @@ handleServerMsg raw model =
                 , muted = s.muted
                 , heartbeatVolume = s.heartbeatVolume
                 , heartbeatLoop = s.heartbeatLoop
+                , boopCount = s.boopCount
                 , checks = s.checks
                 , drones = s.drones
+                , lockedParams = Set.fromList s.lockedParams
+                , boopSpecs = s.boopSpecs
                 , connected = True
               }
             , Cmd.none
@@ -382,7 +554,13 @@ handleServerMsg raw model =
                             List.indexedMap
                                 (\i d ->
                                     if i == index then
-                                        { d | overridden = overridden }
+                                        { d
+                                            | overridden = overridden
+                                            , value =
+                                                maybeValue
+                                                    |> Maybe.andThen String.toFloat
+                                                    |> Maybe.withDefault d.value
+                                        }
 
                                     else
                                         d
@@ -411,6 +589,9 @@ handleServerMsg raw model =
             , Cmd.none
             )
 
+        Just (BoopCountChanged count) ->
+            ( { model | boopCount = count }, Cmd.none )
+
         Just (HeartbeatLoopChanged enabled) ->
             ( { model | heartbeatLoop = enabled }, Cmd.none )
 
@@ -421,6 +602,12 @@ handleServerMsg raw model =
 
         Just (TomlExport content) ->
             ( { model | tomlExport = Just content }, Cmd.none )
+
+        Just (LockedParamsChanged params) ->
+            ( { model | lockedParams = Set.fromList params }, Cmd.none )
+
+        Just (BoopSpecsChanged specs) ->
+            ( { model | boopSpecs = specs }, Cmd.none )
 
         Just Connected ->
             ( { model | connected = True }, Cmd.none )
@@ -485,6 +672,8 @@ viewToolbar model =
                 ]
             , button [ class "btn-action", onClick RevertAll ]
                 [ text "Revert" ]
+            , button [ class "btn-action", onClick UnlockAll ]
+                [ text "Unlock All" ]
             , button [ class "btn-action", onClick ExportToml ]
                 [ text "Export TOML" ]
             , a [ href "/scalar", class "btn-action" ]
@@ -498,14 +687,36 @@ viewVoicePanel model =
     section [ class "panel" ]
         [ h2 [ class "panel-heading" ] [ text "Voice" ]
         , div [ class "slider-grid" ]
-            (List.map viewVoiceSlider model.voice)
+            (List.map (viewVoiceSlider model.lockedParams) model.voice)
         ]
 
 
-viewVoiceSlider : VoiceParam -> Html Msg
-viewVoiceSlider param =
+viewVoiceSlider : Set String -> VoiceParam -> Html Msg
+viewVoiceSlider locked param =
+    let
+        isLocked =
+            Set.member param.name locked
+    in
     div [ class "slider-row" ]
-        [ label [ class "slider-label" ]
+        [ button
+            [ class
+                (if isLocked then
+                    "btn-lock-active"
+
+                 else
+                    "btn-lock"
+                )
+            , onClick (ToggleLockParam param.name)
+            ]
+            [ text
+                (if isLocked then
+                    "L"
+
+                 else
+                    "U"
+                )
+            ]
+        , label [ class "slider-label" ]
             [ text (formatParamName param.name) ]
         , input
             [ type_ "range"
@@ -542,6 +753,21 @@ viewHeartbeatPanel model =
                 [ text (formatFloat model.heartbeatVolume) ]
             ]
         , div [ class "control-row" ]
+            [ label [ class "slider-label" ] [ text "Boops" ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min "1"
+                , Html.Attributes.max "8"
+                , step "1"
+                , value (String.fromInt model.boopCount)
+                , onInput SetBoopCount
+                , class "slider"
+                ]
+                []
+            , span [ class "slider-value" ]
+                [ text (String.fromInt model.boopCount) ]
+            ]
+        , div [ class "control-row" ]
             [ label [ class "toggle-label" ]
                 [ input
                     [ type_ "checkbox"
@@ -557,6 +783,7 @@ viewHeartbeatPanel model =
                 ]
                 [ text "Play Now" ]
             ]
+        , viewBoopSpecs model.boopCount model.checks model.boopSpecs
         , if List.isEmpty model.checks then
             text ""
 
@@ -565,6 +792,77 @@ viewHeartbeatPanel model =
                 (h3 [ class "panel-subheading" ] [ text "Checks" ]
                     :: List.indexedMap viewCheck model.checks
                 )
+        ]
+
+
+viewBoopSpecs : Int -> List CheckInfo -> List BoopSpecInfo -> Html Msg
+viewBoopSpecs boopCount checks specs =
+    if List.isEmpty specs then
+        text ""
+
+    else
+        div [ class "boop-specs" ]
+            (h3 [ class "panel-subheading" ] [ text "Boop Specs" ]
+                :: List.indexedMap (viewBoopRow boopCount checks) specs
+            )
+
+
+viewBoopRow : Int -> List CheckInfo -> Int -> BoopSpecInfo -> Html Msg
+viewBoopRow boopCount checks index spec =
+    let
+        checkIdx =
+            if boopCount > 0 then
+                index // boopCount
+
+            else
+                0
+
+        checkName =
+            List.drop checkIdx checks
+                |> List.head
+                |> Maybe.map .name
+                |> Maybe.withDefault "?"
+    in
+    div [ class "boop-row" ]
+        [ span [ class "boop-index" ]
+            [ text (String.fromInt index) ]
+        , span [ class "boop-check-label" ]
+            [ text checkName ]
+        , label [ class "slider-label" ] [ text "Freq" ]
+        , input
+            [ type_ "range"
+            , Html.Attributes.min "60"
+            , Html.Attributes.max "1200"
+            , step "1"
+            , value (String.fromFloat spec.freq)
+            , onInput (SetBoopFreq index)
+            , class "slider"
+            ]
+            []
+        , span [ class "slider-value" ]
+            [ text (formatFloat spec.freq) ]
+        , label [ class "slider-label" ] [ text "Dur" ]
+        , input
+            [ type_ "range"
+            , Html.Attributes.min "0.05"
+            , Html.Attributes.max "1.2"
+            , step "0.01"
+            , value (String.fromFloat spec.duration)
+            , onInput (SetBoopDuration index)
+            , class "slider"
+            ]
+            []
+        , span [ class "slider-value" ]
+            [ text (formatFloat spec.duration) ]
+        , if spec.pinned then
+            button
+                [ class "btn-live"
+                , onClick (ClearBoopPin index)
+                ]
+                [ text "Unpin" ]
+
+          else
+            text ""
         ]
 
 

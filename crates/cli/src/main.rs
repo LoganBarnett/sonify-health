@@ -267,6 +267,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
 
   let preview = Arc::new(preview_state::PreviewState::new(
     voice.clone(),
+    scale.clone(),
     scale_key,
     Arc::clone(&muted),
     &config.daemon.heartbeat_checks,
@@ -495,7 +496,7 @@ fn run_heartbeat_preview(
   let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
   AudioOutput::play_for(
     graph,
-    heartbeat::heartbeat_duration(&specs),
+    heartbeat::heartbeat_duration(&specs, voice.release_ms / 1000.0),
     config.audio_device.as_deref(),
   )
   .map_err(ApplicationError::AudioPlayback)

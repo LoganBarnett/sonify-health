@@ -5,11 +5,13 @@ use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
   drone::{DroneRegister, DroneTexture},
+  heartbeat,
   state::{DroneState, HeartbeatState},
-  Severity, Voice,
+  BoopSpec, PentatonicScale, Severity, Voice,
 };
+use std::collections::HashSet;
 use std::sync::{
-  atomic::{AtomicBool, Ordering},
+  atomic::{AtomicBool, AtomicUsize, Ordering},
   Arc, RwLock,
 };
 use tokio::sync::broadcast;
@@ -103,6 +105,7 @@ pub struct DroneMetricInfo {
 pub struct PreviewState {
   original_voice: Voice,
   pub voice: RwLock<Voice>,
+  pub scale: PentatonicScale,
   pub scale_key: String,
   pub muted: Arc<AtomicBool>,
   /// Per-metric raw volume set by the UI (0.0..=1.0).
@@ -122,18 +125,24 @@ pub struct PreviewState {
   pub check_names: Vec<String>,
   pub drone_infos: RwLock<Vec<DroneMetricInfo>>,
   original_drone_infos: Vec<DroneMetricInfo>,
+  pub boop_count: AtomicUsize,
+  original_boop_count: usize,
+  pub locked_params: RwLock<HashSet<String>>,
+  pub boop_specs: RwLock<Vec<BoopSpec>>,
+  pub boop_pins: RwLock<Vec<bool>>,
 }
 
 impl PreviewState {
   pub fn new(
     voice: Voice,
+    scale: PentatonicScale,
     scale_key: String,
     muted: Arc<AtomicBool>,
     heartbeat_checks: &[HeartbeatCheckConfig],
     drone_metrics: &[DroneMetricConfig],
   ) -> Self {
     let drone_count = drone_metrics.len();
-    let boop_count = heartbeat_checks.len();
+    let check_count = heartbeat_checks.len();
 
     let drone_volumes: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
@@ -153,17 +162,23 @@ impl PreviewState {
       })
       .collect();
 
+    let initial_total = check_count;
+    let initial_specs =
+      voice.boop_specs(&scale, initial_total, heartbeat::TOTAL_BOOP_TIME);
+    let initial_pins = vec![false; initial_specs.len()];
+
     Self {
       original_voice: voice.clone(),
       voice: RwLock::new(voice),
+      scale,
       scale_key,
       muted,
       drone_volumes,
       combined_volumes,
       heartbeat_volume: shared(1.0),
-      heartbeat_state: Arc::new(HeartbeatState::new(boop_count)),
+      heartbeat_state: Arc::new(HeartbeatState::new(check_count)),
       drone_state: Arc::new(DroneState::new(drone_count)),
-      heartbeat_overrides: RwLock::new(vec![None; boop_count]),
+      heartbeat_overrides: RwLock::new(vec![None; check_count]),
       drone_overrides: RwLock::new(vec![None; drone_count]),
       drone_rebuild_requested: AtomicBool::new(false),
       heartbeat_loop: AtomicBool::new(false),
@@ -173,6 +188,11 @@ impl PreviewState {
       check_names: heartbeat_checks.iter().map(|c| c.name.clone()).collect(),
       original_drone_infos: drone_infos.clone(),
       drone_infos: RwLock::new(drone_infos),
+      boop_count: AtomicUsize::new(1),
+      original_boop_count: 1,
+      locked_params: RwLock::new(HashSet::new()),
+      boop_specs: RwLock::new(initial_specs),
+      boop_pins: RwLock::new(initial_pins),
     }
   }
 
@@ -198,6 +218,38 @@ impl PreviewState {
     }
   }
 
+  /// Recompute materialized boop specs from the current voice,
+  /// preserving pinned entries.
+  pub fn recompute_boop_specs(&self) {
+    let boops_per_check = self.boop_count.load(Ordering::Relaxed);
+    let total = boops_per_check * self.check_names.len();
+    let voice = self.voice.read().unwrap();
+    let fresh =
+      voice.boop_specs(&self.scale, total, heartbeat::TOTAL_BOOP_TIME);
+
+    let mut specs = self.boop_specs.write().unwrap();
+    let mut pins = self.boop_pins.write().unwrap();
+
+    // Resize pins to match new total, new entries unpinned.
+    pins.resize(total, false);
+
+    let merged: Vec<BoopSpec> = fresh
+      .into_iter()
+      .enumerate()
+      .map(|(i, fresh_spec)| {
+        if i < specs.len() && i < pins.len() && pins[i] {
+          specs[i].clone()
+        } else {
+          fresh_spec
+        }
+      })
+      .collect();
+
+    *specs = merged;
+    // Trim pins if total shrank.
+    pins.truncate(total);
+  }
+
   /// Build the full state snapshot JSON sent on connect and on
   /// `get_state` / `revert_all`.
   pub fn state_snapshot(&self) -> String {
@@ -205,6 +257,9 @@ impl PreviewState {
     let hb_overrides = self.heartbeat_overrides.read().unwrap();
     let drone_overrides = self.drone_overrides.read().unwrap();
     let drone_infos = self.drone_infos.read().unwrap();
+    let locked = self.locked_params.read().unwrap();
+    let specs = self.boop_specs.read().unwrap();
+    let pins = self.boop_pins.read().unwrap();
 
     let voice_json = voice_to_json(&voice);
 
@@ -250,6 +305,20 @@ impl PreviewState {
       })
       .collect();
 
+    let locked_json: Vec<_> = locked.iter().map(|s| json!(s)).collect();
+
+    let boop_specs_json: Vec<_> = specs
+      .iter()
+      .enumerate()
+      .map(|(i, spec)| {
+        json!({
+          "freq": spec.freq,
+          "duration": spec.duration,
+          "pinned": pins.get(i).copied().unwrap_or(false),
+        })
+      })
+      .collect();
+
     json!({
       "type": "state",
       "voice": voice_json,
@@ -257,8 +326,11 @@ impl PreviewState {
       "muted": self.muted.load(Ordering::Relaxed),
       "heartbeat_volume": self.heartbeat_volume.value(),
       "heartbeat_loop": self.heartbeat_loop.load(Ordering::Relaxed),
+      "boop_count": self.boop_count.load(Ordering::Relaxed),
       "checks": checks_json,
       "drones": drones_json,
+      "locked_params": locked_json,
+      "boop_specs": boop_specs_json,
     })
     .to_string()
   }
@@ -269,9 +341,31 @@ impl PreviewState {
     print::format_toml(&voice, &self.scale_key)
   }
 
-  /// Reset everything to startup values.
+  /// Reset everything to startup values.  Locked voice params
+  /// survive the reset; boop pins are cleared.
   pub fn revert(&self) {
+    // Snapshot locked param values before resetting the voice.
+    let locked = self.locked_params.read().unwrap().clone();
+    let locked_values: Vec<(String, f64)> = {
+      let voice = self.voice.read().unwrap();
+      locked
+        .iter()
+        .filter_map(|name| {
+          get_voice_param(&voice, name).map(|v| (name.clone(), v))
+        })
+        .collect()
+    };
+
     *self.voice.write().unwrap() = self.original_voice.clone();
+
+    // Restore locked param values.
+    {
+      let mut voice = self.voice.write().unwrap();
+      for (name, value) in &locked_values {
+        set_voice_param(&mut voice, name, *value);
+      }
+    }
+
     *self.drone_infos.write().unwrap() = self.original_drone_infos.clone();
 
     for dv in &self.drone_volumes {
@@ -290,11 +384,37 @@ impl PreviewState {
     }
 
     self.heartbeat_loop.store(false, Ordering::Relaxed);
+    self
+      .boop_count
+      .store(self.original_boop_count, Ordering::Relaxed);
     self.drone_rebuild_requested.store(true, Ordering::Relaxed);
+
+    // Clear boop pins and recompute specs from reverted voice.
+    {
+      let mut pins = self.boop_pins.write().unwrap();
+      pins.iter_mut().for_each(|p| *p = false);
+    }
+    self.recompute_boop_specs();
   }
 }
 
 // -- Helpers -----------------------------------------------------------------
+
+pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
+  match param {
+    "base_freq" => Some(voice.base_freq),
+    "sine_ratio" => Some(voice.sine_ratio),
+    "tri_ratio" => Some(voice.tri_ratio),
+    "saw_ratio" => Some(voice.saw_ratio),
+    "attack_ms" => Some(voice.attack_ms),
+    "release_ms" => Some(voice.release_ms),
+    "chirp_ratio" => Some(voice.chirp_ratio),
+    "stereo_pan" => Some(voice.stereo_pan),
+    "reverb_mix" => Some(voice.reverb_mix),
+    "note_seed" => Some(voice.note_seed),
+    _ => None,
+  }
+}
 
 pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
   match param {

@@ -53,17 +53,26 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   debug!(?voice, "Resolved voice");
   log_voice_derivation(voice);
 
-  let boop_count = config.heartbeat_checks.len();
-
-  // Log initial boop specs.
+  // Log initial boop specs from materialized state.
   {
-    let specs = voice.boop_specs(scale, boop_count, heartbeat::TOTAL_BOOP_TIME);
+    let boops_per_check = preview.boop_count.load(Ordering::Relaxed);
+    let specs = preview.boop_specs.read().unwrap();
     for (i, spec) in specs.iter().enumerate() {
+      let check_idx = if boops_per_check > 0 {
+        i / boops_per_check
+      } else {
+        0
+      };
+      let check_name = config
+        .heartbeat_checks
+        .get(check_idx)
+        .map(|c| c.name.as_str())
+        .unwrap_or("?");
       debug!(
         boop = i,
         freq = format_args!("{:.1} Hz", spec.freq),
         duration = format_args!("{:.3}s", spec.duration),
-        check = config.heartbeat_checks[i].name,
+        check = check_name,
         "Boop spec"
       );
     }
@@ -259,17 +268,19 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
     // Heartbeat trigger (one-shot, immediate).
     if preview.heartbeat_trigger.swap(false, Ordering::Relaxed)
-      && boop_count > 0
+      && !preview.heartbeat_state.boops.is_empty()
     {
-      play_heartbeat_preview(&mixer, &preview, scale, boop_count)?;
+      play_heartbeat_preview(&mixer, &preview)?;
       metrics.heartbeats_played.inc();
       thread::sleep(Duration::from_millis(50));
       continue;
     }
 
     // Heartbeat loop (continuous).
-    if preview.heartbeat_loop.load(Ordering::Relaxed) && boop_count > 0 {
-      play_heartbeat_preview(&mixer, &preview, scale, boop_count)?;
+    if preview.heartbeat_loop.load(Ordering::Relaxed)
+      && !preview.heartbeat_state.boops.is_empty()
+    {
+      play_heartbeat_preview(&mixer, &preview)?;
       metrics.heartbeats_played.inc();
       // Brief pause before looping.
       thread::sleep(Duration::from_millis(50));
@@ -314,8 +325,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     }
 
     // Normal slot-based heartbeat.
-    if !is_muted && boop_count > 0 {
-      play_heartbeat_preview(&mixer, &preview, scale, boop_count)?;
+    if !is_muted && !preview.heartbeat_state.boops.is_empty() {
+      play_heartbeat_preview(&mixer, &preview)?;
       metrics.heartbeats_played.inc();
     }
 
@@ -414,17 +425,30 @@ fn rebuild_drones(
 fn play_heartbeat_preview(
   mixer: &AudioMixer,
   preview: &PreviewState,
-  scale: &PentatonicScale,
-  boop_count: usize,
 ) -> Result<(), DaemonError> {
-  let voice = preview.voice.read().unwrap();
-  let specs = voice.boop_specs(scale, boop_count, heartbeat::TOTAL_BOOP_TIME);
+  let specs = preview.boop_specs.read().unwrap().clone();
+  let total = specs.len();
+  let boops_per_check = preview.boop_count.load(Ordering::Relaxed);
 
-  let severities: Vec<_> = preview
-    .heartbeat_state
-    .boops
-    .iter()
-    .map(|b| severity_from_shared(b.value()))
+  let voice = preview.voice.read().unwrap();
+
+  // Each check's severity repeats for its phrase of boops.
+  let severities: Vec<_> = (0..total)
+    .map(|i| {
+      let check_idx = if boops_per_check > 0 {
+        i / boops_per_check
+      } else {
+        0
+      };
+      severity_from_shared(
+        preview
+          .heartbeat_state
+          .boops
+          .get(check_idx)
+          .map(|b| b.value())
+          .unwrap_or(0.0),
+      )
+    })
     .collect();
 
   info!(
@@ -441,8 +465,9 @@ fn play_heartbeat_preview(
     &specs,
     Some(&preview.heartbeat_volume),
   );
+  let release_secs = voice.release_ms / 1000.0;
   let slot = mixer.add(graph);
-  std::thread::sleep(heartbeat::heartbeat_duration(&specs));
+  std::thread::sleep(heartbeat::heartbeat_duration(&specs, release_secs));
   mixer.remove(slot);
   Ok(())
 }

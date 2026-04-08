@@ -92,6 +92,43 @@ async fn handle_socket(socket: WebSocket, preview: Arc<PreviewState>) {
   debug!("WebSocket client disconnected");
 }
 
+/// Broadcast current boop specs + pins to all connected clients.
+fn broadcast_boop_specs(preview: &PreviewState) {
+  let specs = preview.boop_specs.read().unwrap();
+  let pins = preview.boop_pins.read().unwrap();
+  let specs_json: Vec<_> = specs
+    .iter()
+    .enumerate()
+    .map(|(i, spec)| {
+      json!({
+        "freq": spec.freq,
+        "duration": spec.duration,
+        "pinned": pins.get(i).copied().unwrap_or(false),
+      })
+    })
+    .collect();
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": "boop_specs_changed",
+      "specs": specs_json,
+    })
+    .to_string(),
+  );
+}
+
+/// Broadcast current locked params to all connected clients.
+fn broadcast_locked_params(preview: &PreviewState) {
+  let locked = preview.locked_params.read().unwrap();
+  let locked_json: Vec<_> = locked.iter().collect();
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": "locked_params_changed",
+      "params": locked_json,
+    })
+    .to_string(),
+  );
+}
+
 /// Dispatch a single client message.  Returns `Some(reply)` for
 /// messages that should go only to the requesting client.
 /// Broadcast side-effects are fired inline.
@@ -122,6 +159,10 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         })
         .to_string(),
       );
+      if matches!(param, "note_seed" | "base_freq") {
+        preview.recompute_boop_specs();
+        broadcast_boop_specs(preview);
+      }
       None
     }
 
@@ -256,6 +297,22 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "set_boop_count" => {
+      let count = msg.get("count").and_then(|v| v.as_u64())? as usize;
+      let clamped = count.clamp(1, 8);
+      preview.boop_count.store(clamped, Ordering::Relaxed);
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "boop_count_changed",
+          "count": clamped,
+        })
+        .to_string(),
+      );
+      preview.recompute_boop_specs();
+      broadcast_boop_specs(preview);
+      None
+    }
+
     "trigger_heartbeat" => {
       preview.heartbeat_trigger.store(true, Ordering::Relaxed);
       None
@@ -319,6 +376,66 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         })
         .to_string(),
       );
+      None
+    }
+
+    "lock_param" => {
+      let param = msg.get("param").and_then(|v| v.as_str())?;
+      if !preview_state::VOICE_PARAMS.iter().any(|p| p.name == param) {
+        return None;
+      }
+      preview
+        .locked_params
+        .write()
+        .unwrap()
+        .insert(param.to_string());
+      broadcast_locked_params(preview);
+      None
+    }
+
+    "unlock_param" => {
+      let param = msg.get("param").and_then(|v| v.as_str())?;
+      preview.locked_params.write().unwrap().remove(param);
+      broadcast_locked_params(preview);
+      None
+    }
+
+    "unlock_all" => {
+      preview.locked_params.write().unwrap().clear();
+      broadcast_locked_params(preview);
+      None
+    }
+
+    "set_boop_spec" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      {
+        let mut specs = preview.boop_specs.write().unwrap();
+        let mut pins = preview.boop_pins.write().unwrap();
+        let spec = specs.get_mut(index)?;
+        if let Some(freq) = msg.get("freq").and_then(|v| v.as_f64()) {
+          spec.freq = freq;
+        }
+        if let Some(duration) = msg.get("duration").and_then(|v| v.as_f64()) {
+          spec.duration = duration;
+        }
+        if let Some(pin) = pins.get_mut(index) {
+          *pin = true;
+        }
+      }
+      broadcast_boop_specs(preview);
+      None
+    }
+
+    "clear_boop_pin" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      {
+        let mut pins = preview.boop_pins.write().unwrap();
+        if let Some(pin) = pins.get_mut(index) {
+          *pin = false;
+        }
+      }
+      preview.recompute_boop_specs();
+      broadcast_boop_specs(preview);
       None
     }
 
