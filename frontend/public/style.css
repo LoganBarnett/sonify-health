@@ -470,6 +470,37 @@ a:hover {
   font-size: 1rem;
 }
 
+.tab-bar {
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.tab {
+  padding: var(--btn-py) var(--btn-px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--btn-radius);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--btn-font);
+  line-height: var(--btn-line-height);
+}
+.tab:hover {
+  background: var(--color-border);
+}
+
+.tab-active {
+  padding: var(--btn-py) var(--btn-px);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--btn-radius);
+  background: var(--color-accent);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: var(--btn-font);
+  line-height: var(--btn-line-height);
+}
+
 .export-textarea {
   width: 100%;
   min-height: 200px;

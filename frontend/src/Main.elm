@@ -23,7 +23,8 @@ type alias Model =
     , checks : List CheckInfo
     , drones : List DroneInfo
     , checkLog : List CheckLogEntry
-    , tomlExport : Maybe String
+    , exportData : Maybe { toml : String, json : String, nix : String }
+    , exportTab : String
     , debounces : Dict String Int
     , nextDebounce : Int
     , lockedParams : Set String
@@ -53,8 +54,9 @@ type Msg
     | ToggleHeartbeatLoop
     | TriggerHeartbeat
     | RevertAll
-    | ExportToml
+    | Export
     | DismissExport
+    | SetExportTab String
     | ToggleLockParam String
     | ToggleLockDrone Int
     | UnlockAll
@@ -87,7 +89,8 @@ init =
       , checks = []
       , drones = []
       , checkLog = []
-      , tomlExport = Nothing
+      , exportData = Nothing
+      , exportTab = "toml"
       , debounces = Dict.empty
       , nextDebounce = 0
       , lockedParams = Set.empty
@@ -342,13 +345,16 @@ update msg model =
             , Ports.websocketSend encodeRevertAll
             )
 
-        ExportToml ->
+        Export ->
             ( model
-            , Ports.websocketSend encodeExportToml
+            , Ports.websocketSend encodeExportVoice
             )
 
         DismissExport ->
-            ( { model | tomlExport = Nothing }, Cmd.none )
+            ( { model | exportData = Nothing }, Cmd.none )
+
+        SetExportTab tab ->
+            ( { model | exportTab = tab }, Cmd.none )
 
         ToggleLockParam param ->
             if Set.member param model.lockedParams then
@@ -625,8 +631,8 @@ handleServerMsg raw model =
             , Cmd.none
             )
 
-        Just (TomlExport content) ->
-            ( { model | tomlExport = Just content }, Cmd.none )
+        Just (VoiceExport data) ->
+            ( { model | exportData = Just data }, Cmd.none )
 
         Just (LockedParamsChanged params) ->
             ( { model | lockedParams = Set.fromList params }, Cmd.none )
@@ -702,8 +708,8 @@ viewToolbar model =
                 [ text "Revert" ]
             , button [ class "btn-action", onClick UnlockAll ]
                 [ text "Unlock All" ]
-            , button [ class "btn-action", onClick ExportToml ]
-                [ text "Export TOML" ]
+            , button [ class "btn-action", onClick Export ]
+                [ text "Export" ]
             , a [ href "/scalar", class "btn-action" ]
                 [ text "API Docs" ]
             ]
@@ -1073,15 +1079,45 @@ viewLogEntry entry =
 
 viewExportModal : Model -> Html Msg
 viewExportModal model =
-    case model.tomlExport of
-        Just content ->
+    case model.exportData of
+        Just data ->
+            let
+                content =
+                    case model.exportTab of
+                        "json" ->
+                            data.json
+
+                        "nix" ->
+                            data.nix
+
+                        _ ->
+                            data.toml
+
+                tabButton label_ tabKey =
+                    button
+                        [ class
+                            (if model.exportTab == tabKey then
+                                "tab-active"
+
+                             else
+                                "tab"
+                            )
+                        , onClick (SetExportTab tabKey)
+                        ]
+                        [ text label_ ]
+            in
             div [ class "modal-backdrop", onClick DismissExport ]
                 [ div
                     [ class "modal"
                     , Html.Events.stopPropagationOn "click"
                         (Json.Decode.succeed ( NoOp, True ))
                     ]
-                    [ h3 [ class "modal-title" ] [ text "Exported TOML" ]
+                    [ h3 [ class "modal-title" ] [ text "Export Voice" ]
+                    , div [ class "tab-bar" ]
+                        [ tabButton "TOML" "toml"
+                        , tabButton "JSON" "json"
+                        , tabButton "Nix" "nix"
+                        ]
                     , textarea
                         [ class "export-textarea"
                         , Html.Attributes.readonly True

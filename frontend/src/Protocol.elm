@@ -9,7 +9,7 @@ module Protocol exposing
     , decodeServerMsg
     , encodeClearBoopPin
     , encodeClearOverride
-    , encodeExportToml
+    , encodeExportVoice
     , encodeGetState
     , encodeLockDrone
     , encodeLockParam
@@ -114,7 +114,7 @@ type ServerMsg
     | BoopCountChanged Int
     | DroneConfigChanged Int String String
     | CheckLog CheckLogEntry
-    | TomlExport String
+    | VoiceExport { toml : String, json : String, nix : String }
     | LockedParamsChanged (List String)
     | LockedDronesChanged (List Int)
     | BoopSpecsChanged (List BoopSpecInfo)
@@ -161,8 +161,8 @@ serverMsgDecoder =
                     "check_log" ->
                         checkLogDecoder
 
-                    "toml_export" ->
-                        tomlExportDecoder
+                    "voice_export" ->
+                        voiceExportDecoder
 
                     "locked_params_changed" ->
                         lockedParamsChangedDecoder
@@ -367,9 +367,13 @@ droneConfigChangedDecoder =
         (D.field "register" D.string)
 
 
-tomlExportDecoder : D.Decoder ServerMsg
-tomlExportDecoder =
-    D.map TomlExport (D.field "content" D.string)
+voiceExportDecoder : D.Decoder ServerMsg
+voiceExportDecoder =
+    D.map3
+        (\t j n -> VoiceExport { toml = t, json = j, nix = n })
+        (D.field "toml" D.string)
+        (D.field "json" D.string)
+        (D.field "nix" D.string)
 
 
 boopSpecInfoDecoder : D.Decoder BoopSpecInfo
@@ -536,8 +540,8 @@ encodeSetDroneRegister index register =
         |> E.encode 0
 
 
-encodeExportToml : String
-encodeExportToml =
+encodeExportVoice : String
+encodeExportVoice =
     E.object [ ( "type", E.string "export_toml" ) ]
         |> E.encode 0
 

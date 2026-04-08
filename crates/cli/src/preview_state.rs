@@ -394,6 +394,18 @@ impl PreviewState {
     print::format_toml(&voice, &self.scale_key)
   }
 
+  /// Format the current voice as a JSON object.
+  pub fn export_json(&self) -> String {
+    let voice = self.voice.read().unwrap();
+    print::format_json(&voice, &self.scale_key)
+  }
+
+  /// Format the current voice as a Nix attribute set.
+  pub fn export_nix(&self) -> String {
+    let voice = self.voice.read().unwrap();
+    print::format_nix(&voice, &self.scale_key)
+  }
+
   /// Reset everything to startup values.  Locked voice params
   /// and locked drones survive the reset; boop pins are cleared.
   pub fn revert(&self) {

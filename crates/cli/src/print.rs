@@ -1,3 +1,4 @@
+use serde_json::json;
 use sonify_health_lib::Voice;
 
 /// Ensure a float string contains a decimal point so TOML and Nix
@@ -53,6 +54,26 @@ pub(crate) fn format_nix(voice: &Voice, scale_key: &str) -> String {
     "};".to_string(),
   ]
   .join("\n")
+}
+
+/// Format voice parameters as a pretty-printed JSON object.
+pub(crate) fn format_json(voice: &Voice, scale_key: &str) -> String {
+  serde_json::to_string_pretty(&json!({
+    "scale_key": scale_key,
+    "base_freq": voice.base_freq,
+    "sine_ratio": voice.sine_ratio,
+    "tri_ratio": voice.tri_ratio,
+    "saw_ratio": voice.saw_ratio,
+    "attack_ms": voice.attack_ms,
+    "release_ms": voice.release_ms,
+    "chirp_ratio": voice.chirp_ratio,
+    "stereo_pan": voice.stereo_pan,
+    "reverb_mix": voice.reverb_mix,
+    "note_seed": voice.note_seed,
+    "echo_delay": voice.echo_delay,
+    "echo_mix": voice.echo_mix,
+  }))
+  .unwrap()
 }
 
 /// Format voice parameters as CLI flags for round-tripping into

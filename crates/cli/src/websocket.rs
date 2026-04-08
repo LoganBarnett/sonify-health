@@ -473,7 +473,17 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     "export_toml" => {
       let toml = preview.export_toml();
-      Some(json!({"type": "toml_export", "content": toml}).to_string())
+      let json_str = preview.export_json();
+      let nix = preview.export_nix();
+      Some(
+        json!({
+          "type": "voice_export",
+          "toml": toml,
+          "json": json_str,
+          "nix": nix,
+        })
+        .to_string(),
+      )
     }
 
     _ => None,
