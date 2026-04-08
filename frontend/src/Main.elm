@@ -850,7 +850,7 @@ viewBoopRow boopCount checks index spec =
         , input
             [ type_ "range"
             , Html.Attributes.min "60"
-            , Html.Attributes.max "1200"
+            , Html.Attributes.max "12000"
             , step "1"
             , value (String.fromFloat spec.freq)
             , onInput (SetBoopFreq index)
