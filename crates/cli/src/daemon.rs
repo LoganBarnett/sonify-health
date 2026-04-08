@@ -235,19 +235,15 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       let ds = Arc::clone(&drone_state);
       let mix = mixer.handle();
       thread::spawn(move || {
+        let mut slot_id: Option<usize> = None;
         while run.load(Ordering::Relaxed) {
-          // Read current voice and metric.
-          let voice = prev
-            .voices
-            .read()
-            .unwrap()
-            .get(&crate::preview_state::VoiceOwner::Drone(i))
-            .cloned()
-            .expect("Drone voice missing from voices map");
           if prev.drone_infos.read().unwrap().get(i).is_none() {
             break;
           }
           let metric = ds.metrics[i].value();
+
+          // Interpolate between lo and hi profiles based on metric.
+          let voice = prev.effective_drone_voice(i, metric);
 
           let specs = prev.drone_boop_specs.read().unwrap()[i].clone();
           let severities: Vec<Severity> =
@@ -270,11 +266,23 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             voice.echo_mix,
           );
 
-          let slot = mix.add(graph);
+          // First iteration uses add; subsequent iterations use
+          // replace for seamless graph swap.
+          let sid = match slot_id {
+            Some(id) => {
+              mix.replace(id, graph);
+              id
+            }
+            None => {
+              let id = mix.add(graph);
+              slot_id = Some(id);
+              id
+            }
+          };
           sleep_checking(&run, phrase_dur);
-          mix.remove(slot);
 
           if !run.load(Ordering::Relaxed) {
+            mix.remove(sid);
             break;
           }
 
@@ -284,7 +292,11 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           let curve = prev.drone_repeat_curves[i].value();
           let rate = prev.drone_repeat_rates[i].value();
           let gap = drone::phrase_gap_secs(base_gap, metric, curve, rate);
-          sleep_checking(&run, Duration::from_secs_f64(gap));
+          if gap > 0.0 {
+            mix.remove(sid);
+            slot_id = None;
+            sleep_checking(&run, Duration::from_secs_f64(gap));
+          }
         }
       })
     })
@@ -477,20 +489,12 @@ fn sleep_checking(running: &AtomicBool, dur: Duration) {
 
 fn log_voice_derivation(voice: &Voice) {
   use sha2::{Digest, Sha256};
-  use sonify_health_lib::scale;
 
   let hostname = gethostname::gethostname().to_string_lossy().to_string();
-  let domain = scale::domain_from_hostname(&hostname);
   let host_hash = Sha256::digest(hostname.as_bytes());
-  let domain_hash = Sha256::digest(domain.as_bytes());
   debug!(
     hostname = %hostname,
     hostname_sha256_prefix = %host_hash[..8]
-      .iter()
-      .map(|b| format!("{:02x}", b))
-      .collect::<String>(),
-    domain = %domain,
-    domain_sha256_prefix = %domain_hash[..8]
       .iter()
       .map(|b| format!("{:02x}", b))
       .collect::<String>(),

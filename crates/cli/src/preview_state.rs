@@ -5,7 +5,7 @@ use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
   state::{DroneState, HeartbeatState},
-  BoopSpec, PentatonicScale, Severity, Voice, VoiceOverrides,
+  BoopSpec, Severity, Voice, VoiceOverrides,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{
@@ -94,7 +94,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
   },
   VoiceParamMeta {
     name: "note_seed",
-    description: "Seed for boop note selection within the pentatonic scale.",
+    description: "Seed for boop duration selection.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
@@ -136,14 +136,6 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
       "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body.",
     min: 0.0,
     max: 1.0,
-    step: 0.01,
-  },
-  VoiceParamMeta {
-    name: "note_spread",
-    description:
-      "Range in octaves around base frequency for note selection.",
-    min: 0.0,
-    max: 2.0,
     step: 0.01,
   },
   VoiceParamMeta {
@@ -250,7 +242,8 @@ pub struct DroneMetricInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VoiceOwner {
   Heartbeat,
-  Drone(usize),
+  DroneLo(usize),
+  DroneHi(usize),
 }
 
 impl VoiceOwner {
@@ -258,7 +251,8 @@ impl VoiceOwner {
   pub fn from_layer_index(layer: &str, index: Option<usize>) -> Option<Self> {
     match layer {
       "heartbeat" => Some(Self::Heartbeat),
-      "drone" => index.map(Self::Drone),
+      "drone_lo" => index.map(Self::DroneLo),
+      "drone_hi" => index.map(Self::DroneHi),
       _ => None,
     }
   }
@@ -274,8 +268,6 @@ impl VoiceOwner {
 pub struct PreviewState {
   original_voices: HashMap<VoiceOwner, Voice>,
   pub voices: RwLock<HashMap<VoiceOwner, Voice>>,
-  pub scale: PentatonicScale,
-  pub scale_key: String,
   pub muted: Arc<AtomicBool>,
   /// Per-metric raw volume set by the UI (0.0..=1.0).
   pub drone_volumes: Vec<Shared>,
@@ -286,6 +278,9 @@ pub struct PreviewState {
   pub drone_repeat_curves: Vec<Shared>,
   /// Base gap in seconds between drone phrases (0.0..=16.0).
   pub drone_phrase_gaps: Vec<Shared>,
+  /// Power-curve exponent controlling how the metric reshapes the
+  /// lo/hi voice interpolation (0.1..=5.0).
+  pub drone_interp_curves: Vec<Shared>,
   /// `mute_factor * per_metric_volume`, wired into audio graphs.
   pub combined_volumes: Vec<Shared>,
   pub master_volume: Shared,
@@ -317,12 +312,10 @@ pub struct PreviewState {
 impl PreviewState {
   pub fn new(
     voice: Voice,
-    scale: PentatonicScale,
-    scale_key: String,
     muted: Arc<AtomicBool>,
     heartbeat_checks: &[HeartbeatCheckConfig],
     drone_metrics: &[DroneMetricConfig],
-    drone_voice_overrides: &HashMap<String, VoiceOverrides>,
+    drone_profile_overrides: &HashMap<String, (VoiceOverrides, VoiceOverrides)>,
     slot_secs: f64,
     initial_notes: &[BoopSpec],
     initial_drone_notes: &HashMap<String, Vec<BoopSpec>>,
@@ -338,6 +331,8 @@ impl PreviewState {
       (0..drone_count).map(|_| shared(1.0)).collect();
     let drone_phrase_gaps: Vec<Shared> =
       (0..drone_count).map(|_| shared(4.0)).collect();
+    let drone_interp_curves: Vec<Shared> =
+      (0..drone_count).map(|_| shared(1.0)).collect();
     let combined_volumes: Vec<Shared> =
       (0..drone_count).map(|_| shared(1.0)).collect();
 
@@ -355,7 +350,7 @@ impl PreviewState {
 
     let (initial_specs, initial_pins, boop_count) = if initial_notes.is_empty()
     {
-      let specs = voice.boop_specs(&scale, check_count, 1, slot_secs);
+      let specs = voice.boop_specs(check_count, 1, slot_secs);
       let pins = vec![false; specs.len()];
       (specs, pins, 1)
     } else {
@@ -371,11 +366,17 @@ impl PreviewState {
     let mut voices = HashMap::new();
     voices.insert(VoiceOwner::Heartbeat, voice.clone());
     for (i, dm) in drone_metrics.iter().enumerate() {
-      let drone_voice = drone_voice_overrides
+      let (lo_voice, hi_voice) = drone_profile_overrides
         .get(&dm.name)
-        .map(|ovr| voice.clone().with_overrides(ovr))
-        .unwrap_or_else(|| voice.clone());
-      voices.insert(VoiceOwner::Drone(i), drone_voice);
+        .map(|(lo_ovr, hi_ovr)| {
+          (
+            voice.clone().with_overrides(lo_ovr),
+            voice.clone().with_overrides(hi_ovr),
+          )
+        })
+        .unwrap_or_else(|| (voice.clone(), voice.clone()));
+      voices.insert(VoiceOwner::DroneLo(i), lo_voice);
+      voices.insert(VoiceOwner::DroneHi(i), hi_voice);
     }
 
     // Per-drone boop specs: use config notes (pinned) when present,
@@ -392,18 +393,13 @@ impl PreviewState {
           (notes.clone(), pins)
         } else {
           let drone_voice = voices
-            .get(&VoiceOwner::Drone(i))
+            .get(&VoiceOwner::DroneLo(i))
             .cloned()
             .unwrap_or_else(|| voice.clone());
           let info = &drone_infos[i];
           let effective_freq = info.base_freq.unwrap_or(drone_voice.base_freq);
-          let specs = drone_voice.drone_specs(
-            &scale,
-            i,
-            info.boops,
-            effective_freq,
-            slot_secs,
-          );
+          let specs =
+            drone_voice.drone_specs(i, info.boops, effective_freq, slot_secs);
           let pins = vec![false; specs.len()];
           (specs, pins)
         }
@@ -413,13 +409,12 @@ impl PreviewState {
     Self {
       original_voices: voices.clone(),
       voices: RwLock::new(voices),
-      scale,
-      scale_key,
       muted,
       drone_volumes,
       drone_repeat_rates,
       drone_repeat_curves,
       drone_phrase_gaps,
+      drone_interp_curves,
       combined_volumes,
       master_volume: shared(1.0),
       heartbeat_volume: shared(1.0),
@@ -494,12 +489,7 @@ impl PreviewState {
     let voices = self.voices.read().unwrap();
     let voice = &voices[&VoiceOwner::Heartbeat];
     let check_count = self.check_names.len();
-    let fresh = voice.boop_specs(
-      &self.scale,
-      check_count,
-      boops_per_check,
-      self.slot_secs,
-    );
+    let fresh = voice.boop_specs(check_count, boops_per_check, self.slot_secs);
 
     let mut specs = self.boop_specs.write().unwrap();
     let mut pins = self.boop_pins.write().unwrap();
@@ -531,7 +521,7 @@ impl PreviewState {
       let voices = self.voices.read().unwrap();
       let infos = self.drone_infos.read().unwrap();
       let voice = voices
-        .get(&VoiceOwner::Drone(index))
+        .get(&VoiceOwner::DroneLo(index))
         .cloned()
         .unwrap_or_else(|| voices[&VoiceOwner::Heartbeat].clone());
       let info = match infos.get(index) {
@@ -542,13 +532,8 @@ impl PreviewState {
     };
 
     let effective_freq = info.base_freq.unwrap_or(voice.base_freq);
-    let fresh = voice.drone_specs(
-      &self.scale,
-      index,
-      info.boops,
-      effective_freq,
-      self.slot_secs,
-    );
+    let fresh =
+      voice.drone_specs(index, info.boops, effective_freq, self.slot_secs);
 
     let mut all_specs = self.drone_boop_specs.write().unwrap();
     let mut all_pins = self.drone_boop_pins.write().unwrap();
@@ -571,6 +556,28 @@ impl PreviewState {
       pins.truncate(merged.len());
       *specs = merged;
     }
+  }
+
+  /// Compute the effective drone voice at a given metric value by
+  /// interpolating between the lo and hi profiles using the
+  /// per-drone interpolation curve.
+  pub fn effective_drone_voice(&self, index: usize, metric: f32) -> Voice {
+    let voices = self.voices.read().unwrap();
+    let lo = voices
+      .get(&VoiceOwner::DroneLo(index))
+      .cloned()
+      .unwrap_or_else(|| voices[&VoiceOwner::Heartbeat].clone());
+    let hi = voices
+      .get(&VoiceOwner::DroneHi(index))
+      .cloned()
+      .unwrap_or_else(|| lo.clone());
+    let curve = self
+      .drone_interp_curves
+      .get(index)
+      .map(|s| s.value() as f64)
+      .unwrap_or(1.0);
+    let t = (metric as f64).clamp(0.0, 1.0).powf(curve);
+    Voice::lerp(&lo, &hi, t)
   }
 
   /// Build the full state snapshot JSON sent on connect and on
@@ -630,12 +637,20 @@ impl PreviewState {
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let drone_voice = voices
-          .get(&VoiceOwner::Drone(i))
+        let voice_lo = voices
+          .get(&VoiceOwner::DroneLo(i))
           .map(voice_to_json)
           .unwrap_or(json!({}));
-        let drone_locked: Vec<_> = locked
-          .get(&VoiceOwner::Drone(i))
+        let voice_hi = voices
+          .get(&VoiceOwner::DroneHi(i))
+          .map(voice_to_json)
+          .unwrap_or(json!({}));
+        let lo_locked: Vec<_> = locked
+          .get(&VoiceOwner::DroneLo(i))
+          .map(|s| s.iter().map(|p| json!(p)).collect())
+          .unwrap_or_default();
+        let hi_locked: Vec<_> = locked
+          .get(&VoiceOwner::DroneHi(i))
           .map(|s| s.iter().map(|p| json!(p)).collect())
           .unwrap_or_default();
         let d_specs = drone_specs.get(i).cloned().unwrap_or_default();
@@ -658,11 +673,14 @@ impl PreviewState {
           "repeat_rate": self.drone_repeat_rates[i].value(),
           "repeat_curve": self.drone_repeat_curves[i].value(),
           "phrase_gap": self.drone_phrase_gaps[i].value(),
+          "interp_curve": self.drone_interp_curves[i].value(),
           "base_freq": info.base_freq,
           "boops": info.boops,
           "overridden": drone_overrides[i].is_some(),
-          "voice": drone_voice,
-          "locked_params": drone_locked,
+          "voice_lo": voice_lo,
+          "voice_hi": voice_hi,
+          "locked_params_lo": lo_locked,
+          "locked_params_hi": hi_locked,
           "specs": specs_json,
           "spec_ranges": {
             "freq_min": base_freq_meta.min / 2.0,
@@ -737,26 +755,24 @@ impl PreviewState {
     let voices = self.voices.read().unwrap();
     let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
     let drone_infos = self.drone_infos.read().unwrap();
-    let drone_voices: Vec<_> = drone_infos
+    let drone_profiles: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let v = voices
-          .get(&VoiceOwner::Drone(i))
+        let lo = voices
+          .get(&VoiceOwner::DroneLo(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
-        (info.name.clone(), v)
+        let hi = voices
+          .get(&VoiceOwner::DroneHi(i))
+          .cloned()
+          .unwrap_or_else(|| heartbeat_voice.clone());
+        (info.name.clone(), lo, hi)
       })
       .collect();
     let specs = self.boop_specs.read().unwrap();
     let drone_notes = self.drone_notes_for_export();
-    print::format_toml(
-      heartbeat_voice,
-      &drone_voices,
-      &self.scale_key,
-      &specs,
-      &drone_notes,
-    )
+    print::format_toml(heartbeat_voice, &drone_profiles, &specs, &drone_notes)
   }
 
   /// Format all voices as a JSON object.
@@ -764,26 +780,24 @@ impl PreviewState {
     let voices = self.voices.read().unwrap();
     let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
     let drone_infos = self.drone_infos.read().unwrap();
-    let drone_voices: Vec<_> = drone_infos
+    let drone_profiles: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let v = voices
-          .get(&VoiceOwner::Drone(i))
+        let lo = voices
+          .get(&VoiceOwner::DroneLo(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
-        (info.name.clone(), v)
+        let hi = voices
+          .get(&VoiceOwner::DroneHi(i))
+          .cloned()
+          .unwrap_or_else(|| heartbeat_voice.clone());
+        (info.name.clone(), lo, hi)
       })
       .collect();
     let specs = self.boop_specs.read().unwrap();
     let drone_notes = self.drone_notes_for_export();
-    print::format_json(
-      heartbeat_voice,
-      &drone_voices,
-      &self.scale_key,
-      &specs,
-      &drone_notes,
-    )
+    print::format_json(heartbeat_voice, &drone_profiles, &specs, &drone_notes)
   }
 
   /// Format all voices as a Nix attribute set.
@@ -791,26 +805,24 @@ impl PreviewState {
     let voices = self.voices.read().unwrap();
     let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
     let drone_infos = self.drone_infos.read().unwrap();
-    let drone_voices: Vec<_> = drone_infos
+    let drone_profiles: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let v = voices
-          .get(&VoiceOwner::Drone(i))
+        let lo = voices
+          .get(&VoiceOwner::DroneLo(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
-        (info.name.clone(), v)
+        let hi = voices
+          .get(&VoiceOwner::DroneHi(i))
+          .cloned()
+          .unwrap_or_else(|| heartbeat_voice.clone());
+        (info.name.clone(), lo, hi)
       })
       .collect();
     let specs = self.boop_specs.read().unwrap();
     let drone_notes = self.drone_notes_for_export();
-    print::format_nix(
-      heartbeat_voice,
-      &drone_voices,
-      &self.scale_key,
-      &specs,
-      &drone_notes,
-    )
+    print::format_nix(heartbeat_voice, &drone_profiles, &specs, &drone_notes)
   }
 
   /// Reset everything to startup values.  Locked voice params
@@ -848,6 +860,7 @@ impl PreviewState {
       f32,
       f32,
       f32,
+      f32,
     )> = {
       let infos = self.drone_infos.read().unwrap();
       locked_drone_indices
@@ -861,6 +874,7 @@ impl PreviewState {
               self.drone_repeat_rates[i].value(),
               self.drone_repeat_curves[i].value(),
               self.drone_phrase_gaps[i].value(),
+              self.drone_interp_curves[i].value(),
             )
           })
         })
@@ -895,11 +909,14 @@ impl PreviewState {
     for pg in &self.drone_phrase_gaps {
       pg.set_value(4.0);
     }
+    for ic in &self.drone_interp_curves {
+      ic.set_value(1.0);
+    }
 
     // Restore locked drone settings.
     {
       let mut infos = self.drone_infos.write().unwrap();
-      for (i, info, vol, rate, curve, gap) in &locked_drone_snapshots {
+      for (i, info, vol, rate, curve, gap, interp) in &locked_drone_snapshots {
         if let Some(entry) = infos.get_mut(*i) {
           *entry = info.clone();
         }
@@ -907,6 +924,7 @@ impl PreviewState {
         self.drone_repeat_rates[*i].set_value(*rate);
         self.drone_repeat_curves[*i].set_value(*curve);
         self.drone_phrase_gaps[*i].set_value(*gap);
+        self.drone_interp_curves[*i].set_value(*interp);
       }
     }
     self.master_volume.set_value(1.0);
@@ -983,7 +1001,6 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "tremolo_depth" => Some(voice.tremolo_depth),
     "amplitude" => Some(voice.amplitude),
     "square_ratio" => Some(voice.square_ratio),
-    "note_spread" => Some(voice.note_spread),
     "drive" => Some(voice.drive),
     "noise_mix" => Some(voice.noise_mix),
     "crush" => Some(voice.crush),
@@ -1017,7 +1034,6 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "tremolo_depth" => voice.tremolo_depth = value,
     "amplitude" => voice.amplitude = value,
     "square_ratio" => voice.square_ratio = value,
-    "note_spread" => voice.note_spread = value,
     "drive" => voice.drive = value,
     "noise_mix" => voice.noise_mix = value,
     "crush" => voice.crush = value,
@@ -1052,7 +1068,6 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "tremolo_depth": voice.tremolo_depth,
     "amplitude": voice.amplitude,
     "square_ratio": voice.square_ratio,
-    "note_spread": voice.note_spread,
     "drive": voice.drive,
     "noise_mix": voice.noise_mix,
     "crush": voice.crush,
@@ -1132,11 +1147,14 @@ mod tests {
     repeat_rate: f64,
     repeat_curve: f64,
     phrase_gap: f64,
+    interp_curve: f64,
     base_freq: Option<f64>,
     boops: u64,
     overridden: bool,
-    voice: serde_json::Map<String, serde_json::Value>,
-    locked_params: Vec<String>,
+    voice_lo: serde_json::Map<String, serde_json::Value>,
+    voice_hi: serde_json::Map<String, serde_json::Value>,
+    locked_params_lo: Vec<String>,
+    locked_params_hi: Vec<String>,
     specs: Vec<BoopSpecContract>,
     spec_ranges: BoopSpecRangesContract,
   }
@@ -1170,7 +1188,6 @@ mod tests {
 
   fn test_preview() -> PreviewState {
     let voice = Voice::from_hostname("test");
-    let scale = PentatonicScale::from_key("C");
     let checks = vec![HeartbeatCheckConfig {
       name: "cpu".to_string(),
       command: "echo healthy".to_string(),
@@ -1185,12 +1202,10 @@ mod tests {
     }];
     PreviewState::new(
       voice,
-      scale,
-      "C".to_string(),
       Arc::new(AtomicBool::new(false)),
       &checks,
       &drones,
-      &HashMap::new(),
+      &HashMap::new(), // drone_profile_overrides
       4.0,
       &[],
       &HashMap::new(),
@@ -1258,7 +1273,7 @@ mod tests {
     let preview = test_preview();
     let original_drone_freq = {
       let voices = preview.voices.read().unwrap();
-      voices[&VoiceOwner::Drone(0)].base_freq
+      voices[&VoiceOwner::DroneLo(0)].base_freq
     };
     {
       let mut voices = preview.voices.write().unwrap();
@@ -1270,7 +1285,7 @@ mod tests {
       (voices[&VoiceOwner::Heartbeat].base_freq - 999.0).abs() < f64::EPSILON,
     );
     assert!(
-      (voices[&VoiceOwner::Drone(0)].base_freq - original_drone_freq).abs()
+      (voices[&VoiceOwner::DroneLo(0)].base_freq - original_drone_freq).abs()
         < f64::EPSILON,
     );
   }
@@ -1284,12 +1299,12 @@ mod tests {
     };
     {
       let mut voices = preview.voices.write().unwrap();
-      let drone = voices.get_mut(&VoiceOwner::Drone(0)).unwrap();
+      let drone = voices.get_mut(&VoiceOwner::DroneLo(0)).unwrap();
       set_voice_param(drone, "base_freq", 777.0);
     }
     let voices = preview.voices.read().unwrap();
     assert!(
-      (voices[&VoiceOwner::Drone(0)].base_freq - 777.0).abs() < f64::EPSILON,
+      (voices[&VoiceOwner::DroneLo(0)].base_freq - 777.0).abs() < f64::EPSILON,
     );
     assert!(
       (voices[&VoiceOwner::Heartbeat].base_freq - original_hb_freq).abs()
@@ -1326,7 +1341,7 @@ mod tests {
   #[test]
   fn state_snapshot_encodes_all_voices() {
     let preview = test_preview();
-    // Set heartbeat and drone to different values.
+    // Set heartbeat and drone lo/hi to different values.
     {
       let mut voices = preview.voices.write().unwrap();
       set_voice_param(
@@ -1335,17 +1350,120 @@ mod tests {
         111.0,
       );
       set_voice_param(
-        voices.get_mut(&VoiceOwner::Drone(0)).unwrap(),
+        voices.get_mut(&VoiceOwner::DroneLo(0)).unwrap(),
         "base_freq",
         222.0,
+      );
+      set_voice_param(
+        voices.get_mut(&VoiceOwner::DroneHi(0)).unwrap(),
+        "base_freq",
+        333.0,
       );
     }
     let json = preview.state_snapshot();
     let state: StateContract =
       serde_json::from_str(&json).expect("state_snapshot should decode");
     let hb_freq = state.voice["base_freq"].as_f64().unwrap();
-    let drone_freq = state.drones[0].voice["base_freq"].as_f64().unwrap();
+    let lo_freq = state.drones[0].voice_lo["base_freq"].as_f64().unwrap();
+    let hi_freq = state.drones[0].voice_hi["base_freq"].as_f64().unwrap();
     assert!((hb_freq - 111.0).abs() < f64::EPSILON);
-    assert!((drone_freq - 222.0).abs() < f64::EPSILON);
+    assert!((lo_freq - 222.0).abs() < f64::EPSILON);
+    assert!((hi_freq - 333.0).abs() < f64::EPSILON);
+  }
+
+  /// Load every example config, build a PreviewState, and verify
+  /// the state snapshot deserializes through the frontend contract.
+  /// Catches dead examples and backend/frontend JSON drift.
+  #[test]
+  fn example_configs_produce_valid_snapshots() {
+    let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .parent()
+      .unwrap()
+      .join("examples");
+    let mut tested = 0;
+    for entry in
+      std::fs::read_dir(&examples_dir).expect("examples directory should exist")
+    {
+      let path = entry.unwrap().path();
+      if path.extension().map(|e| e == "toml").unwrap_or(false) {
+        let config = crate::config::Config::from_args(
+          None,
+          None,
+          None,
+          None,
+          Some(&path),
+          None,
+          None,
+          None,
+          None,
+        )
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+        let base_voice = Voice::from_hostname("test");
+        let voice = match &config.daemon.heartbeat_voice_overrides {
+          Some(ovr) => base_voice.with_overrides(ovr),
+          None => base_voice,
+        };
+
+        let preview = PreviewState::new(
+          voice,
+          Arc::new(AtomicBool::new(false)),
+          &config.daemon.heartbeat_checks,
+          &config.daemon.drone_metrics,
+          &config.daemon.drone_profile_overrides,
+          config.daemon.timing.slot_duration_secs,
+          &config.daemon.heartbeat_notes,
+          &config.daemon.drone_notes,
+        );
+
+        let json = preview.state_snapshot();
+        let state: StateContract =
+          serde_json::from_str(&json).unwrap_or_else(|e| {
+            panic!(
+              "{}: state_snapshot does not match frontend contract: {e}",
+              path.display()
+            )
+          });
+
+        assert_eq!(
+          state.checks.len(),
+          config.daemon.heartbeat_checks.len(),
+          "{}: check count mismatch",
+          path.display()
+        );
+        assert_eq!(
+          state.drones.len(),
+          config.daemon.drone_metrics.len(),
+          "{}: drone count mismatch",
+          path.display()
+        );
+        for (i, drone) in state.drones.iter().enumerate() {
+          assert_eq!(
+            drone.name,
+            config.daemon.drone_metrics[i].name,
+            "{}: drone[{i}] name mismatch",
+            path.display()
+          );
+          assert!(
+            !drone.voice_lo.is_empty(),
+            "{}: drone[{i}] voice_lo is empty",
+            path.display()
+          );
+          assert!(
+            !drone.voice_hi.is_empty(),
+            "{}: drone[{i}] voice_hi is empty",
+            path.display()
+          );
+        }
+        tested += 1;
+      }
+    }
+    assert!(
+      tested > 0,
+      "No example configs found in {}",
+      examples_dir.display()
+    );
   }
 }

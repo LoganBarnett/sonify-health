@@ -425,6 +425,25 @@ impl MixerHandle {
     let active = slots.iter().filter(|s| s.is_some()).count();
     tracing::info!(id, active, "MixerHandle: slot removed");
   }
+
+  /// Replace the graph at the given slot in-place.
+  pub fn replace(&self, id: usize, mut graph: Box<dyn AudioUnit>) {
+    graph.set_sample_rate(self.sample_rate);
+    graph.allocate();
+    let slot = MixerSlot {
+      adapter: BigBlockAdapter::new(graph),
+      left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+      right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+    };
+
+    let mut slots = self.inner.slots.lock().unwrap();
+    if id < slots.len() {
+      slots[id] = Some(slot);
+    } else {
+      slots.resize_with(id + 1, || None);
+      slots[id] = Some(slot);
+    }
+  }
 }
 
 #[cfg(test)]

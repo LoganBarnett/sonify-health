@@ -99,6 +99,8 @@ type Msg
     | DroneRepeatCurveDebounce Int Int Float
     | SetDronePhraseGap Int String
     | DronePhraseGapDebounce Int Int Float
+    | SetDroneInterpCurve Int String
+    | DroneInterpCurveDebounce Int Int Float
     | OverrideCheck Int String
     | ClearCheckOverride Int
     | SetDroneBoops Int String
@@ -263,13 +265,33 @@ update msg model =
                                 p
                     in
                     case ( layer, maybeIndex ) of
-                        ( "drone", Just i ) ->
+                        ( "drone_lo", Just i ) ->
                             ( { model
                                 | drones =
                                     List.indexedMap
                                         (\idx d ->
                                             if idx == i then
-                                                { d | voice = List.map updateParam d.voice }
+                                                { d | voiceLo = List.map updateParam d.voiceLo }
+
+                                            else
+                                                d
+                                        )
+                                        model.drones
+                                , debounces = Dict.insert key id model.debounces
+                                , nextDebounce = id + 1
+                              }
+                            , Process.sleep 50
+                                |> Task.perform
+                                    (\_ -> VoiceDebounce layer maybeIndex name id value)
+                            )
+
+                        ( "drone_hi", Just i ) ->
+                            ( { model
+                                | drones =
+                                    List.indexedMap
+                                        (\idx d ->
+                                            if idx == i then
+                                                { d | voiceHi = List.map updateParam d.voiceHi }
 
                                             else
                                                 d
@@ -541,6 +563,41 @@ update msg model =
             , Ports.websocketSend (encodeSetDronePhraseGap index gap)
             )
 
+        SetDroneInterpCurve index valStr ->
+            case String.toFloat valStr of
+                Just curve ->
+                    let
+                        id =
+                            model.nextDebounce
+
+                        newDrones =
+                            List.indexedMap
+                                (\i d ->
+                                    if i == index then
+                                        { d | interpCurve = curve }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                    in
+                    ( { model
+                        | drones = newDrones
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform
+                            (\_ -> DroneInterpCurveDebounce id index curve)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DroneInterpCurveDebounce _ index curve ->
+            ( model
+            , Ports.websocketSend (encodeSetDroneInterpCurve index curve)
+            )
+
         OverrideCheck index severity ->
             if severity == "" then
                 ( model
@@ -629,25 +686,66 @@ update msg model =
 
         ToggleLockParam layer maybeIndex param ->
             case ( layer, maybeIndex ) of
-                ( "drone", Just i ) ->
+                ( "drone_lo", Just i ) ->
                     let
                         isLocked =
                             List.drop i model.drones
                                 |> List.head
                                 |> Maybe.map
-                                    (\d -> List.member param d.lockedParams)
+                                    (\d -> List.member param d.lockedParamsLo)
                                 |> Maybe.withDefault False
 
                         toggleLocked d =
                             if isLocked then
                                 { d
-                                    | lockedParams =
+                                    | lockedParamsLo =
                                         List.filter (\p -> p /= param)
-                                            d.lockedParams
+                                            d.lockedParamsLo
                                 }
 
                             else
-                                { d | lockedParams = param :: d.lockedParams }
+                                { d | lockedParamsLo = param :: d.lockedParamsLo }
+                    in
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\idx d ->
+                                    if idx == i then
+                                        toggleLocked d
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
+                    , Ports.websocketSend
+                        (if isLocked then
+                            encodeUnlockParam layer maybeIndex param
+
+                         else
+                            encodeLockParam layer maybeIndex param
+                        )
+                    )
+
+                ( "drone_hi", Just i ) ->
+                    let
+                        isLocked =
+                            List.drop i model.drones
+                                |> List.head
+                                |> Maybe.map
+                                    (\d -> List.member param d.lockedParamsHi)
+                                |> Maybe.withDefault False
+
+                        toggleLocked d =
+                            if isLocked then
+                                { d
+                                    | lockedParamsHi =
+                                        List.filter (\p -> p /= param)
+                                            d.lockedParamsHi
+                                }
+
+                            else
+                                { d | lockedParamsHi = param :: d.lockedParamsHi }
                     in
                     ( { model
                         | drones =
@@ -969,13 +1067,29 @@ handleServerMsg raw model =
                         p
             in
             case ( layer, maybeIndex ) of
-                ( "drone", Just i ) ->
+                ( "drone_lo", Just i ) ->
                     ( { model
                         | drones =
                             List.indexedMap
                                 (\idx d ->
                                     if idx == i then
-                                        { d | voice = List.map updateParam d.voice }
+                                        { d | voiceLo = List.map updateParam d.voiceLo }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
+                    , Cmd.none
+                    )
+
+                ( "drone_hi", Just i ) ->
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\idx d ->
+                                    if idx == i then
+                                        { d | voiceHi = List.map updateParam d.voiceHi }
 
                                     else
                                         d
@@ -1138,6 +1252,22 @@ handleServerMsg raw model =
             , Cmd.none
             )
 
+        Just (DroneInterpCurveChanged index curve) ->
+            ( { model
+                | drones =
+                    List.indexedMap
+                        (\i d ->
+                            if i == index then
+                                { d | interpCurve = curve }
+
+                            else
+                                d
+                        )
+                        model.drones
+              }
+            , Cmd.none
+            )
+
         Just (BoopCountChanged count) ->
             ( { model | boopCount = count }, Cmd.none )
 
@@ -1154,13 +1284,29 @@ handleServerMsg raw model =
 
         Just (LockedParamsChanged layer maybeIndex params) ->
             case ( layer, maybeIndex ) of
-                ( "drone", Just i ) ->
+                ( "drone_lo", Just i ) ->
                     ( { model
                         | drones =
                             List.indexedMap
                                 (\idx d ->
                                     if idx == i then
-                                        { d | lockedParams = params }
+                                        { d | lockedParamsLo = params }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
+                    , Cmd.none
+                    )
+
+                ( "drone_hi", Just i ) ->
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\idx d ->
+                                    if idx == i then
+                                        { d | lockedParamsHi = params }
 
                                     else
                                         d
@@ -1759,6 +1905,29 @@ viewDrone lockedDrones index drone =
                 []
             ]
         , div [ class "control-row" ]
+            [ label [ class "slider-label" ] [ text "Interp" ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min "0.1"
+                , Html.Attributes.max "5"
+                , step "0.1"
+                , value (String.fromFloat drone.interpCurve)
+                , onInput (SetDroneInterpCurve index)
+                , class "slider"
+                ]
+                []
+            , input
+                [ type_ "number"
+                , Html.Attributes.min "0.1"
+                , Html.Attributes.max "5"
+                , step "0.1"
+                , value (String.fromFloat drone.interpCurve)
+                , onInput (SetDroneInterpCurve index)
+                , class "slider-value-input"
+                ]
+                []
+            ]
+        , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Value" ]
             , span [ class "slider-value" ]
                 [ text (formatFloat drone.value) ]
@@ -1786,13 +1955,23 @@ viewDrone lockedDrones index drone =
                 []
             ]
         , viewDroneBoopSpecs index drone.droneSpecs drone.droneSpecRanges
+        , h3 [ class "panel-subheading" ] [ text "Voice Lo" ]
         , div [ class "slider-grid" ]
             (List.map
-                (viewVoiceSlider "drone"
+                (viewVoiceSlider "drone_lo"
                     (Just index)
-                    (Set.fromList drone.lockedParams)
+                    (Set.fromList drone.lockedParamsLo)
                 )
-                drone.voice
+                drone.voiceLo
+            )
+        , h3 [ class "panel-subheading" ] [ text "Voice Hi" ]
+        , div [ class "slider-grid" ]
+            (List.map
+                (viewVoiceSlider "drone_hi"
+                    (Just index)
+                    (Set.fromList drone.lockedParamsHi)
+                )
+                drone.voiceHi
             )
         ]
 

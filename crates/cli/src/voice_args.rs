@@ -1,6 +1,6 @@
 use crate::config::Config;
 use sha2::{Digest, Sha256};
-use sonify_health_lib::{scale, PentatonicScale, Voice, VoiceOverrides};
+use sonify_health_lib::{Voice, VoiceOverrides};
 use tracing::debug;
 
 /// CLI voice overrides shared by the `preview` and `print` subcommands.
@@ -9,10 +9,6 @@ pub(crate) struct CliVoiceOverrides {
   /// Override hostname for voice derivation.
   #[arg(long, help_heading = "Voice overrides")]
   hostname: Option<String>,
-
-  /// Override the pentatonic scale key.
-  #[arg(long, help_heading = "Voice overrides")]
-  scale_key: Option<String>,
 
   /// Override base frequency (Hz).
   #[arg(long, help_heading = "Voice overrides")]
@@ -74,10 +70,6 @@ pub(crate) struct CliVoiceOverrides {
   #[arg(long, help_heading = "Voice overrides")]
   sub_octave: Option<f64>,
 
-  /// Override note spread (0.0–1.0, octaves around base frequency).
-  #[arg(long, help_heading = "Voice overrides")]
-  note_spread: Option<f64>,
-
   /// Override vibrato rate (0.0–20.0 Hz).
   #[arg(long, help_heading = "Voice overrides")]
   vibrato_rate: Option<f64>,
@@ -138,7 +130,6 @@ impl CliVoiceOverrides {
   /// Convert CLI fields into a `VoiceOverrides`.
   fn voice_overrides(&self) -> VoiceOverrides {
     VoiceOverrides {
-      scale_key: self.scale_key.clone(),
       base_freq: self.base_freq,
       sine_ratio: self.sine_ratio,
       tri_ratio: self.tri_ratio,
@@ -154,7 +145,6 @@ impl CliVoiceOverrides {
       brightness: self.brightness,
       resonance: self.resonance,
       sub_octave: self.sub_octave,
-      note_spread: self.note_spread,
       vibrato_rate: self.vibrato_rate,
       vibrato_depth: self.vibrato_depth,
       tremolo_rate: self.tremolo_rate,
@@ -170,37 +160,19 @@ impl CliVoiceOverrides {
     }
   }
 
-  /// Determine the effective scale key: CLI flag, then config file,
-  /// then domain derived from the effective hostname.
-  pub(crate) fn effective_scale_key(&self, config: &Config) -> String {
-    self
-      .scale_key
-      .clone()
-      .unwrap_or_else(|| config.scale_key_for(&self.effective_hostname()))
-  }
-
   /// Fully resolve the voice: hostname derivation, config overrides,
-  /// CLI overrides, and pentatonic scale snap.
+  /// and CLI overrides.
   pub(crate) fn resolve_voice(&self, config: &Config) -> Voice {
     let hostname = self.effective_hostname();
-    let scale_key = self.effective_scale_key(config);
 
     let voice = Voice::from_hostname(&hostname)
       .with_overrides(config.voice_overrides_ref())
-      .with_overrides(&self.voice_overrides())
-      .with_scale(&scale_key);
+      .with_overrides(&self.voice_overrides());
 
-    let domain = scale::domain_from_hostname(&hostname);
     let host_hash = Sha256::digest(hostname.as_bytes());
-    let domain_hash = Sha256::digest(domain.as_bytes());
     debug!(
       hostname = %hostname,
       hostname_sha256_prefix = %host_hash[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>(),
-      domain = %domain,
-      domain_sha256_prefix = %domain_hash[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>(),
@@ -209,10 +181,5 @@ impl CliVoiceOverrides {
     );
 
     voice
-  }
-
-  /// Build the pentatonic scale for the resolved voice.
-  pub(crate) fn resolve_scale(&self, config: &Config) -> PentatonicScale {
-    PentatonicScale::from_key(&self.effective_scale_key(config))
   }
 }

@@ -1,4 +1,3 @@
-use crate::scale::PentatonicScale;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256StarStar;
@@ -65,43 +64,40 @@ pub struct Voice {
   #[voice_param(order = 14, range = 0.0..0.6)]
   pub sub_octave: f64,
 
-  #[voice_param(order = 15, range = 0.0..1.0)]
-  pub note_spread: f64,
-
-  #[voice_param(order = 16, range = 0.0..20.0)]
+  #[voice_param(order = 15, range = 0.0..20.0)]
   pub vibrato_rate: f64,
 
-  #[voice_param(order = 17, range = 0.0..1.0)]
+  #[voice_param(order = 16, range = 0.0..1.0)]
   pub vibrato_depth: f64,
 
-  #[voice_param(order = 18, range = 0.0..20.0)]
+  #[voice_param(order = 17, range = 0.0..20.0)]
   pub tremolo_rate: f64,
 
-  #[voice_param(order = 19, range = 0.0..1.0)]
+  #[voice_param(order = 18, range = 0.0..1.0)]
   pub tremolo_depth: f64,
 
-  #[voice_param(order = 20, range = 0.1..0.5)]
+  #[voice_param(order = 19, range = 0.1..0.5)]
   pub amplitude: f64,
 
-  #[voice_param(order = 21, range = 0.0..1.0)]
+  #[voice_param(order = 20, range = 0.0..1.0)]
   pub square_ratio: f64,
 
-  #[voice_param(order = 22, range = 0.5..2.0)]
+  #[voice_param(order = 21, range = 0.5..2.0)]
   pub drive: f64,
 
-  #[voice_param(order = 23, range = 0.0..0.03)]
+  #[voice_param(order = 22, range = 0.0..0.03)]
   pub noise_mix: f64,
 
-  #[voice_param(order = 24, range = 0.0..0.01)]
+  #[voice_param(order = 23, range = 0.0..0.01)]
   pub crush: f64,
 
-  #[voice_param(order = 25, range = 0.0..0.1)]
+  #[voice_param(order = 24, range = 0.0..0.1)]
   pub fm_ratio: f64,
 
-  #[voice_param(order = 26, range = 0.0..0.1)]
+  #[voice_param(order = 25, range = 0.0..0.1)]
   pub fm_depth: f64,
 
-  #[voice_param(order = 27, range = 0.0..0.01)]
+  #[voice_param(order = 26, range = 0.0..0.01)]
   pub downsample: f64,
 }
 
@@ -118,13 +114,42 @@ impl Voice {
     Self::from_hostname(&gethostname::gethostname().to_string_lossy())
   }
 
-  /// Snap base_freq to the nearest note in the pentatonic scale
-  /// derived from the given key.  Applied after PRNG generation and
-  /// overrides so it does not disturb draw order.
-  pub fn with_scale(mut self, scale_key: &str) -> Self {
-    let scale = crate::scale::PentatonicScale::from_key(scale_key);
-    self.base_freq = scale.snap(self.base_freq);
-    self
+  /// Linearly interpolate every field between two voices.  The
+  /// parameter `t` is clamped to 0.0..=1.0, where 0.0 yields `lo`
+  /// and 1.0 yields `hi`.
+  pub fn lerp(lo: &Voice, hi: &Voice, t: f64) -> Voice {
+    let t = t.clamp(0.0, 1.0);
+    Voice {
+      base_freq: lo.base_freq + (hi.base_freq - lo.base_freq) * t,
+      sine_ratio: lo.sine_ratio + (hi.sine_ratio - lo.sine_ratio) * t,
+      tri_ratio: lo.tri_ratio + (hi.tri_ratio - lo.tri_ratio) * t,
+      saw_ratio: lo.saw_ratio + (hi.saw_ratio - lo.saw_ratio) * t,
+      attack_ms: lo.attack_ms + (hi.attack_ms - lo.attack_ms) * t,
+      release_ms: lo.release_ms + (hi.release_ms - lo.release_ms) * t,
+      chirp_ratio: lo.chirp_ratio + (hi.chirp_ratio - lo.chirp_ratio) * t,
+      stereo_pan: lo.stereo_pan + (hi.stereo_pan - lo.stereo_pan) * t,
+      reverb_mix: lo.reverb_mix + (hi.reverb_mix - lo.reverb_mix) * t,
+      note_seed: lo.note_seed + (hi.note_seed - lo.note_seed) * t,
+      echo_delay: lo.echo_delay + (hi.echo_delay - lo.echo_delay) * t,
+      echo_mix: lo.echo_mix + (hi.echo_mix - lo.echo_mix) * t,
+      brightness: lo.brightness + (hi.brightness - lo.brightness) * t,
+      resonance: lo.resonance + (hi.resonance - lo.resonance) * t,
+      sub_octave: lo.sub_octave + (hi.sub_octave - lo.sub_octave) * t,
+      vibrato_rate: lo.vibrato_rate + (hi.vibrato_rate - lo.vibrato_rate) * t,
+      vibrato_depth: lo.vibrato_depth
+        + (hi.vibrato_depth - lo.vibrato_depth) * t,
+      tremolo_rate: lo.tremolo_rate + (hi.tremolo_rate - lo.tremolo_rate) * t,
+      tremolo_depth: lo.tremolo_depth
+        + (hi.tremolo_depth - lo.tremolo_depth) * t,
+      amplitude: lo.amplitude + (hi.amplitude - lo.amplitude) * t,
+      square_ratio: lo.square_ratio + (hi.square_ratio - lo.square_ratio) * t,
+      drive: lo.drive + (hi.drive - lo.drive) * t,
+      noise_mix: lo.noise_mix + (hi.noise_mix - lo.noise_mix) * t,
+      crush: lo.crush + (hi.crush - lo.crush) * t,
+      fm_ratio: lo.fm_ratio + (hi.fm_ratio - lo.fm_ratio) * t,
+      fm_depth: lo.fm_depth + (hi.fm_depth - lo.fm_depth) * t,
+      downsample: lo.downsample + (hi.downsample - lo.downsample) * t,
+    }
   }
 
   /// Apply overrides, replacing only the specified fields.
@@ -174,9 +199,6 @@ impl Voice {
     if let Some(v) = o.sub_octave {
       self.sub_octave = v;
     }
-    if let Some(v) = o.note_spread {
-      self.note_spread = v;
-    }
     if let Some(v) = o.vibrato_rate {
       self.vibrato_rate = v;
     }
@@ -222,31 +244,16 @@ impl Voice {
   /// from heartbeats and from each other.
   ///
   /// `base_freq` is the effective drone frequency (after register
-  /// and any per-drone override).  Notes are narrowed to within
-  /// `note_spread` octaves of `base_freq`.
+  /// and any per-drone override).  All notes use `base_freq`
+  /// directly; the PRNG controls only duration.
   pub fn drone_specs(
     &self,
-    scale: &PentatonicScale,
     drone_index: usize,
     count: usize,
     base_freq: f64,
     slot_secs: f64,
   ) -> Vec<BoopSpec> {
     use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
-
-    let lo = base_freq / 2_f64.powf(self.note_spread);
-    let hi = base_freq * 2_f64.powf(self.note_spread);
-    let nearby: Vec<f64> = scale
-      .notes()
-      .iter()
-      .copied()
-      .filter(|&n| n >= lo && n <= hi)
-      .collect();
-    let notes = if nearby.is_empty() {
-      scale.notes()
-    } else {
-      &nearby
-    };
 
     let mut hasher = Sha256::new();
     hasher.update(self.note_seed.to_le_bytes());
@@ -260,9 +267,8 @@ impl Voice {
     let beat_secs = slot_secs / BEATS_PER_BAR;
     let mut raw: Vec<(f64, f64)> = (0..count)
       .map(|_| {
-        let note_idx = rng.gen_range(0..notes.len());
         let note_val = NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())];
-        (notes[note_idx], note_val)
+        (base_freq, note_val)
       })
       .collect();
 
@@ -298,7 +304,6 @@ impl Voice {
       note_seed = self.note_seed,
       drone_index,
       base_freq = format_args!("{:.1} Hz", base_freq),
-      candidate_notes = nearby.len(),
       specs = ?specs.iter().map(|s| format!("{:.1}Hz/{:.3}s", s.freq, s.duration)).collect::<Vec<_>>(),
       "Drone phrase specs generated"
     );
@@ -311,35 +316,18 @@ impl Voice {
   /// `note_seed + "boop" + check_index`, so adding boops to one
   /// check never shifts another check's note sequence.
   ///
-  /// The PRNG assigns each boop a note value from
-  /// `NOTE_VALUES` (whole/half/quarter/eighth).  A fitting loop
-  /// then downshifts the longest notes until the total fits one
-  /// bar (`BEATS_PER_BAR`), flooring at `MIN_NOTE_VALUE`.
+  /// All notes use `base_freq` directly; the PRNG controls only
+  /// duration via `NOTE_VALUES` (whole/half/quarter/eighth).  A
+  /// fitting loop then downshifts the longest notes until the
+  /// total fits one bar (`BEATS_PER_BAR`), flooring at
+  /// `MIN_NOTE_VALUE`.
   pub fn boop_specs(
     &self,
-    scale: &PentatonicScale,
     check_count: usize,
     boops_per_check: usize,
     slot_secs: f64,
   ) -> Vec<BoopSpec> {
     use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
-
-    // Narrow the full scale to notes within note_spread octaves
-    // of base_freq so boops sound melodically related rather than
-    // scattered across 4+ octaves.
-    let lo = self.base_freq / 2_f64.powf(self.note_spread);
-    let hi = self.base_freq * 2_f64.powf(self.note_spread);
-    let nearby: Vec<f64> = scale
-      .notes()
-      .iter()
-      .copied()
-      .filter(|&n| n >= lo && n <= hi)
-      .collect();
-    let notes = if nearby.is_empty() {
-      scale.notes()
-    } else {
-      &nearby
-    };
 
     let beat_secs = slot_secs / BEATS_PER_BAR;
     let total = check_count * boops_per_check;
@@ -356,9 +344,8 @@ impl Voice {
       let mut rng = Xoshiro256StarStar::from_seed(seed);
 
       for _ in 0..boops_per_check {
-        let note_idx = rng.gen_range(0..notes.len());
         let note_val = NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())];
-        raw.push((notes[note_idx], note_val));
+        raw.push((self.base_freq, note_val));
       }
     }
 
@@ -395,7 +382,6 @@ impl Voice {
 /// Optional overrides for voice parameters from configuration.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct VoiceOverrides {
-  pub scale_key: Option<String>,
   pub base_freq: Option<f64>,
   pub sine_ratio: Option<f64>,
   pub tri_ratio: Option<f64>,
@@ -411,7 +397,6 @@ pub struct VoiceOverrides {
   pub brightness: Option<f64>,
   pub resonance: Option<f64>,
   pub sub_octave: Option<f64>,
-  pub note_spread: Option<f64>,
   pub vibrato_rate: Option<f64>,
   pub vibrato_depth: Option<f64>,
   pub tremolo_rate: Option<f64>,
@@ -442,7 +427,6 @@ impl fmt::Display for Voice {
     writeln!(f, "brightness:   {:.3}", self.brightness)?;
     writeln!(f, "resonance:    {:.3}", self.resonance)?;
     writeln!(f, "sub_octave:   {:.3}", self.sub_octave)?;
-    writeln!(f, "note_spread:  {:.3}", self.note_spread)?;
     writeln!(f, "vibrato_rate: {:.3} Hz", self.vibrato_rate)?;
     writeln!(f, "vibrato_depth:{:.3} st", self.vibrato_depth)?;
     writeln!(f, "tremolo_rate: {:.3} Hz", self.tremolo_rate)?;
@@ -503,7 +487,6 @@ mod tests {
       assert!((0.3..1.0).contains(&v.brightness));
       assert!((0.2..2.0).contains(&v.resonance));
       assert!((0.0..0.6).contains(&v.sub_octave));
-      assert!((0.0..1.0).contains(&v.note_spread));
       assert!((0.0..20.0).contains(&v.vibrato_rate));
       assert!((0.0..1.0).contains(&v.vibrato_depth));
       assert!((0.0..20.0).contains(&v.tremolo_rate));
@@ -534,9 +517,8 @@ mod tests {
   #[test]
   fn drone_specs_deterministic() {
     let v = Voice::from_hostname("test");
-    let scale = PentatonicScale::from_key("local");
-    let s1 = v.drone_specs(&scale, 0, 3, 400.0, 4.0);
-    let s2 = v.drone_specs(&scale, 0, 3, 400.0, 4.0);
+    let s1 = v.drone_specs(0, 3, 400.0, 4.0);
+    let s2 = v.drone_specs(0, 3, 400.0, 4.0);
     assert_eq!(s1.len(), s2.len());
     for (a, b) in s1.iter().zip(s2.iter()) {
       assert_eq!(a.freq, b.freq);
@@ -547,26 +529,24 @@ mod tests {
   #[test]
   fn drone_specs_independent_across_indices() {
     let v = Voice::from_hostname("test");
-    let scale = PentatonicScale::from_key("local");
-    let s0 = v.drone_specs(&scale, 0, 3, 400.0, 4.0);
-    let s1 = v.drone_specs(&scale, 1, 3, 400.0, 4.0);
-    // Different drone indices should produce different note sequences.
+    let s0 = v.drone_specs(0, 3, 400.0, 4.0);
+    let s1 = v.drone_specs(1, 3, 400.0, 4.0);
+    // Different drone indices should produce different duration sequences.
     let same = s0
       .iter()
       .zip(s1.iter())
-      .all(|(a, b)| a.freq == b.freq && a.duration == b.duration);
+      .all(|(a, b)| a.duration == b.duration);
     assert!(!same, "Different drone indices should produce different specs");
   }
 
   #[test]
   fn boop_notes_stable_across_count_changes() {
     let v = Voice::from_hostname("test");
-    let scale = PentatonicScale::from_key("local");
     // With 3 checks and 1 boop each, record each check's first note.
-    let specs_1 = v.boop_specs(&scale, 3, 1, 4.0);
+    let specs_1 = v.boop_specs(3, 1, 4.0);
     // With 3 checks and 3 boops each, the first boop per check
     // must keep the same frequency.
-    let specs_3 = v.boop_specs(&scale, 3, 3, 4.0);
+    let specs_3 = v.boop_specs(3, 3, 4.0);
     for check in 0..3 {
       assert_eq!(
         specs_1[check].freq,
@@ -585,10 +565,9 @@ mod tests {
       base_freq: Some(440.0),
       ..Default::default()
     });
-    let scale = PentatonicScale::from_key("local");
     // With slot_secs = 4.0, beat_secs = 1.0.  Two boops gives
     // at most 8 beats raw; the fitting loop must bring it to ≤ 4.
-    let specs = v.boop_specs(&scale, 1, 2, 4.0);
+    let specs = v.boop_specs(1, 2, 4.0);
     let total_dur: f64 = specs.iter().map(|s| s.duration).sum();
     assert!(
       total_dur <= 4.0 + 1e-10,
@@ -602,6 +581,57 @@ mod tests {
         spec.duration
       );
     }
+  }
+
+  #[test]
+  fn lerp_at_zero_equals_lo() {
+    let lo = Voice::from_hostname("lo");
+    let hi = Voice::from_hostname("hi");
+    let result = Voice::lerp(&lo, &hi, 0.0);
+    assert_eq!(result.base_freq, lo.base_freq);
+    assert_eq!(result.amplitude, lo.amplitude);
+    assert_eq!(result.reverb_mix, lo.reverb_mix);
+  }
+
+  #[test]
+  fn lerp_at_one_equals_hi() {
+    let lo = Voice::from_hostname("lo");
+    let hi = Voice::from_hostname("hi");
+    let result = Voice::lerp(&lo, &hi, 1.0);
+    assert_eq!(result.base_freq, hi.base_freq);
+    assert_eq!(result.amplitude, hi.amplitude);
+    assert_eq!(result.reverb_mix, hi.reverb_mix);
+  }
+
+  #[test]
+  fn lerp_at_half_equals_midpoint() {
+    let lo = Voice::from_hostname("lo");
+    let hi = Voice::from_hostname("hi");
+    let result = Voice::lerp(&lo, &hi, 0.5);
+    let expected_freq = (lo.base_freq + hi.base_freq) / 2.0;
+    assert!(
+      (result.base_freq - expected_freq).abs() < 1e-10,
+      "base_freq midpoint: got {} expected {}",
+      result.base_freq,
+      expected_freq,
+    );
+    let expected_amp = (lo.amplitude + hi.amplitude) / 2.0;
+    assert!(
+      (result.amplitude - expected_amp).abs() < 1e-10,
+      "amplitude midpoint: got {} expected {}",
+      result.amplitude,
+      expected_amp,
+    );
+  }
+
+  #[test]
+  fn lerp_clamps_t() {
+    let lo = Voice::from_hostname("lo");
+    let hi = Voice::from_hostname("hi");
+    let below = Voice::lerp(&lo, &hi, -0.5);
+    assert_eq!(below.base_freq, lo.base_freq);
+    let above = Voice::lerp(&lo, &hi, 2.0);
+    assert_eq!(above.base_freq, hi.base_freq);
   }
 
   /// Golden test: the derive macro must produce the same values

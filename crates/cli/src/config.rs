@@ -51,6 +51,17 @@ pub struct OidcConfig {
   pub client_secret: String,
 }
 
+/// A drone profile as it appears in the config file under
+/// `[drone_profiles.<name>]`, containing `lo` and `hi` voice
+/// overrides for metric-driven interpolation.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub(crate) struct DroneProfileRaw {
+  #[serde(default)]
+  pub lo: VoiceOverrides,
+  #[serde(default)]
+  pub hi: VoiceOverrides,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct ConfigFileRaw {
   log_level: Option<String>,
@@ -61,7 +72,7 @@ pub(crate) struct ConfigFileRaw {
   voice: Option<VoiceOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
-  drone_voices: Option<HashMap<String, VoiceOverrides>>,
+  drone_profiles: Option<HashMap<String, DroneProfileRaw>>,
   drone_notes: Option<HashMap<String, Vec<NoteSpec>>>,
   oidc: Option<OidcSectionRaw>,
 }
@@ -139,9 +150,11 @@ pub struct DaemonConfig {
   /// Voice overrides from `[heartbeat.voice]`, applied on top of the
   /// base voice (hostname + `[voice]`).
   pub heartbeat_voice_overrides: Option<VoiceOverrides>,
-  /// Per-drone voice overrides from `[drone_voices.<name>]`, keyed
-  /// by metric name.
-  pub drone_voice_overrides: HashMap<String, VoiceOverrides>,
+  /// Per-drone profile overrides from `[drone_profiles.<name>]`,
+  /// keyed by metric name.  Each entry holds (lo, hi) voice
+  /// overrides for metric-driven interpolation.
+  pub drone_profile_overrides:
+    HashMap<String, (VoiceOverrides, VoiceOverrides)>,
   /// Per-drone note specs from `[[drone_notes.<name>]]`, keyed by
   /// metric name.  When present, these override algorithmic
   /// generation and start pinned.
@@ -157,7 +170,7 @@ impl Default for DaemonConfig {
       drone_poll_interval_secs: 5.0,
       drone_metrics: Vec::new(),
       heartbeat_voice_overrides: None,
-      drone_voice_overrides: HashMap::new(),
+      drone_profile_overrides: HashMap::new(),
       drone_notes: HashMap::new(),
     }
   }
@@ -218,7 +231,15 @@ impl Config {
       .map(|d| (d.poll_interval_secs.unwrap_or(5.0), d.metrics))
       .unwrap_or((5.0, Vec::new()));
 
-    let drone_voice_overrides = file.drone_voices.unwrap_or_default();
+    let drone_profile_overrides: HashMap<
+      String,
+      (VoiceOverrides, VoiceOverrides),
+    > = file
+      .drone_profiles
+      .unwrap_or_default()
+      .into_iter()
+      .map(|(name, p)| (name, (p.lo, p.hi)))
+      .collect();
 
     let drone_notes: HashMap<String, Vec<BoopSpec>> = file
       .drone_notes
@@ -254,14 +275,14 @@ impl Config {
           drone_poll_interval_secs,
           drone_metrics: drone_metrics.clone(),
           heartbeat_voice_overrides: hb.voice,
-          drone_voice_overrides: drone_voice_overrides.clone(),
+          drone_profile_overrides: drone_profile_overrides.clone(),
           drone_notes: drone_notes.clone(),
         }
       })
       .unwrap_or(DaemonConfig {
         drone_poll_interval_secs,
         drone_metrics,
-        drone_voice_overrides,
+        drone_profile_overrides,
         drone_notes,
         ..DaemonConfig::default()
       });
@@ -340,34 +361,15 @@ impl Config {
   }
 
   /// Resolve the machine's voice: hostname-derived defaults with any
-  /// configured overrides and pentatonic scale snapping applied.
+  /// configured overrides applied.
   pub fn voice(&self) -> Voice {
-    let scale_key = self.scale_key();
     Voice::from_hostname(&gethostname::gethostname().to_string_lossy())
       .with_overrides(&self.voice_overrides)
-      .with_scale(&scale_key)
-  }
-
-  /// Build the pentatonic scale for this machine's domain.
-  pub fn scale(&self) -> sonify_health_lib::PentatonicScale {
-    sonify_health_lib::PentatonicScale::from_key(&self.scale_key())
   }
 
   /// Return the config file's voice overrides.
   pub fn voice_overrides_ref(&self) -> &VoiceOverrides {
     &self.voice_overrides
-  }
-
-  /// Determine the scale key for a given hostname: config override if
-  /// set, otherwise the domain extracted from the hostname.
-  pub fn scale_key_for(&self, hostname: &str) -> String {
-    self.voice_overrides.scale_key.clone().unwrap_or_else(|| {
-      sonify_health_lib::scale::domain_from_hostname(hostname)
-    })
-  }
-
-  fn scale_key(&self) -> String {
-    self.scale_key_for(&gethostname::gethostname().to_string_lossy())
   }
 }
 
@@ -483,23 +485,33 @@ mod tests {
   }
 
   #[test]
-  fn drone_voices_section_parses() {
+  fn drone_profiles_section_parses() {
     let toml = r#"
-      [drone_voices.cpu]
+      [drone_profiles.cpu.lo]
       base_freq = 220.0
       sine_ratio = 0.5
 
-      [drone_voices.mem]
+      [drone_profiles.cpu.hi]
+      base_freq = 440.0
+      sine_ratio = 1.0
+
+      [drone_profiles.mem.lo]
       base_freq = 330.0
+
+      [drone_profiles.mem.hi]
+      base_freq = 660.0
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let dv = raw.drone_voices.unwrap();
-    assert_eq!(dv.len(), 2);
-    assert_eq!(dv["cpu"].base_freq, Some(220.0));
-    assert_eq!(dv["cpu"].sine_ratio, Some(0.5));
-    assert_eq!(dv["mem"].base_freq, Some(330.0));
-    assert_eq!(dv["mem"].sine_ratio, None);
+    let dp = raw.drone_profiles.unwrap();
+    assert_eq!(dp.len(), 2);
+    assert_eq!(dp["cpu"].lo.base_freq, Some(220.0));
+    assert_eq!(dp["cpu"].lo.sine_ratio, Some(0.5));
+    assert_eq!(dp["cpu"].hi.base_freq, Some(440.0));
+    assert_eq!(dp["cpu"].hi.sine_ratio, Some(1.0));
+    assert_eq!(dp["mem"].lo.base_freq, Some(330.0));
+    assert_eq!(dp["mem"].hi.base_freq, Some(660.0));
+    assert_eq!(dp["mem"].lo.sine_ratio, None);
   }
 
   #[test]
@@ -533,19 +545,19 @@ mod tests {
 
   /// The exported TOML format must round-trip through config loading.
   /// `format_toml` produces `[heartbeat.voice]` and
-  /// `[drone_voices.<name>]` sections; these must be parsed by
-  /// `ConfigFileRaw` so users can paste an export into a config file.
+  /// `[drone_profiles.<name>.lo/hi]` sections; these must be parsed
+  /// by `ConfigFileRaw` so users can paste an export into a config
+  /// file.
   #[test]
   fn export_toml_round_trips_through_config_parser() {
     let voice = Voice::from_hostname("test");
-    let drone_voice = Voice::from_hostname("drone-test");
+    let drone_lo = Voice::from_hostname("drone-lo");
+    let drone_hi = Voice::from_hostname("drone-hi");
 
     // Simulate what format_toml produces: heartbeat voice, notes,
-    // and drone voices.
+    // and drone profiles.
     let exported = format!(
-      r#"scale_key = "C"
-
-[heartbeat.voice]
+      r#"[heartbeat.voice]
 base_freq = {hb_base}
 sine_ratio = {hb_sine}
 tri_ratio = {hb_tri}
@@ -561,7 +573,6 @@ echo_mix = {hb_echo_mix}
 brightness = {hb_brightness}
 resonance = {hb_resonance}
 sub_octave = {hb_sub}
-note_spread = {hb_spread}
 vibrato_rate = {hb_vib_rate}
 vibrato_depth = {hb_vib_depth}
 tremolo_rate = {hb_trem_rate}
@@ -584,28 +595,15 @@ duration = 0.5
 freq = 920.0
 duration = 0.25
 
-[drone_voices.cpu]
-base_freq = {dr_base}
-sine_ratio = {dr_sine}
-tri_ratio = {dr_tri}
-saw_ratio = {dr_saw}
-attack_ms = {dr_attack}
-release_ms = {dr_release}
-chirp_ratio = {dr_chirp}
-stereo_pan = {dr_pan}
-reverb_mix = {dr_reverb}
-note_seed = {dr_seed}
-echo_delay = {dr_echo_delay}
-echo_mix = {dr_echo_mix}
-brightness = {dr_brightness}
-resonance = {dr_resonance}
-sub_octave = {dr_sub}
-note_spread = {dr_spread}
-vibrato_rate = {dr_vib_rate}
-vibrato_depth = {dr_vib_depth}
-tremolo_rate = {dr_trem_rate}
-tremolo_depth = {dr_trem_depth}
-amplitude = {dr_amp}
+[drone_profiles.cpu.lo]
+base_freq = {lo_base}
+sine_ratio = {lo_sine}
+amplitude = {lo_amp}
+
+[drone_profiles.cpu.hi]
+base_freq = {hi_base}
+sine_ratio = {hi_sine}
+amplitude = {hi_amp}
 "#,
       hb_base = voice.base_freq,
       hb_sine = voice.sine_ratio,
@@ -622,33 +620,17 @@ amplitude = {dr_amp}
       hb_brightness = voice.brightness,
       hb_resonance = voice.resonance,
       hb_sub = voice.sub_octave,
-      hb_spread = voice.note_spread,
       hb_vib_rate = voice.vibrato_rate,
       hb_vib_depth = voice.vibrato_depth,
       hb_trem_rate = voice.tremolo_rate,
       hb_trem_depth = voice.tremolo_depth,
       hb_amp = voice.amplitude,
-      dr_base = drone_voice.base_freq,
-      dr_sine = drone_voice.sine_ratio,
-      dr_tri = drone_voice.tri_ratio,
-      dr_saw = drone_voice.saw_ratio,
-      dr_attack = drone_voice.attack_ms,
-      dr_release = drone_voice.release_ms,
-      dr_chirp = drone_voice.chirp_ratio,
-      dr_pan = drone_voice.stereo_pan,
-      dr_reverb = drone_voice.reverb_mix,
-      dr_seed = drone_voice.note_seed,
-      dr_echo_delay = drone_voice.echo_delay,
-      dr_echo_mix = drone_voice.echo_mix,
-      dr_brightness = drone_voice.brightness,
-      dr_resonance = drone_voice.resonance,
-      dr_sub = drone_voice.sub_octave,
-      dr_spread = drone_voice.note_spread,
-      dr_vib_rate = drone_voice.vibrato_rate,
-      dr_vib_depth = drone_voice.vibrato_depth,
-      dr_trem_rate = drone_voice.tremolo_rate,
-      dr_trem_depth = drone_voice.tremolo_depth,
-      dr_amp = drone_voice.amplitude,
+      lo_base = drone_lo.base_freq,
+      lo_sine = drone_lo.sine_ratio,
+      lo_amp = drone_lo.amplitude,
+      hi_base = drone_hi.base_freq,
+      hi_sine = drone_hi.sine_ratio,
+      hi_amp = drone_hi.amplitude,
     );
 
     let raw: ConfigFileRaw = toml::from_str(&exported)
@@ -671,21 +653,21 @@ amplitude = {dr_amp}
       "Heartbeat amplitude did not round-trip",
     );
 
-    // Drone voice params should survive.
-    let dv = raw
-      .drone_voices
+    // Drone profile params should survive.
+    let dp = raw
+      .drone_profiles
       .as_ref()
-      .expect("Export should produce a [drone_voices] section");
-    let cpu_voice = dv.get("cpu").expect("Export should include cpu drone");
+      .expect("Export should produce a [drone_profiles] section");
+    let cpu_profile = dp.get("cpu").expect("Export should include cpu drone");
     assert!(
-      (cpu_voice.base_freq.unwrap() - drone_voice.base_freq).abs()
+      (cpu_profile.lo.base_freq.unwrap() - drone_lo.base_freq).abs()
         < f64::EPSILON,
-      "Drone base_freq did not round-trip",
+      "Drone lo base_freq did not round-trip",
     );
     assert!(
-      (cpu_voice.amplitude.unwrap() - drone_voice.amplitude).abs()
+      (cpu_profile.hi.base_freq.unwrap() - drone_hi.base_freq).abs()
         < f64::EPSILON,
-      "Drone amplitude did not round-trip",
+      "Drone hi base_freq did not round-trip",
     );
 
     // Heartbeat notes should survive.
@@ -739,15 +721,15 @@ amplitude = {dr_amp}
           );
         }
 
-        // If the example has [drone_voices.…], it must parse.
-        if contents.contains("[drone_voices.") {
+        // If the example has [drone_profiles.…], it must parse.
+        if contents.contains("[drone_profiles.") {
           assert!(
             raw
-              .drone_voices
+              .drone_profiles
               .as_ref()
-              .map(|dv| !dv.is_empty())
+              .map(|dp| !dp.is_empty())
               .unwrap_or(false),
-            "{}: [drone_voices] should parse",
+            "{}: [drone_profiles] should parse",
             path.display()
           );
         }

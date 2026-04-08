@@ -152,15 +152,17 @@ fn broadcast_locked_params(preview: &PreviewState, owner: &VoiceOwner) {
     .get(owner)
     .map(|s| s.iter().collect())
     .unwrap_or_default();
+  let (layer, index) = match owner {
+    VoiceOwner::Heartbeat => ("heartbeat", None),
+    VoiceOwner::DroneLo(i) => ("drone_lo", Some(*i)),
+    VoiceOwner::DroneHi(i) => ("drone_hi", Some(*i)),
+  };
   let mut msg = json!({
     "type": "locked_params_changed",
-    "layer": match owner {
-      VoiceOwner::Heartbeat => "heartbeat",
-      VoiceOwner::Drone(_) => "drone",
-    },
+    "layer": layer,
     "params": params,
   });
-  if let VoiceOwner::Drone(i) = owner {
+  if let Some(i) = index {
     msg["index"] = json!(i);
   }
   let _ = preview.broadcast_tx.send(msg.to_string());
@@ -211,16 +213,18 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           return None;
         }
       }
+      let (layer, index) = match &owner {
+        VoiceOwner::Heartbeat => ("heartbeat", None),
+        VoiceOwner::DroneLo(i) => ("drone_lo", Some(*i)),
+        VoiceOwner::DroneHi(i) => ("drone_hi", Some(*i)),
+      };
       let mut broadcast = json!({
         "type": "param_changed",
-        "layer": match &owner {
-          VoiceOwner::Heartbeat => "heartbeat",
-          VoiceOwner::Drone(_) => "drone",
-        },
+        "layer": layer,
         "param": param,
         "value": value,
       });
-      if let VoiceOwner::Drone(i) = &owner {
+      if let Some(i) = index {
         broadcast["index"] = json!(i);
       }
       let _ = preview.broadcast_tx.send(broadcast.to_string());
@@ -229,7 +233,9 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           preview.recompute_boop_specs();
           broadcast_boop_specs(preview);
         }
-        VoiceOwner::Drone(i) if matches!(param, "note_seed" | "base_freq") => {
+        VoiceOwner::DroneLo(i)
+          if matches!(param, "note_seed" | "base_freq") =>
+        {
           preview.recompute_drone_specs(*i);
           broadcast_drone_specs(preview, *i);
         }
@@ -340,6 +346,22 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           "type": "drone_phrase_gap_changed",
           "index": index,
           "gap": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_drone_interp_curve" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let curve = msg.get("curve").and_then(|v| v.as_f64())? as f32;
+      let clamped = curve.clamp(0.1, 5.0);
+      preview.drone_interp_curves.get(index)?.set_value(clamped);
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_interp_curve_changed",
+          "index": index,
+          "curve": clamped,
         })
         .to_string(),
       );
@@ -698,7 +720,6 @@ struct ImportVoice {
   brightness: Option<f64>,
   resonance: Option<f64>,
   sub_octave: Option<f64>,
-  note_spread: Option<f64>,
   vibrato_rate: Option<f64>,
   vibrato_depth: Option<f64>,
   tremolo_rate: Option<f64>,
@@ -725,11 +746,17 @@ struct ImportHeartbeatSection {
   notes: Option<Vec<ImportBoop>>,
 }
 
+#[derive(Default, serde::Deserialize)]
+struct ImportDroneProfile {
+  lo: Option<ImportVoice>,
+  hi: Option<ImportVoice>,
+}
+
 #[derive(serde::Deserialize)]
 struct ImportToml {
   voice: Option<ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
-  drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+  drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
   drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 }
 
@@ -737,14 +764,15 @@ struct ImportToml {
 struct ImportJson {
   voice: Option<ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
-  drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+  drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
   drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 }
 
 /// Per-entity voice overrides plus heartbeat boop specs.
 struct ImportData {
   heartbeat_params: Vec<(&'static str, f64)>,
-  drone_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
+  drone_lo_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
+  drone_hi_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
   boops: Vec<BoopSpec>,
   drone_notes: std::collections::HashMap<String, Vec<BoopSpec>>,
 }
@@ -809,9 +837,6 @@ fn voice_fields(v: &ImportVoice) -> Vec<(&'static str, f64)> {
   if let Some(x) = v.sub_octave {
     out.push(("sub_octave", x));
   }
-  if let Some(x) = v.note_spread {
-    out.push(("note_spread", x));
-  }
   if let Some(x) = v.vibrato_rate {
     out.push(("vibrato_rate", x));
   }
@@ -864,7 +889,7 @@ fn boops_from_import(raw: &[ImportBoop]) -> Vec<BoopSpec> {
 fn build_import_data(
   legacy_voice: Option<&ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
-  drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+  drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
   drone_notes_raw: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 ) -> ImportData {
   // Heartbeat voice: prefer heartbeat.voice, fall back to bare [voice]
@@ -882,10 +907,18 @@ fn build_import_data(
     .map(boops_from_import)
     .unwrap_or_default();
 
-  let drone_params = drone_voices
-    .unwrap_or_default()
+  let profiles = drone_profiles.unwrap_or_default();
+  let drone_lo_params = profiles
     .iter()
-    .map(|(name, v)| (name.clone(), voice_fields(v)))
+    .filter_map(|(name, p)| {
+      p.lo.as_ref().map(|v| (name.clone(), voice_fields(v)))
+    })
+    .collect();
+  let drone_hi_params = profiles
+    .iter()
+    .filter_map(|(name, p)| {
+      p.hi.as_ref().map(|v| (name.clone(), voice_fields(v)))
+    })
     .collect();
 
   let drone_notes = drone_notes_raw
@@ -896,7 +929,8 @@ fn build_import_data(
 
   ImportData {
     heartbeat_params,
-    drone_params,
+    drone_lo_params,
+    drone_hi_params,
     boops,
     drone_notes,
   }
@@ -908,7 +942,7 @@ fn parse_import_json(text: &str) -> ImportResult {
   Ok(build_import_data(
     parsed.voice.as_ref(),
     parsed.heartbeat,
-    parsed.drone_voices,
+    parsed.drone_profiles,
     parsed.drone_notes,
   ))
 }
@@ -919,7 +953,7 @@ fn parse_import_toml(text: &str) -> ImportResult {
   Ok(build_import_data(
     parsed.voice.as_ref(),
     parsed.heartbeat,
-    parsed.drone_voices,
+    parsed.drone_profiles,
     parsed.drone_notes,
   ))
 }
@@ -946,11 +980,21 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
       }
     }
 
-    // Drone voice params (matched by name).
+    // Drone profile params (matched by name).
     let drone_infos = preview.drone_infos.read().unwrap();
     for (i, info) in drone_infos.iter().enumerate() {
-      if let Some(params) = data.drone_params.get(&info.name) {
-        let owner = VoiceOwner::Drone(i);
+      if let Some(params) = data.drone_lo_params.get(&info.name) {
+        let owner = VoiceOwner::DroneLo(i);
+        if let Some(voice) = voices.get_mut(&owner) {
+          for &(name, value) in params {
+            if !is_locked(&owner, name) {
+              preview_state::set_voice_param(voice, name, value);
+            }
+          }
+        }
+      }
+      if let Some(params) = data.drone_hi_params.get(&info.name) {
+        let owner = VoiceOwner::DroneHi(i);
         if let Some(voice) = voices.get_mut(&owner) {
           for &(name, value) in params {
             if !is_locked(&owner, name) {
@@ -1021,7 +1065,7 @@ mod tests {
         duration: 0.15,
       },
     ];
-    let toml = print::format_toml(&voice, &[], "C", &notes, &[]);
+    let toml = print::format_toml(&voice, &[], &notes, &[]);
     let data = parse_import(&toml).expect("round-trip TOML should parse");
     assert_eq!(data.boops.len(), notes.len());
     for (orig, imp) in notes.iter().zip(data.boops.iter()) {
@@ -1053,7 +1097,7 @@ mod tests {
         duration: 0.15,
       },
     ];
-    let json = print::format_json(&voice, &[], "C", &notes, &[]);
+    let json = print::format_json(&voice, &[], &notes, &[]);
     let data = parse_import(&json).expect("round-trip JSON should parse");
     assert_eq!(data.boops.len(), notes.len());
     for (orig, imp) in notes.iter().zip(data.boops.iter()) {

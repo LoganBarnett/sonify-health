@@ -22,6 +22,7 @@ module Protocol exposing
     , encodeSetBoopSpec
     , encodeSetDroneBoops
     , encodeSetDroneFreq
+    , encodeSetDroneInterpCurve
     , encodeSetDronePhraseGap
     , encodeSetDroneRepeatCurve
     , encodeSetDroneRepeatRate
@@ -66,11 +67,14 @@ type alias DroneInfo =
     , repeatRate : Float
     , repeatCurve : Float
     , phraseGap : Float
+    , interpCurve : Float
     , baseFreq : Maybe Float
     , boops : Int
     , overridden : Bool
-    , voice : List VoiceParam
-    , lockedParams : List String
+    , voiceLo : List VoiceParam
+    , voiceHi : List VoiceParam
+    , lockedParamsLo : List String
+    , lockedParamsHi : List String
     , droneSpecs : List BoopSpecInfo
     , droneSpecRanges : BoopSpecRanges
     }
@@ -131,6 +135,7 @@ type ServerMsg
     | DroneRepeatRateChanged Int Float
     | DroneRepeatCurveChanged Int Float
     | DronePhraseGapChanged Int Float
+    | DroneInterpCurveChanged Int Float
     | CheckLog CheckLogEntry
     | VoiceExport { toml : String, json : String, nix : String }
     | LockedParamsChanged String (Maybe Int) (List String)
@@ -186,6 +191,9 @@ serverMsgDecoder =
 
                     "drone_phrase_gap_changed" ->
                         dronePhraseGapChangedDecoder
+
+                    "drone_interp_curve_changed" ->
+                        droneInterpCurveChangedDecoder
 
                     "check_log" ->
                         checkLogDecoder
@@ -334,14 +342,20 @@ droneInfoDecoderWithMeta metas =
         |> andMap (D.field "repeat_rate" D.float)
         |> andMap (D.field "repeat_curve" D.float)
         |> andMap (D.field "phrase_gap" D.float)
+        |> andMap (D.field "interp_curve" D.float)
         |> andMap (D.maybe (D.field "base_freq" D.float))
         |> andMap (D.field "boops" D.int)
         |> andMap (D.field "overridden" D.bool)
         |> andMap
-            (D.field "voice" voiceDecoder
+            (D.field "voice_lo" voiceDecoder
                 |> D.map (\vals -> mergeVoiceParams vals metas)
             )
-        |> andMap (D.field "locked_params" (D.list D.string))
+        |> andMap
+            (D.field "voice_hi" voiceDecoder
+                |> D.map (\vals -> mergeVoiceParams vals metas)
+            )
+        |> andMap (D.field "locked_params_lo" (D.list D.string))
+        |> andMap (D.field "locked_params_hi" (D.list D.string))
         |> andMap (D.field "specs" (D.list boopSpecInfoDecoder))
         |> andMap (D.field "spec_ranges" boopSpecRangesDecoder)
 
@@ -441,6 +455,13 @@ dronePhraseGapChangedDecoder =
     D.map2 DronePhraseGapChanged
         (D.field "index" D.int)
         (D.field "gap" D.float)
+
+
+droneInterpCurveChangedDecoder : D.Decoder ServerMsg
+droneInterpCurveChangedDecoder =
+    D.map2 DroneInterpCurveChanged
+        (D.field "index" D.int)
+        (D.field "curve" D.float)
 
 
 voiceExportDecoder : D.Decoder ServerMsg
@@ -596,6 +617,16 @@ encodeSetDronePhraseGap index gap =
         [ ( "type", E.string "set_drone_phrase_gap" )
         , ( "index", E.int index )
         , ( "gap", E.float gap )
+        ]
+        |> E.encode 0
+
+
+encodeSetDroneInterpCurve : Int -> Float -> String
+encodeSetDroneInterpCurve index curve =
+    E.object
+        [ ( "type", E.string "set_drone_interp_curve" )
+        , ( "index", E.int index )
+        , ( "curve", E.float curve )
         ]
         |> E.encode 0
 

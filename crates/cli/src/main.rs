@@ -15,10 +15,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ConfigError};
 use daemon::DaemonError;
 use logging::init_logging;
-use sha2::{Digest, Sha256};
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, scale, Severity, Voice,
+  drone, heartbeat, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -257,18 +256,13 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   if let Some(hb_overrides) = &config.daemon.heartbeat_voice_overrides {
     voice = voice.with_overrides(hb_overrides);
   }
-  let scale = config.scale();
-  let scale_key =
-    config.scale_key_for(&gethostname::gethostname().to_string_lossy());
 
   let preview = Arc::new(preview_state::PreviewState::new(
     voice.clone(),
-    scale.clone(),
-    scale_key,
     Arc::clone(&muted),
     &config.daemon.heartbeat_checks,
     &config.daemon.drone_metrics,
-    &config.daemon.drone_voice_overrides,
+    &config.daemon.drone_profile_overrides,
     config.daemon.timing.slot_duration_secs,
     &config.daemon.heartbeat_notes,
     &config.daemon.drone_notes,
@@ -472,10 +466,9 @@ fn run_heartbeat_preview(
     .collect::<Result<_, _>>()?;
 
   let voice = voice_args.resolve_voice(config);
-  let scale = voice_args.resolve_scale(config);
   debug!(?voice, "Resolved voice");
   let slot_secs = config.daemon.timing.slot_duration_secs;
-  let specs = voice.boop_specs(&scale, severities.len(), 1, slot_secs);
+  let specs = voice.boop_specs(severities.len(), 1, slot_secs);
   for (i, spec) in specs.iter().enumerate() {
     debug!(
       boop = i,
@@ -536,7 +529,6 @@ fn run_drone_preview(
   }
 
   let voice = voice_args.resolve_voice(config);
-  let scale = voice_args.resolve_scale(config);
   let effective_freq = voice.base_freq;
   let slot_secs = config.daemon.timing.slot_duration_secs;
   debug!(?voice, "Resolved voice");
@@ -560,8 +552,7 @@ fn run_drone_preview(
     let handle = mixer.handle();
     let play_handle = std::thread::spawn(move || {
       while play_run.load(Ordering::Relaxed) {
-        let specs =
-          voice.drone_specs(&scale, 0, boops, effective_freq, slot_secs);
+        let specs = voice.drone_specs(0, boops, effective_freq, slot_secs);
         let severities: Vec<Severity> =
           (0..specs.len()).map(|_| Severity::Healthy).collect();
         let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
@@ -597,8 +588,7 @@ fn run_drone_preview(
     let deadline =
       std::time::Instant::now() + Duration::from_secs_f64(duration);
     while std::time::Instant::now() < deadline {
-      let specs =
-        voice.drone_specs(&scale, 0, boops, effective_freq, slot_secs);
+      let specs = voice.drone_specs(0, boops, effective_freq, slot_secs);
       let severities: Vec<Severity> =
         (0..specs.len()).map(|_| Severity::Healthy).collect();
       let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
@@ -637,11 +627,10 @@ fn run_print(
   format: PrintFormat,
 ) {
   let voice = voice_args.resolve_voice(config);
-  let scale_key = voice_args.effective_scale_key(config);
   let output = match format {
-    PrintFormat::Toml => print::format_toml(&voice, &[], &scale_key, &[], &[]),
-    PrintFormat::Nix => print::format_nix(&voice, &[], &scale_key, &[], &[]),
-    PrintFormat::Cli => print::format_cli(&voice, &scale_key),
+    PrintFormat::Toml => print::format_toml(&voice, &[], &[], &[]),
+    PrintFormat::Nix => print::format_nix(&voice, &[], &[], &[]),
+    PrintFormat::Cli => print::format_cli(&voice),
   };
   println!("{output}");
 }
@@ -650,16 +639,10 @@ fn run_voice(hostname: Option<&str>) {
   let hn = hostname.map(String::from).unwrap_or_else(|| {
     gethostname::gethostname().to_string_lossy().to_string()
   });
-  let domain = scale::domain_from_hostname(&hn);
-  let voice = Voice::from_hostname(&hn).with_scale(&domain);
+  let voice = Voice::from_hostname(&hn);
 
-  let host_hash = Sha256::digest(hn.as_bytes());
-  let domain_hash = Sha256::digest(domain.as_bytes());
   debug!(
     hostname = %hn,
-    hostname_sha256_prefix = %host_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
-    domain = %domain,
-    domain_sha256_prefix = %domain_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
     note_seed = voice.note_seed,
     "Voice seed derivation"
   );
