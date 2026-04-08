@@ -23,11 +23,11 @@ pub struct TimingConfig {
 }
 
 fn default_cycle_secs() -> f64 {
-  14.0
+  16.0
 }
 
 fn default_slot_secs() -> f64 {
-  2.0
+  4.0
 }
 
 impl Default for TimingConfig {
@@ -89,21 +89,21 @@ mod tests {
   #[test]
   fn default_config_values() {
     let cfg = TimingConfig::default();
-    assert_eq!(cfg.cycle_duration_secs, 14.0);
-    assert_eq!(cfg.slot_duration_secs, 2.0);
+    assert_eq!(cfg.cycle_duration_secs, 16.0);
+    assert_eq!(cfg.slot_duration_secs, 4.0);
     assert_eq!(cfg.slot, 0);
   }
 
   #[test]
   fn duration_until_slot_is_bounded() {
     let cfg = TimingConfig {
-      cycle_duration_secs: 14.0,
-      slot_duration_secs: 2.0,
+      cycle_duration_secs: 16.0,
+      slot_duration_secs: 4.0,
       slot: 3,
     };
     let wait = cfg.duration_until_next_slot();
     // Wait can never exceed a full cycle.
-    assert!(wait <= Duration::from_secs_f64(14.0));
+    assert!(wait <= Duration::from_secs_f64(16.0));
   }
 
   #[test]

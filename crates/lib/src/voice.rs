@@ -181,18 +181,24 @@ impl Voice {
     resolved
   }
 
-  /// Generate per-boop note and duration specs.  Each check gets
-  /// its own sub-PRNG seeded from `note_seed + "boop" + check_index`,
-  /// so adding boops to one check never shifts another check's note
-  /// sequence.  Duration weights are still normalized across all
-  /// boops to fill `total_boop_time`.
+  /// Generate per-boop note and duration specs using a musical
+  /// beat grid.  Each check gets its own sub-PRNG seeded from
+  /// `note_seed + "boop" + check_index`, so adding boops to one
+  /// check never shifts another check's note sequence.
+  ///
+  /// The PRNG assigns each boop a note value from
+  /// `NOTE_VALUES` (whole/half/quarter/eighth).  A fitting loop
+  /// then downshifts the longest notes until the total fits one
+  /// bar (`BEATS_PER_BAR`), flooring at `MIN_NOTE_VALUE`.
   pub fn boop_specs(
     &self,
     scale: &PentatonicScale,
     check_count: usize,
     boops_per_check: usize,
-    total_boop_time: f64,
+    slot_secs: f64,
   ) -> Vec<BoopSpec> {
+    use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
+
     // Narrow the full scale to notes within one octave of
     // base_freq so boops sound melodically related rather than
     // scattered across 4+ octaves.
@@ -210,10 +216,9 @@ impl Voice {
       &nearby
     };
 
-    let duration_weights: [f64; 3] = [1.0, 2.0, 4.0];
+    let beat_secs = slot_secs / BEATS_PER_BAR;
     let total = check_count * boops_per_check;
     let mut raw: Vec<(f64, f64)> = Vec::with_capacity(total);
-    let mut total_weight = 0.0;
 
     for check_idx in 0..check_count {
       let mut hasher = Sha256::new();
@@ -227,17 +232,36 @@ impl Voice {
 
       for _ in 0..boops_per_check {
         let note_idx = rng.gen_range(0..notes.len());
-        let weight = duration_weights[rng.gen_range(0..3usize)];
-        total_weight += weight;
-        raw.push((notes[note_idx], weight));
+        let note_val = NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())];
+        raw.push((notes[note_idx], note_val));
+      }
+    }
+
+    // Fitting loop: downshift the longest note value until
+    // the bar fits, stopping at MIN_NOTE_VALUE.
+    loop {
+      let total_beats: f64 = raw.iter().map(|(_, v)| v).sum();
+      if total_beats <= BEATS_PER_BAR {
+        break;
+      }
+      let longest_idx = raw
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap())
+        .map(|(i, _)| i);
+      match longest_idx {
+        Some(i) if raw[i].1 > MIN_NOTE_VALUE => {
+          raw[i].1 /= 2.0;
+        }
+        _ => break,
       }
     }
 
     raw
       .into_iter()
-      .map(|(freq, weight)| BoopSpec {
+      .map(|(freq, note_val)| BoopSpec {
         freq,
-        duration: weight / total_weight * total_boop_time,
+        duration: note_val * beat_secs,
       })
       .collect()
   }
@@ -370,7 +394,7 @@ mod tests {
     let drone1 = v.drone_notes(&scale, 4);
     // Calling boop_specs with different counts must not affect
     // drone_notes, since they use separate PRNG streams.
-    let _specs = v.boop_specs(&scale, 3, 1, 1.0);
+    let _specs = v.boop_specs(&scale, 3, 1, 4.0);
     let drone2 = v.drone_notes(&scale, 4);
     assert_eq!(drone1, drone2);
   }
@@ -380,15 +404,43 @@ mod tests {
     let v = Voice::from_hostname("test");
     let scale = PentatonicScale::from_key("local");
     // With 3 checks and 1 boop each, record each check's first note.
-    let specs_1 = v.boop_specs(&scale, 3, 1, 1.2);
+    let specs_1 = v.boop_specs(&scale, 3, 1, 4.0);
     // With 3 checks and 3 boops each, the first boop per check
     // must keep the same frequency.
-    let specs_3 = v.boop_specs(&scale, 3, 3, 1.2);
+    let specs_3 = v.boop_specs(&scale, 3, 3, 4.0);
     for check in 0..3 {
       assert_eq!(
         specs_1[check].freq,
         specs_3[check * 3].freq,
         "Check {check}'s first note shifted when boops_per_check changed"
+      );
+    }
+  }
+
+  #[test]
+  fn fitting_algorithm_downshifts_to_fit_bar() {
+    // Force two whole notes (8 beats) into a 4-beat bar.
+    // The fitting loop should halve both to half notes (2 beats
+    // each = 4 beats total), which fits exactly.
+    let v = Voice::from_hostname("test").with_overrides(&VoiceOverrides {
+      base_freq: Some(440.0),
+      ..Default::default()
+    });
+    let scale = PentatonicScale::from_key("local");
+    // With slot_secs = 4.0, beat_secs = 1.0.  Two boops gives
+    // at most 8 beats raw; the fitting loop must bring it to ≤ 4.
+    let specs = v.boop_specs(&scale, 1, 2, 4.0);
+    let total_dur: f64 = specs.iter().map(|s| s.duration).sum();
+    assert!(
+      total_dur <= 4.0 + 1e-10,
+      "Total duration {total_dur:.3} should fit within 4.0 s slot"
+    );
+    // Each note should be at least MIN_NOTE_VALUE × beat_secs = 0.5 s.
+    for (i, spec) in specs.iter().enumerate() {
+      assert!(
+        spec.duration >= 0.5 - 1e-10,
+        "Boop {i} duration {:.3} below minimum 0.5 s",
+        spec.duration
       );
     }
   }

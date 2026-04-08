@@ -467,7 +467,12 @@ fn play_heartbeat_preview(
   );
   let release_secs = voice.release_ms / 1000.0;
   let slot = mixer.add(graph);
-  std::thread::sleep(heartbeat::heartbeat_duration(&specs, release_secs));
+  std::thread::sleep(heartbeat::heartbeat_duration(
+    &specs,
+    release_secs,
+    voice.echo_delay,
+    voice.echo_mix,
+  ));
   mixer.remove(slot);
   Ok(())
 }

@@ -272,6 +272,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     Arc::clone(&muted),
     &config.daemon.heartbeat_checks,
     &config.daemon.drone_metrics,
+    config.daemon.timing.slot_duration_secs,
   ));
 
   // Perform OIDC provider discovery when configured.
@@ -476,8 +477,8 @@ fn run_heartbeat_preview(
   let voice = voice_args.resolve_voice(config);
   let scale = voice_args.resolve_scale(config);
   debug!(?voice, "Resolved voice");
-  let specs =
-    voice.boop_specs(&scale, severities.len(), 1, heartbeat::TOTAL_BOOP_TIME);
+  let slot_secs = config.daemon.timing.slot_duration_secs;
+  let specs = voice.boop_specs(&scale, severities.len(), 1, slot_secs);
   for (i, spec) in specs.iter().enumerate() {
     debug!(
       boop = i,
@@ -496,7 +497,12 @@ fn run_heartbeat_preview(
   let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
   AudioOutput::play_for(
     graph,
-    heartbeat::heartbeat_duration(&specs, voice.release_ms / 1000.0),
+    heartbeat::heartbeat_duration(
+      &specs,
+      voice.release_ms / 1000.0,
+      voice.echo_delay,
+      voice.echo_mix,
+    ),
     config.audio_device.as_deref(),
   )
   .map_err(ApplicationError::AudioPlayback)

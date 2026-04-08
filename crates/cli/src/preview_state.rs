@@ -5,7 +5,6 @@ use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
   drone::{DroneRegister, DroneTexture},
-  heartbeat,
   state::{DroneState, HeartbeatState},
   BoopSpec, PentatonicScale, Severity, Voice,
 };
@@ -162,6 +161,7 @@ pub struct PreviewState {
   pub locked_drones: RwLock<HashSet<usize>>,
   pub boop_specs: RwLock<Vec<BoopSpec>>,
   pub boop_pins: RwLock<Vec<bool>>,
+  pub slot_secs: f64,
 }
 
 impl PreviewState {
@@ -172,6 +172,7 @@ impl PreviewState {
     muted: Arc<AtomicBool>,
     heartbeat_checks: &[HeartbeatCheckConfig],
     drone_metrics: &[DroneMetricConfig],
+    slot_secs: f64,
   ) -> Self {
     let drone_count = drone_metrics.len();
     let check_count = heartbeat_checks.len();
@@ -194,8 +195,7 @@ impl PreviewState {
       })
       .collect();
 
-    let initial_specs =
-      voice.boop_specs(&scale, check_count, 1, heartbeat::TOTAL_BOOP_TIME);
+    let initial_specs = voice.boop_specs(&scale, check_count, 1, slot_secs);
     let initial_pins = vec![false; initial_specs.len()];
 
     Self {
@@ -225,6 +225,7 @@ impl PreviewState {
       locked_drones: RwLock::new(HashSet::new()),
       boop_specs: RwLock::new(initial_specs),
       boop_pins: RwLock::new(initial_pins),
+      slot_secs,
     }
   }
 
@@ -261,7 +262,7 @@ impl PreviewState {
       &self.scale,
       check_count,
       boops_per_check,
-      heartbeat::TOTAL_BOOP_TIME,
+      self.slot_secs,
     );
 
     let mut specs = self.boop_specs.write().unwrap();
@@ -381,7 +382,7 @@ impl PreviewState {
         "freq_max": base_freq_meta.max,
         "freq_step": 1.0,
         "duration_min": 0.05,
-        "duration_max": heartbeat::TOTAL_BOOP_TIME,
+        "duration_max": self.slot_secs,
         "duration_step": 0.01,
       },
     })
