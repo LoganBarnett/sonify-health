@@ -19,6 +19,7 @@ fn voice_toml_lines(lines: &mut Vec<String>, header: &str, voice: &Voice) {
   lines.push(format!("sine_ratio = {}", float_lit(voice.sine_ratio)));
   lines.push(format!("tri_ratio = {}", float_lit(voice.tri_ratio)));
   lines.push(format!("saw_ratio = {}", float_lit(voice.saw_ratio)));
+  lines.push(format!("square_ratio = {}", float_lit(voice.square_ratio)));
   lines.push(format!("attack_ms = {}", float_lit(voice.attack_ms)));
   lines.push(format!("release_ms = {}", float_lit(voice.release_ms)));
   lines.push(format!("chirp_ratio = {}", float_lit(voice.chirp_ratio)));
@@ -69,6 +70,7 @@ fn voice_nix_lines(lines: &mut Vec<String>, prefix: &str, voice: &Voice) {
   lines.push(format!("  sine_ratio = {};", float_lit(voice.sine_ratio)));
   lines.push(format!("  tri_ratio = {};", float_lit(voice.tri_ratio)));
   lines.push(format!("  saw_ratio = {};", float_lit(voice.saw_ratio)));
+  lines.push(format!("  square_ratio = {};", float_lit(voice.square_ratio)));
   lines.push(format!("  attack_ms = {};", float_lit(voice.attack_ms)));
   lines.push(format!("  release_ms = {};", float_lit(voice.release_ms)));
   lines.push(format!("  chirp_ratio = {};", float_lit(voice.chirp_ratio)));
@@ -121,6 +123,7 @@ fn voice_to_json_value(voice: &Voice) -> serde_json::Value {
     "sine_ratio": voice.sine_ratio,
     "tri_ratio": voice.tri_ratio,
     "saw_ratio": voice.saw_ratio,
+    "square_ratio": voice.square_ratio,
     "attack_ms": voice.attack_ms,
     "release_ms": voice.release_ms,
     "chirp_ratio": voice.chirp_ratio,
@@ -178,6 +181,7 @@ pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
     format!("--sine-ratio {}", voice.sine_ratio),
     format!("--tri-ratio {}", voice.tri_ratio),
     format!("--saw-ratio {}", voice.saw_ratio),
+    format!("--square-ratio {}", voice.square_ratio),
     format!("--attack-ms {}", voice.attack_ms),
     format!("--release-ms {}", voice.release_ms),
     format!("--chirp-ratio {}", voice.chirp_ratio),

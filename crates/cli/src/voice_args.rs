@@ -97,6 +97,10 @@ pub(crate) struct CliVoiceOverrides {
   /// Override amplitude (0.0–1.0).
   #[arg(long, help_heading = "Voice overrides")]
   amplitude: Option<f64>,
+
+  /// Override square oscillator ratio.
+  #[arg(long, help_heading = "Voice overrides")]
+  square_ratio: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -132,6 +136,7 @@ impl CliVoiceOverrides {
       tremolo_rate: self.tremolo_rate,
       tremolo_depth: self.tremolo_depth,
       amplitude: self.amplitude,
+      square_ratio: self.square_ratio,
     }
   }
 

@@ -82,6 +82,9 @@ pub struct Voice {
 
   #[voice_param(order = 20, range = 0.1..0.5)]
   pub amplitude: f64,
+
+  #[voice_param(order = 21, range = 0.0..1.0)]
+  pub square_ratio: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -170,6 +173,9 @@ impl Voice {
     }
     if let Some(v) = o.amplitude {
       self.amplitude = v;
+    }
+    if let Some(v) = o.square_ratio {
+      self.square_ratio = v;
     }
     self
   }
@@ -375,6 +381,7 @@ pub struct VoiceOverrides {
   pub tremolo_rate: Option<f64>,
   pub tremolo_depth: Option<f64>,
   pub amplitude: Option<f64>,
+  pub square_ratio: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -398,7 +405,8 @@ impl fmt::Display for Voice {
     writeln!(f, "vibrato_depth:{:.3} st", self.vibrato_depth)?;
     writeln!(f, "tremolo_rate: {:.3} Hz", self.tremolo_rate)?;
     writeln!(f, "tremolo_depth:{:.3}", self.tremolo_depth)?;
-    write!(f, "amplitude:    {:.3}", self.amplitude)
+    writeln!(f, "amplitude:    {:.3}", self.amplitude)?;
+    write!(f, "square_ratio: {:.3}", self.square_ratio)
   }
 }
 
@@ -453,6 +461,7 @@ mod tests {
       assert!((0.0..20.0).contains(&v.tremolo_rate));
       assert!((0.0..1.0).contains(&v.tremolo_depth));
       assert!((0.1..0.5).contains(&v.amplitude));
+      assert!((0.0..1.0).contains(&v.square_ratio));
     }
   }
 

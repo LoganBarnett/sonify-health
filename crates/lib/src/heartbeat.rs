@@ -118,7 +118,8 @@ pub fn heartbeat_graph_with_volume(
   let tremolo_rate = voice.tremolo_rate;
   let tremolo_depth = voice.tremolo_depth;
 
-  let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
+  let total_ratio =
+    voice.sine_ratio + voice.tri_ratio + voice.saw_ratio + voice.square_ratio;
   let norm = if total_ratio > 0.0 {
     1.0 / total_ratio
   } else {
@@ -128,6 +129,7 @@ pub fn heartbeat_graph_with_volume(
   let sine_w = voice.sine_ratio as f32 * norm;
   let tri_w = voice.tri_ratio as f32 * norm;
   let saw_w = voice.saw_ratio as f32 * norm;
+  let square_w = voice.square_ratio as f32 * norm;
 
   let max_dur = specs[..count]
     .iter()
@@ -300,8 +302,10 @@ pub fn heartbeat_graph_with_volume(
   let echo_delay = voice.echo_delay as f32;
   let echo_mix = voice.echo_mix as f32;
 
-  let waveform =
-    (sine() * sine_w_env) & (triangle() * tri_w) & (saw() * saw_w_env);
+  let waveform = (sine() * sine_w_env)
+    & (triangle() * tri_w)
+    & (saw() * saw_w_env)
+    & (square() * square_w);
   let signal = (freq_env >> waveform) + (sub_osc * sub_mix);
   let mono = (signal | cutoff_env | q_env) >> (lowpass() * amp_env * ext_vol);
   let with_echo =
@@ -328,7 +332,8 @@ pub fn boop_graph(
   let release = (voice.release_ms / 1000.0).min(duration_secs * 0.5) as f32;
   let dur = duration_secs as f32;
 
-  let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
+  let total_ratio =
+    voice.sine_ratio + voice.tri_ratio + voice.saw_ratio + voice.square_ratio;
   let norm = if total_ratio > 0.0 {
     1.0 / total_ratio
   } else {
@@ -338,11 +343,13 @@ pub fn boop_graph(
   let sine_w = voice.sine_ratio as f32 * norm * (1.0 - harshness);
   let tri_w = voice.tri_ratio as f32 * norm;
   let saw_w = voice.saw_ratio as f32 * norm + harshness;
+  let square_w = voice.square_ratio as f32 * norm;
 
   let sub = sine_hz(freq * 0.5) * voice.sub_octave as f32;
   let waveform = sine_hz(freq) * sine_w
     + triangle_hz(freq) * tri_w
     + saw_hz(freq) * saw_w
+    + square_hz(freq) * square_w
     + sub;
 
   let cutoff = dc(

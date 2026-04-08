@@ -181,6 +181,14 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
+  VoiceParamMeta {
+    name: "square_ratio",
+    description:
+      "Relative weight of the square oscillator. Hollow, reedy tone.",
+    min: 0.0,
+    max: 3.0,
+    step: 0.01,
+  },
 ];
 
 /// Metadata for a configured drone metric.
@@ -740,6 +748,7 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "tremolo_rate" => Some(voice.tremolo_rate),
     "tremolo_depth" => Some(voice.tremolo_depth),
     "amplitude" => Some(voice.amplitude),
+    "square_ratio" => Some(voice.square_ratio),
     "note_spread" => Some(voice.note_spread),
     _ => None,
   }
@@ -767,6 +776,7 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "tremolo_rate" => voice.tremolo_rate = value,
     "tremolo_depth" => voice.tremolo_depth = value,
     "amplitude" => voice.amplitude = value,
+    "square_ratio" => voice.square_ratio = value,
     "note_spread" => voice.note_spread = value,
     _ => return false,
   }
@@ -795,6 +805,7 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "tremolo_rate": voice.tremolo_rate,
     "tremolo_depth": voice.tremolo_depth,
     "amplitude": voice.amplitude,
+    "square_ratio": voice.square_ratio,
     "note_spread": voice.note_spread,
   })
 }

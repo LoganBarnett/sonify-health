@@ -612,6 +612,7 @@ struct ImportVoice {
   tremolo_rate: Option<f64>,
   tremolo_depth: Option<f64>,
   amplitude: Option<f64>,
+  square_ratio: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -724,6 +725,9 @@ fn voice_fields(v: &ImportVoice) -> Vec<(&'static str, f64)> {
   }
   if let Some(x) = v.amplitude {
     out.push(("amplitude", x));
+  }
+  if let Some(x) = v.square_ratio {
+    out.push(("square_ratio", x));
   }
   out
 }

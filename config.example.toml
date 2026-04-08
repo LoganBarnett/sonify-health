@@ -13,6 +13,7 @@ listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # sine_ratio = 0.8
 # tri_ratio = 0.1
 # saw_ratio = 0.05
+# square_ratio = 0.0
 # attack_ms = 40.0
 # release_ms = 150.0
 # chirp_ratio = 1.2    # Onset pitch sweep (1.0 = none, 1.5 = perfect fifth)
