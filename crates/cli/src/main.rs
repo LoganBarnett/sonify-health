@@ -18,7 +18,7 @@ use logging::init_logging;
 use sha2::{Digest, Sha256};
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, scale, DroneRegister, Severity, Voice,
+  drone, heartbeat, scale, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -142,10 +142,6 @@ enum Command {
     #[arg(long, conflicts_with_all = ["sound_type", "heartbeat"])]
     drone: bool,
 
-    /// Drone register (low/mid/high). Only used with drone mode.
-    #[arg(long, value_enum, default_value_t = DroneRegister::Mid)]
-    register: DroneRegister,
-
     /// Number of boops per drone phrase.
     #[arg(long, default_value_t = 1)]
     boops: usize,
@@ -220,7 +216,6 @@ async fn main() -> Result<(), ApplicationError> {
       sound_type,
       heartbeat,
       drone,
-      register,
       boops,
       duration,
       continuous,
@@ -237,7 +232,7 @@ async fn main() -> Result<(), ApplicationError> {
       match effective {
         SoundType::Heartbeat => run_heartbeat_preview(&config, &voice, &values),
         SoundType::Drone => run_drone_preview(
-          &config, &voice, register, boops, duration, continuous, &values,
+          &config, &voice, boops, duration, continuous, &values,
         ),
       }
     }
@@ -510,7 +505,6 @@ fn run_heartbeat_preview(
 fn run_drone_preview(
   config: &Config,
   voice_args: &CliVoiceOverrides,
-  register: DroneRegister,
   boops: usize,
   duration: f64,
   continuous: bool,
@@ -539,17 +533,12 @@ fn run_drone_preview(
 
   let voice = voice_args.resolve_voice(config);
   let scale = voice_args.resolve_scale(config);
-  let effective_freq = voice.base_freq * register.multiplier();
+  let effective_freq = voice.base_freq;
   let slot_secs = config.daemon.timing.slot_duration_secs;
   debug!(?voice, "Resolved voice");
   info!(
     base_freq = voice.base_freq,
-    ?register,
-    effective_freq,
-    boops,
-    metric,
-    duration,
-    "Playing drone preview"
+    boops, metric, duration, "Playing drone preview"
   );
 
   let mixer = AudioMixer::new(config.audio_device.as_deref())?;

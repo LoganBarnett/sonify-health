@@ -364,28 +364,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_drone_register" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let value = msg.get("register").and_then(|v| v.as_str())?;
-      let register = preview_state::register_from_str(value)?;
-      {
-        let mut infos = preview.drone_infos.write().unwrap();
-        infos.get_mut(index)?.register = register;
-      }
-      let info = preview.drone_infos.read().unwrap()[index].clone();
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "drone_config_changed",
-          "index": index,
-          "register": value,
-          "base_freq": info.base_freq,
-          "boops": info.boops,
-        })
-        .to_string(),
-      );
-      None
-    }
-
     "set_drone_freq" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let freq = msg.get("freq").and_then(|v| v.as_f64())?;
@@ -398,7 +376,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         json!({
           "type": "drone_config_changed",
           "index": index,
-          "register": preview_state::register_str(info.register),
           "base_freq": info.base_freq,
           "boops": info.boops,
         })
@@ -420,7 +397,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         json!({
           "type": "drone_config_changed",
           "index": index,
-          "register": preview_state::register_str(info.register),
           "base_freq": info.base_freq,
           "boops": info.boops,
         })

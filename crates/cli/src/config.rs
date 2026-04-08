@@ -343,7 +343,6 @@ fn credential_secret_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use sonify_health_lib::DroneRegister;
 
   #[test]
   fn drone_section_parses() {
@@ -355,13 +354,11 @@ mod tests {
       name = "gpu"
       command = "echo 0.5"
       result_mode = "stdout"
-      register = "low"
 
       [[drone.metrics]]
       name = "mem"
       command = "echo 0.3"
       result_mode = "exit-code"
-      register = "high"
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
@@ -369,9 +366,7 @@ mod tests {
     assert_eq!(drone.poll_interval_secs, Some(10.0));
     assert_eq!(drone.metrics.len(), 2);
     assert_eq!(drone.metrics[0].name, "gpu");
-    assert_eq!(drone.metrics[0].register, DroneRegister::Low);
     assert_eq!(drone.metrics[1].name, "mem");
-    assert_eq!(drone.metrics[1].register, DroneRegister::High);
     assert_eq!(drone.metrics[0].base_freq, None);
     assert_eq!(drone.metrics[0].boops, None);
   }
@@ -384,7 +379,6 @@ mod tests {
       name = "cpu"
       command = "echo 0.5"
       result_mode = "stdout"
-      register = "mid"
       base_freq = 220.0
       boops = 3
     "#;
@@ -430,21 +424,5 @@ mod tests {
     assert!((hb.notes[0].duration - 0.25).abs() < f64::EPSILON);
     assert!((hb.notes[1].freq - 880.0).abs() < f64::EPSILON);
     assert!((hb.notes[1].duration - 0.15).abs() < f64::EPSILON);
-  }
-
-  #[test]
-  fn drone_register_deserializes() {
-    #[derive(Deserialize)]
-    struct Wrapper {
-      register: DroneRegister,
-    }
-    for (input, expected) in [
-      ("register = \"low\"", DroneRegister::Low),
-      ("register = \"mid\"", DroneRegister::Mid),
-      ("register = \"high\"", DroneRegister::High),
-    ] {
-      let w: Wrapper = toml::from_str(input).unwrap();
-      assert_eq!(w.register, expected);
-    }
   }
 }

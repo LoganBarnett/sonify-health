@@ -1,26 +1,3 @@
-use clap::ValueEnum;
-use serde::Deserialize;
-
-/// Pitch register for a drone voice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub enum DroneRegister {
-  Low,
-  Mid,
-  High,
-}
-
-impl DroneRegister {
-  /// Frequency multiplier relative to the voice's base.
-  pub fn multiplier(self) -> f64 {
-    match self {
-      DroneRegister::Low => 0.5,
-      DroneRegister::Mid => 1.0,
-      DroneRegister::High => 2.0,
-    }
-  }
-}
-
 /// Maximum gap between drone phrases at metric 0.0.
 const MAX_GAP_SECS: f64 = 8.0;
 

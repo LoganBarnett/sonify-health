@@ -1,4 +1,3 @@
-use crate::drone::DroneRegister;
 use crate::severity::Severity;
 use serde::Deserialize;
 use std::process::Command;
@@ -28,7 +27,6 @@ pub struct DroneMetricConfig {
   pub name: String,
   pub command: String,
   pub result_mode: ResultMode,
-  pub register: DroneRegister,
   /// Override base frequency for note selection (Hz).
   pub base_freq: Option<f64>,
   /// Number of boops per drone phrase.
@@ -165,7 +163,6 @@ mod tests {
       name: "test".into(),
       command: "echo 0.75".into(),
       result_mode: ResultMode::Stdout,
-      register: DroneRegister::Low,
       base_freq: None,
       boops: None,
     };
@@ -192,7 +189,6 @@ mod tests {
       name: "test".into(),
       command: "echo 5.0".into(),
       result_mode: ResultMode::Stdout,
-      register: DroneRegister::Mid,
       base_freq: None,
       boops: None,
     };

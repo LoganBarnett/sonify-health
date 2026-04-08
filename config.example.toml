@@ -51,12 +51,10 @@ slot_duration_secs = 2    # Time budget per machine.
 # name = "gpu"
 # command = "/path/to/gpu-load"
 # result_mode = "stdout"
-# register = "low"
 # texture = "bong"  # bong, arpeggio, thrum, shimmer, reactor, warpcore (omit to auto-assign)
 #
 # [[drone.metrics]]
 # name = "memory"
 # command = "/path/to/mem-pressure"
 # result_mode = "stdout"
-# register = "mid"
 # texture = "thrum"

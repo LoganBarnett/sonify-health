@@ -81,8 +81,8 @@ type Msg
     | UrlChanged Url
     | GotMe (Result Http.Error MeInfo)
     | WebSocketReceived String
-    | SetVoiceParam String String
-    | DebounceFired String Int Float
+    | SetVoiceParam String (Maybe Int) String String
+    | VoiceDebounce String (Maybe Int) String Int Float
     | ToggleMute
     | SetHeartbeatVolume String
     | HeartbeatVolDebounce Int Float
@@ -93,7 +93,6 @@ type Msg
     | OverrideCheck Int String
     | ClearCheckOverride Int
     | SetDroneBoops Int String
-    | SetDroneRegister Int String
     | OverrideDroneValue Int String
     | ClearDroneOverride Int
     | ToggleHeartbeatLoop
@@ -102,7 +101,7 @@ type Msg
     | Export
     | DismissExport
     | SetExportTab String
-    | ToggleLockParam String
+    | ToggleLockParam String (Maybe Int) String
     | ToggleLockDrone Int
     | UnlockAll
     | SetBoopFreq Int String
@@ -231,48 +230,67 @@ update msg model =
         WebSocketReceived raw ->
             handleServerMsg raw model
 
-        SetVoiceParam name valStr ->
+        SetVoiceParam layer maybeIndex name valStr ->
             case String.toFloat valStr of
                 Just value ->
                     let
                         key =
-                            "voice:" ++ name
+                            voiceDebounceKey layer maybeIndex name
 
                         id =
                             model.nextDebounce
 
-                        newVoice =
-                            List.map
-                                (\p ->
-                                    if p.name == name then
-                                        { p | value = value }
+                        updateParam p =
+                            if p.name == name then
+                                { p | value = value }
 
-                                    else
-                                        p
-                                )
-                                model.voice
+                            else
+                                p
                     in
-                    ( { model
-                        | voice = newVoice
-                        , debounces = Dict.insert key id model.debounces
-                        , nextDebounce = id + 1
-                      }
-                    , Process.sleep 50
-                        |> Task.perform (\_ -> DebounceFired key id value)
-                    )
+                    case ( layer, maybeIndex ) of
+                        ( "drone", Just i ) ->
+                            ( { model
+                                | drones =
+                                    List.indexedMap
+                                        (\idx d ->
+                                            if idx == i then
+                                                { d | voice = List.map updateParam d.voice }
+
+                                            else
+                                                d
+                                        )
+                                        model.drones
+                                , debounces = Dict.insert key id model.debounces
+                                , nextDebounce = id + 1
+                              }
+                            , Process.sleep 50
+                                |> Task.perform
+                                    (\_ -> VoiceDebounce layer maybeIndex name id value)
+                            )
+
+                        _ ->
+                            ( { model
+                                | voice = List.map updateParam model.voice
+                                , debounces = Dict.insert key id model.debounces
+                                , nextDebounce = id + 1
+                              }
+                            , Process.sleep 50
+                                |> Task.perform
+                                    (\_ -> VoiceDebounce layer maybeIndex name id value)
+                            )
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        DebounceFired key id value ->
+        VoiceDebounce layer maybeIndex name id value ->
+            let
+                key =
+                    voiceDebounceKey layer maybeIndex name
+            in
             if Dict.get key model.debounces == Just id then
-                let
-                    paramName =
-                        String.dropLeft 6 key
-                in
                 ( model
                 , Ports.websocketSend
-                    (encodeSetVoiceParam paramName value)
+                    (encodeSetVoiceParam layer maybeIndex name value)
                 )
 
             else
@@ -405,12 +423,6 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        SetDroneRegister index register ->
-            ( model
-            , Ports.websocketSend
-                (Protocol.encodeSetDroneRegister index register)
-            )
-
         OverrideDroneValue index valStr ->
             case String.toFloat valStr of
                 Just val ->
@@ -468,16 +480,67 @@ update msg model =
         SetExportTab tab ->
             ( { model | exportTab = tab }, Cmd.none )
 
-        ToggleLockParam param ->
-            if Set.member param model.lockedParams then
-                ( { model | lockedParams = Set.remove param model.lockedParams }
-                , Ports.websocketSend (encodeUnlockParam param)
-                )
+        ToggleLockParam layer maybeIndex param ->
+            case ( layer, maybeIndex ) of
+                ( "drone", Just i ) ->
+                    let
+                        isLocked =
+                            List.drop i model.drones
+                                |> List.head
+                                |> Maybe.map
+                                    (\d -> List.member param d.lockedParams)
+                                |> Maybe.withDefault False
 
-            else
-                ( { model | lockedParams = Set.insert param model.lockedParams }
-                , Ports.websocketSend (encodeLockParam param)
-                )
+                        toggleLocked d =
+                            if isLocked then
+                                { d
+                                    | lockedParams =
+                                        List.filter (\p -> p /= param)
+                                            d.lockedParams
+                                }
+
+                            else
+                                { d | lockedParams = param :: d.lockedParams }
+                    in
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\idx d ->
+                                    if idx == i then
+                                        toggleLocked d
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
+                    , Ports.websocketSend
+                        (if isLocked then
+                            encodeUnlockParam layer maybeIndex param
+
+                         else
+                            encodeLockParam layer maybeIndex param
+                        )
+                    )
+
+                _ ->
+                    if Set.member param model.lockedParams then
+                        ( { model
+                            | lockedParams =
+                                Set.remove param model.lockedParams
+                          }
+                        , Ports.websocketSend
+                            (encodeUnlockParam layer maybeIndex param)
+                        )
+
+                    else
+                        ( { model
+                            | lockedParams =
+                                Set.insert param model.lockedParams
+                          }
+                        , Ports.websocketSend
+                            (encodeLockParam layer maybeIndex param)
+                        )
 
         ToggleLockDrone index ->
             if Set.member index model.lockedDrones then
@@ -627,21 +690,36 @@ handleServerMsg raw model =
             , Cmd.none
             )
 
-        Just (ParamChanged param value) ->
-            ( { model
-                | voice =
-                    List.map
-                        (\p ->
-                            if p.name == param then
-                                { p | value = value }
+        Just (ParamChanged layer maybeIndex param value) ->
+            let
+                updateParam p =
+                    if p.name == param then
+                        { p | value = value }
 
-                            else
-                                p
-                        )
-                        model.voice
-              }
-            , Cmd.none
-            )
+                    else
+                        p
+            in
+            case ( layer, maybeIndex ) of
+                ( "drone", Just i ) ->
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\idx d ->
+                                    if idx == i then
+                                        { d | voice = List.map updateParam d.voice }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( { model | voice = List.map updateParam model.voice }
+                    , Cmd.none
+                    )
 
         Just (MuteChanged muted) ->
             ( { model | muted = muted }, Cmd.none )
@@ -724,13 +802,13 @@ handleServerMsg raw model =
                 _ ->
                     ( model, Cmd.none )
 
-        Just (DroneConfigChanged index baseFreq boops register) ->
+        Just (DroneConfigChanged index baseFreq boops) ->
             ( { model
                 | drones =
                     List.indexedMap
                         (\i d ->
                             if i == index then
-                                { d | baseFreq = baseFreq, boops = boops, register = register }
+                                { d | baseFreq = baseFreq, boops = boops }
 
                             else
                                 d
@@ -754,8 +832,28 @@ handleServerMsg raw model =
         Just (VoiceExport data) ->
             ( { model | exportData = Just data }, Cmd.none )
 
-        Just (LockedParamsChanged params) ->
-            ( { model | lockedParams = Set.fromList params }, Cmd.none )
+        Just (LockedParamsChanged layer maybeIndex params) ->
+            case ( layer, maybeIndex ) of
+                ( "drone", Just i ) ->
+                    ( { model
+                        | drones =
+                            List.indexedMap
+                                (\idx d ->
+                                    if idx == i then
+                                        { d | lockedParams = params }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                      }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( { model | lockedParams = Set.fromList params }
+                    , Cmd.none
+                    )
 
         Just (LockedDronesChanged indices) ->
             ( { model | lockedDrones = Set.fromList indices }, Cmd.none )
@@ -808,8 +906,7 @@ viewPage model =
     case model.route of
         Home ->
             div [ class "panels" ]
-                [ viewVoicePanel model
-                , viewHeartbeatPanel model
+                [ viewHeartbeatPanel model
                 , viewDronePanel model
                 , viewCheckLog model
                 ]
@@ -899,17 +996,8 @@ viewToolbar model =
         ]
 
 
-viewVoicePanel : Model -> Html Msg
-viewVoicePanel model =
-    section [ class "panel" ]
-        [ h2 [ class "panel-heading" ] [ text "Voice" ]
-        , div [ class "slider-grid" ]
-            (List.map (viewVoiceSlider model.lockedParams) model.voice)
-        ]
-
-
-viewVoiceSlider : Set String -> VoiceParam -> Html Msg
-viewVoiceSlider locked param =
+viewVoiceSlider : String -> Maybe Int -> Set String -> VoiceParam -> Html Msg
+viewVoiceSlider layer maybeIndex locked param =
     let
         isLocked =
             Set.member param.name locked
@@ -923,7 +1011,7 @@ viewVoiceSlider locked param =
                  else
                     "btn-lock"
                 )
-            , onClick (ToggleLockParam param.name)
+            , onClick (ToggleLockParam layer maybeIndex param.name)
             ]
             [ text
                 (if isLocked then
@@ -941,7 +1029,7 @@ viewVoiceSlider locked param =
             , Html.Attributes.max (String.fromFloat param.max)
             , step (String.fromFloat param.step)
             , value (String.fromFloat param.value)
-            , onInput (SetVoiceParam param.name)
+            , onInput (SetVoiceParam layer maybeIndex param.name)
             , class "slider"
             ]
             []
@@ -1008,6 +1096,16 @@ viewHeartbeatPanel model =
             div [ class "checks-list" ]
                 (h3 [ class "panel-subheading" ] [ text "Checks" ]
                     :: List.indexedMap viewCheck model.checks
+                )
+        , if List.isEmpty model.voice then
+            text ""
+
+          else
+            div [ class "slider-grid" ]
+                (h3 [ class "panel-subheading" ] [ text "Voice" ]
+                    :: List.map
+                        (viewVoiceSlider "heartbeat" Nothing model.lockedParams)
+                        model.voice
                 )
         ]
 
@@ -1131,7 +1229,10 @@ viewDronePanel model =
 
           else
             div [ class "drone-list" ]
-                (List.indexedMap (viewDrone model.lockedDrones) model.drones)
+                (List.indexedMap
+                    (viewDrone model.lockedDrones)
+                    model.drones
+                )
         ]
 
 
@@ -1162,6 +1263,7 @@ viewDrone lockedDrones index drone =
                     )
                 ]
             , span [ class "drone-name" ] [ text drone.name ]
+            , label [ class "slider-label" ] [ text "Boops" ]
             , select
                 [ onInput (SetDroneBoops index)
                 , class "override-select"
@@ -1170,21 +1272,9 @@ viewDrone lockedDrones index drone =
                     (\n ->
                         option
                             [ value (String.fromInt n), selected (drone.boops == n) ]
-                            [ text (String.fromInt n ++ "b") ]
+                            [ text (String.fromInt n) ]
                     )
                     (List.range 1 8)
-                )
-            , select
-                [ onInput (SetDroneRegister index)
-                , class "override-select"
-                ]
-                (List.map
-                    (\r ->
-                        option
-                            [ value r, selected (drone.register == r) ]
-                            [ text r ]
-                    )
-                    [ "low", "mid", "high" ]
                 )
             ]
         , div [ class "control-row" ]
@@ -1229,6 +1319,14 @@ viewDrone lockedDrones index drone =
                 ]
                 []
             ]
+        , div [ class "slider-grid" ]
+            (List.map
+                (viewVoiceSlider "drone"
+                    (Just index)
+                    (Set.fromList drone.lockedParams)
+                )
+                drone.voice
+            )
         ]
 
 
@@ -1367,6 +1465,16 @@ viewExportModal model =
 formatParamName : String -> String
 formatParamName name =
     String.replace "_" " " name
+
+
+voiceDebounceKey : String -> Maybe Int -> String -> String
+voiceDebounceKey layer maybeIndex name =
+    "voice:"
+        ++ layer
+        ++ ":"
+        ++ (Maybe.map String.fromInt maybeIndex |> Maybe.withDefault "_")
+        ++ ":"
+        ++ name
 
 
 formatFloat : Float -> String

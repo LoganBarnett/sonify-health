@@ -256,9 +256,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           };
           let metric = ds.metrics[i].value();
 
-          let effective_freq = info
-            .base_freq
-            .unwrap_or(voice.base_freq * info.register.multiplier());
+          let effective_freq = info.base_freq.unwrap_or(voice.base_freq);
           let slot_secs = prev.slot_secs;
 
           let specs =

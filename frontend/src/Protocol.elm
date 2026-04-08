@@ -21,7 +21,6 @@ module Protocol exposing
     , encodeSetBoopSpec
     , encodeSetDroneBoops
     , encodeSetDroneFreq
-    , encodeSetDroneRegister
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
@@ -60,8 +59,9 @@ type alias DroneInfo =
     , volume : Float
     , baseFreq : Maybe Float
     , boops : Int
-    , register : String
     , overridden : Bool
+    , voice : List VoiceParam
+    , lockedParams : List String
     }
 
 
@@ -109,16 +109,16 @@ type ServerMsg
         , boopSpecs : List BoopSpecInfo
         , boopSpecRanges : BoopSpecRanges
         }
-    | ParamChanged String Float
+    | ParamChanged String (Maybe Int) String Float
     | MuteChanged Bool
     | VolumeChanged String (Maybe Int) Float
     | OverrideChanged String Int (Maybe String) Bool
     | HeartbeatLoopChanged Bool
     | BoopCountChanged Int
-    | DroneConfigChanged Int (Maybe Float) Int String
+    | DroneConfigChanged Int (Maybe Float) Int
     | CheckLog CheckLogEntry
     | VoiceExport { toml : String, json : String, nix : String }
-    | LockedParamsChanged (List String)
+    | LockedParamsChanged String (Maybe Int) (List String)
     | LockedDronesChanged (List Int)
     | BoopSpecsChanged (List BoopSpecInfo)
     | ImportError String
@@ -198,6 +198,14 @@ andMap =
 
 stateDecoder : D.Decoder ServerMsg
 stateDecoder =
+    D.field "voice_params" (D.list voiceParamMetaDecoder)
+        |> D.andThen stateDecoderWithMeta
+
+
+stateDecoderWithMeta :
+    List { name : String, description : String, min : Float, max : Float, step : Float }
+    -> D.Decoder ServerMsg
+stateDecoderWithMeta metas =
     D.map7
         (\voice muted hbVol hbLoop boopCount checks drones ->
             \locked lockedDrones boopSpecs ranges ->
@@ -216,18 +224,14 @@ stateDecoder =
                     }
         )
         (D.field "voice" voiceDecoder
-            |> D.andThen
-                (\voiceValues ->
-                    D.field "voice_params" (D.list voiceParamMetaDecoder)
-                        |> D.map (mergeVoiceParams voiceValues)
-                )
+            |> D.map (\vals -> mergeVoiceParams vals metas)
         )
         (D.field "muted" D.bool)
         (D.field "heartbeat_volume" D.float)
         (D.field "heartbeat_loop" D.bool)
         (D.field "boop_count" D.int)
         (D.field "checks" (D.list checkInfoDecoder))
-        (D.field "drones" (D.list droneInfoDecoder))
+        (D.field "drones" (D.list (droneInfoDecoderWithMeta metas)))
         |> andMap (D.field "locked_params" (D.list D.string))
         |> andMap (D.field "locked_drones" (D.list D.int))
         |> andMap (D.field "boop_specs" (D.list boopSpecInfoDecoder))
@@ -289,21 +293,39 @@ checkInfoDecoder =
         (D.field "overridden" D.bool)
 
 
-droneInfoDecoder : D.Decoder DroneInfo
-droneInfoDecoder =
-    D.map7 DroneInfo
+droneInfoDecoderWithMeta :
+    List { name : String, description : String, min : Float, max : Float, step : Float }
+    -> D.Decoder DroneInfo
+droneInfoDecoderWithMeta metas =
+    D.map8
+        (\name val vol bf boops ovr voice locked ->
+            { name = name
+            , value = val
+            , volume = vol
+            , baseFreq = bf
+            , boops = boops
+            , overridden = ovr
+            , voice = voice
+            , lockedParams = locked
+            }
+        )
         (D.field "name" D.string)
         (D.field "value" D.float)
         (D.field "volume" D.float)
         (D.maybe (D.field "base_freq" D.float))
         (D.field "boops" D.int)
-        (D.field "register" D.string)
         (D.field "overridden" D.bool)
+        (D.field "voice" voiceDecoder
+            |> D.map (\vals -> mergeVoiceParams vals metas)
+        )
+        (D.field "locked_params" (D.list D.string))
 
 
 paramChangedDecoder : D.Decoder ServerMsg
 paramChangedDecoder =
-    D.map2 ParamChanged
+    D.map4 ParamChanged
+        (D.field "layer" D.string)
+        (D.maybe (D.field "index" D.int))
         (D.field "param" D.string)
         (D.field "value" D.float)
 
@@ -369,11 +391,10 @@ boopCountChangedDecoder =
 
 droneConfigChangedDecoder : D.Decoder ServerMsg
 droneConfigChangedDecoder =
-    D.map4 DroneConfigChanged
+    D.map3 DroneConfigChanged
         (D.field "index" D.int)
         (D.maybe (D.field "base_freq" D.float))
         (D.field "boops" D.int)
-        (D.field "register" D.string)
 
 
 voiceExportDecoder : D.Decoder ServerMsg
@@ -406,7 +427,10 @@ boopSpecRangesDecoder =
 
 lockedParamsChangedDecoder : D.Decoder ServerMsg
 lockedParamsChangedDecoder =
-    D.map LockedParamsChanged (D.field "params" (D.list D.string))
+    D.map3 LockedParamsChanged
+        (D.field "layer" D.string)
+        (D.maybe (D.field "index" D.int))
+        (D.field "params" (D.list D.string))
 
 
 lockedDronesChangedDecoder : D.Decoder ServerMsg
@@ -434,13 +458,25 @@ encodeGetState =
         |> E.encode 0
 
 
-encodeSetVoiceParam : String -> Float -> String
-encodeSetVoiceParam param value =
-    E.object
-        [ ( "type", E.string "set_voice_param" )
-        , ( "param", E.string param )
-        , ( "value", E.float value )
-        ]
+encodeSetVoiceParam : String -> Maybe Int -> String -> Float -> String
+encodeSetVoiceParam layer maybeIndex param value =
+    let
+        base =
+            [ ( "type", E.string "set_voice_param" )
+            , ( "layer", E.string layer )
+            , ( "param", E.string param )
+            , ( "value", E.float value )
+            ]
+
+        indexField =
+            case maybeIndex of
+                Just i ->
+                    [ ( "index", E.int i ) ]
+
+                Nothing ->
+                    []
+    in
+    E.object (base ++ indexField)
         |> E.encode 0
 
 
@@ -554,37 +590,51 @@ encodeSetDroneBoops index boops =
         |> E.encode 0
 
 
-encodeSetDroneRegister : Int -> String -> String
-encodeSetDroneRegister index register =
-    E.object
-        [ ( "type", E.string "set_drone_register" )
-        , ( "index", E.int index )
-        , ( "register", E.string register )
-        ]
-        |> E.encode 0
-
-
 encodeExportVoice : String
 encodeExportVoice =
     E.object [ ( "type", E.string "export_toml" ) ]
         |> E.encode 0
 
 
-encodeLockParam : String -> String
-encodeLockParam param =
-    E.object
-        [ ( "type", E.string "lock_param" )
-        , ( "param", E.string param )
-        ]
+encodeLockParam : String -> Maybe Int -> String -> String
+encodeLockParam layer maybeIndex param =
+    let
+        base =
+            [ ( "type", E.string "lock_param" )
+            , ( "layer", E.string layer )
+            , ( "param", E.string param )
+            ]
+
+        indexField =
+            case maybeIndex of
+                Just i ->
+                    [ ( "index", E.int i ) ]
+
+                Nothing ->
+                    []
+    in
+    E.object (base ++ indexField)
         |> E.encode 0
 
 
-encodeUnlockParam : String -> String
-encodeUnlockParam param =
-    E.object
-        [ ( "type", E.string "unlock_param" )
-        , ( "param", E.string param )
-        ]
+encodeUnlockParam : String -> Maybe Int -> String -> String
+encodeUnlockParam layer maybeIndex param =
+    let
+        base =
+            [ ( "type", E.string "unlock_param" )
+            , ( "layer", E.string layer )
+            , ( "param", E.string param )
+            ]
+
+        indexField =
+            case maybeIndex of
+                Just i ->
+                    [ ( "index", E.int i ) ]
+
+                Nothing ->
+                    []
+    in
+    E.object (base ++ indexField)
         |> E.encode 0
 
 
