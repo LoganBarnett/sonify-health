@@ -271,6 +271,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     &config.daemon.heartbeat_checks,
     &config.daemon.drone_metrics,
     config.daemon.timing.slot_duration_secs,
+    &config.daemon.heartbeat_notes,
   ));
 
   // Perform OIDC provider discovery when configured.

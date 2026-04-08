@@ -197,6 +197,7 @@ impl PreviewState {
     heartbeat_checks: &[HeartbeatCheckConfig],
     drone_metrics: &[DroneMetricConfig],
     slot_secs: f64,
+    initial_notes: &[BoopSpec],
   ) -> Self {
     let drone_count = drone_metrics.len();
     let check_count = heartbeat_checks.len();
@@ -219,8 +220,20 @@ impl PreviewState {
       })
       .collect();
 
-    let initial_specs = voice.boop_specs(&scale, check_count, 1, slot_secs);
-    let initial_pins = vec![false; initial_specs.len()];
+    let (initial_specs, initial_pins, boop_count) = if initial_notes.is_empty()
+    {
+      let specs = voice.boop_specs(&scale, check_count, 1, slot_secs);
+      let pins = vec![false; specs.len()];
+      (specs, pins, 1)
+    } else {
+      let pins = vec![true; initial_notes.len()];
+      let count = if check_count > 0 {
+        (initial_notes.len() / check_count).max(1)
+      } else {
+        initial_notes.len().max(1)
+      };
+      (initial_notes.to_vec(), pins, count)
+    };
 
     Self {
       original_voice: voice.clone(),
@@ -242,8 +255,8 @@ impl PreviewState {
       check_names: heartbeat_checks.iter().map(|c| c.name.clone()).collect(),
       original_drone_infos: drone_infos.clone(),
       drone_infos: RwLock::new(drone_infos),
-      boop_count: AtomicUsize::new(1),
-      original_boop_count: 1,
+      boop_count: AtomicUsize::new(boop_count),
+      original_boop_count: boop_count,
       locked_params: RwLock::new(HashSet::new()),
       locked_drones: RwLock::new(HashSet::new()),
       boop_specs: RwLock::new(initial_specs),
@@ -722,6 +735,7 @@ mod tests {
       &checks,
       &drones,
       4.0,
+      &[],
     )
   }
 

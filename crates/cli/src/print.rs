@@ -40,7 +40,7 @@ pub(crate) fn format_toml(
   ];
   for spec in boops {
     lines.push(String::new());
-    lines.push("[[boops]]".to_string());
+    lines.push("[[heartbeat.notes]]".to_string());
     lines.push(format!("freq = {}", float_lit(spec.freq)));
     lines.push(format!("duration = {}", float_lit(spec.duration)));
   }
@@ -74,7 +74,7 @@ pub(crate) fn format_nix(
     "};".to_string(),
   ];
   if !boops.is_empty() {
-    lines.push("boops = [".to_string());
+    lines.push("heartbeat.notes = [".to_string());
     for spec in boops {
       lines.push(format!(
         "  {{ freq = {}; duration = {}; }}",
@@ -114,11 +114,11 @@ pub(crate) fn format_json(
     }
   });
   if !boops.is_empty() {
-    let boop_arr: Vec<_> = boops
+    let notes_arr: Vec<_> = boops
       .iter()
       .map(|s| json!({"freq": s.freq, "duration": s.duration}))
       .collect();
-    obj["boops"] = json!(boop_arr);
+    obj["heartbeat"] = json!({"notes": notes_arr});
   }
   serde_json::to_string_pretty(&obj).unwrap()
 }

@@ -541,16 +541,21 @@ struct ImportBoop {
   duration: f64,
 }
 
+#[derive(Default, serde::Deserialize)]
+struct ImportHeartbeatSection {
+  notes: Option<Vec<ImportBoop>>,
+}
+
 #[derive(serde::Deserialize)]
 struct ImportToml {
   voice: Option<ImportVoice>,
-  boops: Option<Vec<ImportBoop>>,
+  heartbeat: Option<ImportHeartbeatSection>,
 }
 
 #[derive(serde::Deserialize)]
 struct ImportJson {
   voice: Option<ImportVoice>,
-  boops: Option<Vec<ImportBoop>>,
+  heartbeat: Option<ImportHeartbeatSection>,
 }
 
 /// Parsed voice param overrides paired with optional boop specs.
@@ -631,7 +636,8 @@ fn parse_import_json(text: &str) -> ImportResult {
     serde_json::from_str(text).map_err(|e| format!("JSON parse error: {e}"))?;
   let params = parsed.voice.as_ref().map(voice_fields).unwrap_or_default();
   let boops = parsed
-    .boops
+    .heartbeat
+    .and_then(|hb| hb.notes)
     .as_deref()
     .map(boops_from_import)
     .unwrap_or_default();
@@ -643,7 +649,8 @@ fn parse_import_toml(text: &str) -> ImportResult {
     toml::from_str(text).map_err(|e| format!("TOML parse error: {e}"))?;
   let params = parsed.voice.as_ref().map(voice_fields).unwrap_or_default();
   let boops = parsed
-    .boops
+    .heartbeat
+    .and_then(|hb| hb.notes)
     .as_deref()
     .map(boops_from_import)
     .unwrap_or_default();
@@ -684,4 +691,77 @@ fn apply_import(
 
   let snapshot = preview.state_snapshot();
   let _ = preview.broadcast_tx.send(snapshot);
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::print;
+  use sonify_health_lib::Voice;
+
+  #[test]
+  fn toml_export_import_round_trips_notes() {
+    let voice = Voice::from_hostname("test");
+    let notes = vec![
+      BoopSpec {
+        freq: 440.0,
+        duration: 0.25,
+      },
+      BoopSpec {
+        freq: 880.0,
+        duration: 0.15,
+      },
+    ];
+    let toml = print::format_toml(&voice, "C", &notes);
+    let (_, imported) =
+      parse_import(&toml).expect("round-trip TOML should parse");
+    assert_eq!(imported.len(), notes.len());
+    for (orig, imp) in notes.iter().zip(imported.iter()) {
+      assert!(
+        (orig.freq - imp.freq).abs() < f64::EPSILON,
+        "freq mismatch: {} vs {}",
+        orig.freq,
+        imp.freq
+      );
+      assert!(
+        (orig.duration - imp.duration).abs() < f64::EPSILON,
+        "duration mismatch: {} vs {}",
+        orig.duration,
+        imp.duration
+      );
+    }
+  }
+
+  #[test]
+  fn json_export_import_round_trips_notes() {
+    let voice = Voice::from_hostname("test");
+    let notes = vec![
+      BoopSpec {
+        freq: 440.0,
+        duration: 0.25,
+      },
+      BoopSpec {
+        freq: 880.0,
+        duration: 0.15,
+      },
+    ];
+    let json = print::format_json(&voice, "C", &notes);
+    let (_, imported) =
+      parse_import(&json).expect("round-trip JSON should parse");
+    assert_eq!(imported.len(), notes.len());
+    for (orig, imp) in notes.iter().zip(imported.iter()) {
+      assert!(
+        (orig.freq - imp.freq).abs() < f64::EPSILON,
+        "freq mismatch: {} vs {}",
+        orig.freq,
+        imp.freq
+      );
+      assert!(
+        (orig.duration - imp.duration).abs() < f64::EPSILON,
+        "duration mismatch: {} vs {}",
+        orig.duration,
+        imp.duration
+      );
+    }
+  }
 }

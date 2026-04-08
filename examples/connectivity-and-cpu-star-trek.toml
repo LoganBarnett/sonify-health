@@ -1,0 +1,75 @@
+# Heartbeat: internet connectivity + gateway reachability.
+# Drone: CPU load as a continuous tone.
+#
+# Run with:
+#   sonify-health --config examples/connectivity-and-cpu.toml daemon
+#
+# Requires only ping and uptime, both available on macOS and Linux.
+
+log_level = "info"
+log_format = "text"
+
+[heartbeat]
+slot = 0
+cycle_duration_secs = 14
+slot_duration_secs = 2
+
+# Gateway reachability.  Replace 192.168.1.1 with your actual gateway
+# address (`ip route | awk '/default/ {print $3}'` on Linux,
+# `netstat -nr | awk '/default/ {print $2; exit}'` on macOS).
+[[heartbeat.checks]]
+name = "gateway"
+command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
+result_mode = "exit-code"
+
+# Internet connectivity via a well-known public DNS resolver.
+[[heartbeat.checks]]
+name = "internet"
+command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
+result_mode = "exit-code"
+
+[drone]
+poll_interval_secs = 5
+
+# CPU load as a 0.0–1.0 value: 1-minute load average divided by
+# CPU count, clamped to 1.0.  Works unprivileged on both macOS and
+# Linux.
+[[drone.metrics]]
+name = "cpu"
+command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \\"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\\$1/\\$2; print (v>1?1:v)}"'"""
+result_mode = "stdout"
+register = "mid"
+
+[voice]
+scale_key = "local"
+base_freq = 1165.4094037952248
+sine_ratio = 1.0
+tri_ratio = 0.07
+saw_ratio = 0.06
+attack_ms = 6.0
+release_ms = 22.0
+chirp_ratio = 1.01
+stereo_pan = -0.42
+reverb_mix = 0.89
+note_seed = 0.16436162216471262
+echo_delay = 0.32
+echo_mix = 0.33
+brightness = 0.08
+resonance = 0.89
+sub_octave = 0.03
+
+[[heartbeat.notes]]
+freq = 3668.0
+duration = 0.21
+
+[[heartbeat.notes]]
+freq = 4307.0
+duration = 0.22
+
+[[heartbeat.notes]]
+freq = 3668.0
+duration = 0.2
+
+[[heartbeat.notes]]
+freq = 4307.0
+duration = 0.22

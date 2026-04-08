@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use sonify_health_lib::{
-  check::HeartbeatCheckConfig, timing::TimingConfig, DroneMetricConfig,
-  LogFormat, LogLevel, Voice, VoiceOverrides,
+  check::HeartbeatCheckConfig, timing::TimingConfig, BoopSpec,
+  DroneMetricConfig, LogFormat, LogLevel, Voice, VoiceOverrides,
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -77,6 +77,16 @@ struct HeartbeatSectionRaw {
   timing: Option<TimingConfig>,
   #[serde(default)]
   checks: Vec<HeartbeatCheckConfig>,
+  #[serde(default)]
+  notes: Vec<NoteSpec>,
+}
+
+/// A note specification as it appears in the config file under
+/// `[[heartbeat.notes]]`.
+#[derive(Debug, Deserialize, Clone)]
+struct NoteSpec {
+  freq: f64,
+  duration: f64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -119,6 +129,7 @@ pub struct Config {
 pub struct DaemonConfig {
   pub timing: TimingConfig,
   pub heartbeat_checks: Vec<HeartbeatCheckConfig>,
+  pub heartbeat_notes: Vec<BoopSpec>,
   pub drone_poll_interval_secs: f64,
   pub drone_metrics: Vec<DroneMetricConfig>,
 }
@@ -128,6 +139,7 @@ impl Default for DaemonConfig {
     Self {
       timing: TimingConfig::default(),
       heartbeat_checks: Vec::new(),
+      heartbeat_notes: Vec::new(),
       drone_poll_interval_secs: 5.0,
       drone_metrics: Vec::new(),
     }
@@ -191,11 +203,22 @@ impl Config {
 
     let daemon = file
       .heartbeat
-      .map(|hb| DaemonConfig {
-        timing: hb.timing.unwrap_or_default(),
-        heartbeat_checks: hb.checks,
-        drone_poll_interval_secs,
-        drone_metrics: drone_metrics.clone(),
+      .map(|hb| {
+        let heartbeat_notes = hb
+          .notes
+          .iter()
+          .map(|n| BoopSpec {
+            freq: n.freq,
+            duration: n.duration,
+          })
+          .collect();
+        DaemonConfig {
+          timing: hb.timing.unwrap_or_default(),
+          heartbeat_checks: hb.checks,
+          heartbeat_notes,
+          drone_poll_interval_secs,
+          drone_metrics: drone_metrics.clone(),
+        }
       })
       .unwrap_or(DaemonConfig {
         drone_poll_interval_secs,
@@ -381,6 +404,32 @@ mod tests {
     assert!(
       (config.daemon.drone_poll_interval_secs - 5.0).abs() < f64::EPSILON
     );
+  }
+
+  #[test]
+  fn heartbeat_notes_parse() {
+    let toml = r#"
+      [heartbeat]
+      slot = 0
+      cycle_duration_secs = 10
+      slot_duration_secs = 2
+
+      [[heartbeat.notes]]
+      freq = 440.0
+      duration = 0.25
+
+      [[heartbeat.notes]]
+      freq = 880.0
+      duration = 0.15
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let hb = raw.heartbeat.unwrap();
+    assert_eq!(hb.notes.len(), 2);
+    assert!((hb.notes[0].freq - 440.0).abs() < f64::EPSILON);
+    assert!((hb.notes[0].duration - 0.25).abs() < f64::EPSILON);
+    assert!((hb.notes[1].freq - 880.0).abs() < f64::EPSILON);
+    assert!((hb.notes[1].duration - 0.15).abs() < f64::EPSILON);
   }
 
   #[test]
