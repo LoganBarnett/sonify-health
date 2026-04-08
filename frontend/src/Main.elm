@@ -118,6 +118,11 @@ type Msg
     | SetBoopDuration Int String
     | BoopDurationDebounce Int Int Float
     | ClearBoopPin Int
+    | SetDroneNoteFreq Int Int String
+    | DroneNoteFreqDebounce Int Int Int Float
+    | SetDroneNoteDuration Int Int String
+    | DroneNoteDurationDebounce Int Int Int Float
+    | ClearDronePin Int Int
     | SetImportText String
     | SubmitImport
     | NoOp
@@ -799,6 +804,127 @@ update msg model =
             , Ports.websocketSend (encodeClearBoopPin index)
             )
 
+        SetDroneNoteFreq droneIdx noteIdx valStr ->
+            case String.toFloat valStr of
+                Just freq ->
+                    let
+                        key =
+                            "drone_note_freq:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+
+                        id =
+                            model.nextDebounce
+
+                        newDrones =
+                            List.indexedMap
+                                (\di d ->
+                                    if di == droneIdx then
+                                        { d
+                                            | droneSpecs =
+                                                List.indexedMap
+                                                    (\ni s ->
+                                                        if ni == noteIdx then
+                                                            { s | freq = freq, pinned = True }
+
+                                                        else
+                                                            s
+                                                    )
+                                                    d.droneSpecs
+                                        }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                    in
+                    ( { model
+                        | drones = newDrones
+                        , debounces = Dict.insert key id model.debounces
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform (\_ -> DroneNoteFreqDebounce droneIdx noteIdx id freq)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DroneNoteFreqDebounce droneIdx noteIdx id freq ->
+            let
+                key =
+                    "drone_note_freq:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+            in
+            if Dict.get key model.debounces == Just id then
+                ( model
+                , Ports.websocketSend
+                    (Protocol.encodeSetDroneSpec droneIdx noteIdx (Just freq) Nothing)
+                )
+
+            else
+                ( model, Cmd.none )
+
+        SetDroneNoteDuration droneIdx noteIdx valStr ->
+            case String.toFloat valStr of
+                Just dur ->
+                    let
+                        key =
+                            "drone_note_dur:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+
+                        id =
+                            model.nextDebounce
+
+                        newDrones =
+                            List.indexedMap
+                                (\di d ->
+                                    if di == droneIdx then
+                                        { d
+                                            | droneSpecs =
+                                                List.indexedMap
+                                                    (\ni s ->
+                                                        if ni == noteIdx then
+                                                            { s | duration = dur, pinned = True }
+
+                                                        else
+                                                            s
+                                                    )
+                                                    d.droneSpecs
+                                        }
+
+                                    else
+                                        d
+                                )
+                                model.drones
+                    in
+                    ( { model
+                        | drones = newDrones
+                        , debounces = Dict.insert key id model.debounces
+                        , nextDebounce = id + 1
+                      }
+                    , Process.sleep 50
+                        |> Task.perform (\_ -> DroneNoteDurationDebounce droneIdx noteIdx id dur)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DroneNoteDurationDebounce droneIdx noteIdx id dur ->
+            let
+                key =
+                    "drone_note_dur:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+            in
+            if Dict.get key model.debounces == Just id then
+                ( model
+                , Ports.websocketSend
+                    (Protocol.encodeSetDroneSpec droneIdx noteIdx Nothing (Just dur))
+                )
+
+            else
+                ( model, Cmd.none )
+
+        ClearDronePin droneIdx noteIdx ->
+            ( model
+            , Ports.websocketSend (Protocol.encodeClearDronePin droneIdx noteIdx)
+            )
+
         SetImportText text ->
             ( { model | importText = text, importError = Nothing }, Cmd.none )
 
@@ -1054,6 +1180,22 @@ handleServerMsg raw model =
 
         Just (BoopSpecsChanged specs) ->
             ( { model | boopSpecs = specs }, Cmd.none )
+
+        Just (DroneSpecsChanged index newSpecs) ->
+            ( { model
+                | drones =
+                    List.indexedMap
+                        (\i d ->
+                            if i == index then
+                                { d | droneSpecs = newSpecs }
+
+                            else
+                                d
+                        )
+                        model.drones
+              }
+            , Cmd.none
+            )
 
         Just (ImportError message) ->
             ( { model | importError = Just message }, Cmd.none )
@@ -1643,6 +1785,7 @@ viewDrone lockedDrones index drone =
                 ]
                 []
             ]
+        , viewDroneBoopSpecs index drone.droneSpecs drone.droneSpecRanges
         , div [ class "slider-grid" ]
             (List.map
                 (viewVoiceSlider "drone"
@@ -1651,6 +1794,77 @@ viewDrone lockedDrones index drone =
                 )
                 drone.voice
             )
+        ]
+
+
+viewDroneBoopSpecs : Int -> List BoopSpecInfo -> BoopSpecRanges -> Html Msg
+viewDroneBoopSpecs droneIndex specs ranges =
+    if List.isEmpty specs then
+        text ""
+
+    else
+        div [ class "boop-specs" ]
+            (h3 [ class "panel-subheading" ] [ text "Notes" ]
+                :: List.indexedMap (viewDroneBoopRow droneIndex ranges) specs
+            )
+
+
+viewDroneBoopRow : Int -> BoopSpecRanges -> Int -> BoopSpecInfo -> Html Msg
+viewDroneBoopRow droneIndex ranges noteIndex spec =
+    div [ class "boop-row" ]
+        [ span [ class "boop-index" ]
+            [ text (String.fromInt noteIndex) ]
+        , label [ class "slider-label" ] [ text "Freq" ]
+        , input
+            [ type_ "range"
+            , Html.Attributes.min (String.fromFloat ranges.freqMin)
+            , Html.Attributes.max (String.fromFloat ranges.freqMax)
+            , step (String.fromFloat ranges.freqStep)
+            , value (String.fromFloat spec.freq)
+            , onInput (SetDroneNoteFreq droneIndex noteIndex)
+            , class "slider"
+            ]
+            []
+        , input
+            [ type_ "number"
+            , Html.Attributes.min (String.fromFloat ranges.freqMin)
+            , Html.Attributes.max (String.fromFloat ranges.freqMax)
+            , step (String.fromFloat ranges.freqStep)
+            , value (String.fromFloat spec.freq)
+            , onInput (SetDroneNoteFreq droneIndex noteIndex)
+            , class "slider-value-input"
+            ]
+            []
+        , label [ class "slider-label" ] [ text "Dur" ]
+        , input
+            [ type_ "range"
+            , Html.Attributes.min (String.fromFloat ranges.durationMin)
+            , Html.Attributes.max (String.fromFloat ranges.durationMax)
+            , step (String.fromFloat ranges.durationStep)
+            , value (String.fromFloat spec.duration)
+            , onInput (SetDroneNoteDuration droneIndex noteIndex)
+            , class "slider"
+            ]
+            []
+        , input
+            [ type_ "number"
+            , Html.Attributes.min (String.fromFloat ranges.durationMin)
+            , Html.Attributes.max (String.fromFloat ranges.durationMax)
+            , step (String.fromFloat ranges.durationStep)
+            , value (String.fromFloat spec.duration)
+            , onInput (SetDroneNoteDuration droneIndex noteIndex)
+            , class "slider-value-input"
+            ]
+            []
+        , if spec.pinned then
+            button
+                [ class "btn-live"
+                , onClick (ClearDronePin droneIndex noteIndex)
+                ]
+                [ text "Unpin" ]
+
+          else
+            text ""
         ]
 
 

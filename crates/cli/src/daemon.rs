@@ -4,7 +4,7 @@ use crate::preview_state::{severity_from_shared, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  check, drone, heartbeat, PentatonicScale, Severity, Voice,
+  check, drone, heartbeat, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -24,7 +24,6 @@ pub enum DaemonError {
 /// Everything the daemon thread needs from main.
 pub struct DaemonContext<'a> {
   pub config: &'a DaemonConfig,
-  pub scale: &'a PentatonicScale,
   pub audio_device: Option<&'a str>,
   pub muted: Arc<AtomicBool>,
   pub running: Arc<AtomicBool>,
@@ -39,7 +38,6 @@ pub struct DaemonContext<'a> {
 pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   let DaemonContext {
     config,
-    scale,
     audio_device,
     muted,
     running,
@@ -236,10 +234,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       let prev = Arc::clone(&preview);
       let ds = Arc::clone(&drone_state);
       let mix = mixer.handle();
-      let scale = scale.clone();
       thread::spawn(move || {
         while run.load(Ordering::Relaxed) {
-          // Read current voice, drone config, and metric.
+          // Read current voice and metric.
           let voice = prev
             .voices
             .read()
@@ -247,20 +244,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             .get(&crate::preview_state::VoiceOwner::Drone(i))
             .cloned()
             .expect("Drone voice missing from voices map");
-          let info = {
-            let infos = prev.drone_infos.read().unwrap();
-            match infos.get(i) {
-              Some(info) => info.clone(),
-              None => break,
-            }
-          };
+          if prev.drone_infos.read().unwrap().get(i).is_none() {
+            break;
+          }
           let metric = ds.metrics[i].value();
 
-          let effective_freq = info.base_freq.unwrap_or(voice.base_freq);
-          let slot_secs = prev.slot_secs;
-
-          let specs =
-            voice.drone_specs(&scale, i, info.boops, effective_freq, slot_secs);
+          let specs = prev.drone_boop_specs.read().unwrap()[i].clone();
           let severities: Vec<Severity> =
             (0..specs.len()).map(|_| Severity::Healthy).collect();
 

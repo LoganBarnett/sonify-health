@@ -308,6 +308,9 @@ pub struct PreviewState {
   pub locked_drones: RwLock<HashSet<usize>>,
   pub boop_specs: RwLock<Vec<BoopSpec>>,
   pub boop_pins: RwLock<Vec<bool>>,
+  pub drone_boop_specs: RwLock<Vec<Vec<BoopSpec>>>,
+  pub drone_boop_pins: RwLock<Vec<Vec<bool>>>,
+  original_drone_boop_specs: Vec<Vec<BoopSpec>>,
   pub slot_secs: f64,
 }
 
@@ -322,6 +325,7 @@ impl PreviewState {
     drone_voice_overrides: &HashMap<String, VoiceOverrides>,
     slot_secs: f64,
     initial_notes: &[BoopSpec],
+    initial_drone_notes: &HashMap<String, Vec<BoopSpec>>,
   ) -> Self {
     let drone_count = drone_metrics.len();
     let check_count = heartbeat_checks.len();
@@ -374,6 +378,38 @@ impl PreviewState {
       voices.insert(VoiceOwner::Drone(i), drone_voice);
     }
 
+    // Per-drone boop specs: use config notes (pinned) when present,
+    // otherwise generate algorithmically (unpinned).
+    let (drone_specs_init, drone_pins_init): (
+      Vec<Vec<BoopSpec>>,
+      Vec<Vec<bool>>,
+    ) = drone_metrics
+      .iter()
+      .enumerate()
+      .map(|(i, dm)| {
+        if let Some(notes) = initial_drone_notes.get(&dm.name) {
+          let pins = vec![true; notes.len()];
+          (notes.clone(), pins)
+        } else {
+          let drone_voice = voices
+            .get(&VoiceOwner::Drone(i))
+            .cloned()
+            .unwrap_or_else(|| voice.clone());
+          let info = &drone_infos[i];
+          let effective_freq = info.base_freq.unwrap_or(drone_voice.base_freq);
+          let specs = drone_voice.drone_specs(
+            &scale,
+            i,
+            info.boops,
+            effective_freq,
+            slot_secs,
+          );
+          let pins = vec![false; specs.len()];
+          (specs, pins)
+        }
+      })
+      .unzip();
+
     Self {
       original_voices: voices.clone(),
       voices: RwLock::new(voices),
@@ -405,6 +441,9 @@ impl PreviewState {
       locked_drones: RwLock::new(HashSet::new()),
       boop_specs: RwLock::new(initial_specs),
       boop_pins: RwLock::new(initial_pins),
+      original_drone_boop_specs: drone_specs_init.clone(),
+      drone_boop_specs: RwLock::new(drone_specs_init),
+      drone_boop_pins: RwLock::new(drone_pins_init),
       slot_secs,
     }
   }
@@ -485,6 +524,55 @@ impl PreviewState {
     pins.truncate(total);
   }
 
+  /// Recompute materialized drone boop specs for a single drone,
+  /// preserving pinned entries.
+  pub fn recompute_drone_specs(&self, index: usize) {
+    let (voice, info) = {
+      let voices = self.voices.read().unwrap();
+      let infos = self.drone_infos.read().unwrap();
+      let voice = voices
+        .get(&VoiceOwner::Drone(index))
+        .cloned()
+        .unwrap_or_else(|| voices[&VoiceOwner::Heartbeat].clone());
+      let info = match infos.get(index) {
+        Some(i) => i.clone(),
+        None => return,
+      };
+      (voice, info)
+    };
+
+    let effective_freq = info.base_freq.unwrap_or(voice.base_freq);
+    let fresh = voice.drone_specs(
+      &self.scale,
+      index,
+      info.boops,
+      effective_freq,
+      self.slot_secs,
+    );
+
+    let mut all_specs = self.drone_boop_specs.write().unwrap();
+    let mut all_pins = self.drone_boop_pins.write().unwrap();
+
+    if let (Some(specs), Some(pins)) =
+      (all_specs.get_mut(index), all_pins.get_mut(index))
+    {
+      pins.resize(fresh.len(), false);
+      let merged: Vec<BoopSpec> = fresh
+        .into_iter()
+        .enumerate()
+        .map(|(i, fresh_spec)| {
+          if i < specs.len() && i < pins.len() && pins[i] {
+            specs[i].clone()
+          } else {
+            fresh_spec
+          }
+        })
+        .collect();
+      pins.truncate(merged.len());
+      *specs = merged;
+    }
+  }
+
   /// Build the full state snapshot JSON sent on connect and on
   /// `get_state` / `revert_all`.
   pub fn state_snapshot(&self) -> String {
@@ -532,6 +620,12 @@ impl PreviewState {
       })
       .collect();
 
+    let base_freq_meta =
+      VOICE_PARAMS.iter().find(|p| p.name == "base_freq").unwrap();
+
+    let drone_specs = self.drone_boop_specs.read().unwrap();
+    let drone_pins = self.drone_boop_pins.read().unwrap();
+
     let drones_json: Vec<_> = drone_infos
       .iter()
       .enumerate()
@@ -544,6 +638,19 @@ impl PreviewState {
           .get(&VoiceOwner::Drone(i))
           .map(|s| s.iter().map(|p| json!(p)).collect())
           .unwrap_or_default();
+        let d_specs = drone_specs.get(i).cloned().unwrap_or_default();
+        let d_pins = drone_pins.get(i).cloned().unwrap_or_default();
+        let specs_json: Vec<_> = d_specs
+          .iter()
+          .enumerate()
+          .map(|(j, spec)| {
+            json!({
+              "freq": spec.freq,
+              "duration": spec.duration,
+              "pinned": d_pins.get(j).copied().unwrap_or(false),
+            })
+          })
+          .collect();
         json!({
           "name": info.name,
           "value": self.drone_state.metrics[i].value(),
@@ -556,6 +663,15 @@ impl PreviewState {
           "overridden": drone_overrides[i].is_some(),
           "voice": drone_voice,
           "locked_params": drone_locked,
+          "specs": specs_json,
+          "spec_ranges": {
+            "freq_min": base_freq_meta.min / 2.0,
+            "freq_max": base_freq_meta.max,
+            "freq_step": 1.0,
+            "duration_min": 0.05,
+            "duration_max": self.slot_secs,
+            "duration_step": 0.01,
+          },
         })
       })
       .collect();
@@ -575,9 +691,6 @@ impl PreviewState {
         })
       })
       .collect();
-
-    let base_freq_meta =
-      VOICE_PARAMS.iter().find(|p| p.name == "base_freq").unwrap();
 
     json!({
       "type": "state",
@@ -605,6 +718,20 @@ impl PreviewState {
     .to_string()
   }
 
+  /// Collect per-drone specs as (name, specs) pairs for export.
+  fn drone_notes_for_export(&self) -> Vec<(String, Vec<BoopSpec>)> {
+    let drone_infos = self.drone_infos.read().unwrap();
+    let all_specs = self.drone_boop_specs.read().unwrap();
+    drone_infos
+      .iter()
+      .enumerate()
+      .map(|(i, info)| {
+        let specs = all_specs.get(i).cloned().unwrap_or_default();
+        (info.name.clone(), specs)
+      })
+      .collect()
+  }
+
   /// Format all voices as a TOML block.
   pub fn export_toml(&self) -> String {
     let voices = self.voices.read().unwrap();
@@ -622,7 +749,14 @@ impl PreviewState {
       })
       .collect();
     let specs = self.boop_specs.read().unwrap();
-    print::format_toml(heartbeat_voice, &drone_voices, &self.scale_key, &specs)
+    let drone_notes = self.drone_notes_for_export();
+    print::format_toml(
+      heartbeat_voice,
+      &drone_voices,
+      &self.scale_key,
+      &specs,
+      &drone_notes,
+    )
   }
 
   /// Format all voices as a JSON object.
@@ -642,7 +776,14 @@ impl PreviewState {
       })
       .collect();
     let specs = self.boop_specs.read().unwrap();
-    print::format_json(heartbeat_voice, &drone_voices, &self.scale_key, &specs)
+    let drone_notes = self.drone_notes_for_export();
+    print::format_json(
+      heartbeat_voice,
+      &drone_voices,
+      &self.scale_key,
+      &specs,
+      &drone_notes,
+    )
   }
 
   /// Format all voices as a Nix attribute set.
@@ -662,7 +803,14 @@ impl PreviewState {
       })
       .collect();
     let specs = self.boop_specs.read().unwrap();
-    print::format_nix(heartbeat_voice, &drone_voices, &self.scale_key, &specs)
+    let drone_notes = self.drone_notes_for_export();
+    print::format_nix(
+      heartbeat_voice,
+      &drone_voices,
+      &self.scale_key,
+      &specs,
+      &drone_notes,
+    )
   }
 
   /// Reset everything to startup values.  Locked voice params
@@ -786,6 +934,27 @@ impl PreviewState {
       pins.iter_mut().for_each(|p| *p = false);
     }
     self.recompute_boop_specs();
+
+    // Reset drone boop specs: locked drones keep their specs,
+    // unlocked drones revert to originals then recompute.
+    {
+      let mut all_specs = self.drone_boop_specs.write().unwrap();
+      let mut all_pins = self.drone_boop_pins.write().unwrap();
+      for i in 0..all_specs.len() {
+        if !locked_drone_indices.contains(&i) {
+          if let Some(original) = self.original_drone_boop_specs.get(i) {
+            all_specs[i] = original.clone();
+            all_pins[i] = vec![false; original.len()];
+          }
+        }
+      }
+    }
+    let drone_count = self.drone_infos.read().unwrap().len();
+    for i in 0..drone_count {
+      if !locked_drone_indices.contains(&i) {
+        self.recompute_drone_specs(i);
+      }
+    }
   }
 }
 
@@ -968,6 +1137,8 @@ mod tests {
     overridden: bool,
     voice: serde_json::Map<String, serde_json::Value>,
     locked_params: Vec<String>,
+    specs: Vec<BoopSpecContract>,
+    spec_ranges: BoopSpecRangesContract,
   }
 
   #[derive(Deserialize)]
@@ -1022,6 +1193,7 @@ mod tests {
       &HashMap::new(),
       4.0,
       &[],
+      &HashMap::new(),
     )
   }
 

@@ -92,6 +92,34 @@ async fn handle_socket(socket: WebSocket, preview: Arc<PreviewState>) {
   debug!("WebSocket client disconnected");
 }
 
+/// Broadcast current drone specs + pins for a specific drone to all
+/// connected clients.
+fn broadcast_drone_specs(preview: &PreviewState, index: usize) {
+  let all_specs = preview.drone_boop_specs.read().unwrap();
+  let all_pins = preview.drone_boop_pins.read().unwrap();
+  let specs = all_specs.get(index).cloned().unwrap_or_default();
+  let pins = all_pins.get(index).cloned().unwrap_or_default();
+  let specs_json: Vec<_> = specs
+    .iter()
+    .enumerate()
+    .map(|(j, spec)| {
+      json!({
+        "freq": spec.freq,
+        "duration": spec.duration,
+        "pinned": pins.get(j).copied().unwrap_or(false),
+      })
+    })
+    .collect();
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": "drone_specs_changed",
+      "index": index,
+      "specs": specs_json,
+    })
+    .to_string(),
+  );
+}
+
 /// Broadcast current boop specs + pins to all connected clients.
 fn broadcast_boop_specs(preview: &PreviewState) {
   let specs = preview.boop_specs.read().unwrap();
@@ -196,11 +224,16 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         broadcast["index"] = json!(i);
       }
       let _ = preview.broadcast_tx.send(broadcast.to_string());
-      if owner == VoiceOwner::Heartbeat
-        && matches!(param, "note_seed" | "base_freq")
-      {
-        preview.recompute_boop_specs();
-        broadcast_boop_specs(preview);
+      match &owner {
+        VoiceOwner::Heartbeat if matches!(param, "note_seed" | "base_freq") => {
+          preview.recompute_boop_specs();
+          broadcast_boop_specs(preview);
+        }
+        VoiceOwner::Drone(i) if matches!(param, "note_seed" | "base_freq") => {
+          preview.recompute_drone_specs(*i);
+          broadcast_drone_specs(preview, *i);
+        }
+        _ => {}
       }
       None
     }
@@ -447,6 +480,8 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         })
         .to_string(),
       );
+      preview.recompute_drone_specs(index);
+      broadcast_drone_specs(preview, index);
       None
     }
 
@@ -468,6 +503,8 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         })
         .to_string(),
       );
+      preview.recompute_drone_specs(index);
+      broadcast_drone_specs(preview, index);
       None
     }
 
@@ -568,6 +605,45 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "set_drone_spec" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let note_index = msg.get("note_index").and_then(|v| v.as_u64())? as usize;
+      {
+        let mut all_specs = preview.drone_boop_specs.write().unwrap();
+        let mut all_pins = preview.drone_boop_pins.write().unwrap();
+        let specs = all_specs.get_mut(index)?;
+        let spec = specs.get_mut(note_index)?;
+        if let Some(freq) = msg.get("freq").and_then(|v| v.as_f64()) {
+          spec.freq = freq;
+        }
+        if let Some(duration) = msg.get("duration").and_then(|v| v.as_f64()) {
+          spec.duration = duration;
+        }
+        let pins = all_pins.get_mut(index)?;
+        if let Some(pin) = pins.get_mut(note_index) {
+          *pin = true;
+        }
+      }
+      broadcast_drone_specs(preview, index);
+      None
+    }
+
+    "clear_drone_pin" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let note_index = msg.get("note_index").and_then(|v| v.as_u64())? as usize;
+      {
+        let mut all_pins = preview.drone_boop_pins.write().unwrap();
+        if let Some(pins) = all_pins.get_mut(index) {
+          if let Some(pin) = pins.get_mut(note_index) {
+            *pin = false;
+          }
+        }
+      }
+      preview.recompute_drone_specs(index);
+      broadcast_drone_specs(preview, index);
+      None
+    }
+
     "export_toml" => {
       let toml = preview.export_toml();
       let json_str = preview.export_json();
@@ -654,6 +730,7 @@ struct ImportToml {
   voice: Option<ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
   drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+  drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -661,6 +738,7 @@ struct ImportJson {
   voice: Option<ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
   drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+  drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 }
 
 /// Per-entity voice overrides plus heartbeat boop specs.
@@ -668,6 +746,7 @@ struct ImportData {
   heartbeat_params: Vec<(&'static str, f64)>,
   drone_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
   boops: Vec<BoopSpec>,
+  drone_notes: std::collections::HashMap<String, Vec<BoopSpec>>,
 }
 
 type ImportResult = Result<ImportData, String>;
@@ -786,6 +865,7 @@ fn build_import_data(
   legacy_voice: Option<&ImportVoice>,
   heartbeat: Option<ImportHeartbeatSection>,
   drone_voices: Option<std::collections::HashMap<String, ImportVoice>>,
+  drone_notes_raw: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 ) -> ImportData {
   // Heartbeat voice: prefer heartbeat.voice, fall back to bare [voice]
   // for backwards compatibility.
@@ -808,10 +888,17 @@ fn build_import_data(
     .map(|(name, v)| (name.clone(), voice_fields(v)))
     .collect();
 
+  let drone_notes = drone_notes_raw
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(name, raw)| (name, boops_from_import(&raw)))
+    .collect();
+
   ImportData {
     heartbeat_params,
     drone_params,
     boops,
+    drone_notes,
   }
 }
 
@@ -822,6 +909,7 @@ fn parse_import_json(text: &str) -> ImportResult {
     parsed.voice.as_ref(),
     parsed.heartbeat,
     parsed.drone_voices,
+    parsed.drone_notes,
   ))
 }
 
@@ -832,6 +920,7 @@ fn parse_import_toml(text: &str) -> ImportResult {
     parsed.voice.as_ref(),
     parsed.heartbeat,
     parsed.drone_voices,
+    parsed.drone_notes,
   ))
 }
 
@@ -886,7 +975,28 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
     }
   }
 
+  // Apply imported drone notes as pinned specs.
+  if !data.drone_notes.is_empty() {
+    let drone_infos = preview.drone_infos.read().unwrap();
+    let mut all_specs = preview.drone_boop_specs.write().unwrap();
+    let mut all_pins = preview.drone_boop_pins.write().unwrap();
+    for (i, info) in drone_infos.iter().enumerate() {
+      if let Some(notes) = data.drone_notes.get(&info.name) {
+        if let (Some(specs), Some(pins)) =
+          (all_specs.get_mut(i), all_pins.get_mut(i))
+        {
+          *specs = notes.clone();
+          *pins = vec![true; notes.len()];
+        }
+      }
+    }
+  }
+
   preview.recompute_boop_specs();
+  let drone_count = preview.drone_infos.read().unwrap().len();
+  for i in 0..drone_count {
+    preview.recompute_drone_specs(i);
+  }
 
   let snapshot = preview.state_snapshot();
   let _ = preview.broadcast_tx.send(snapshot);
@@ -911,7 +1021,7 @@ mod tests {
         duration: 0.15,
       },
     ];
-    let toml = print::format_toml(&voice, &[], "C", &notes);
+    let toml = print::format_toml(&voice, &[], "C", &notes, &[]);
     let data = parse_import(&toml).expect("round-trip TOML should parse");
     assert_eq!(data.boops.len(), notes.len());
     for (orig, imp) in notes.iter().zip(data.boops.iter()) {
@@ -943,7 +1053,7 @@ mod tests {
         duration: 0.15,
       },
     ];
-    let json = print::format_json(&voice, &[], "C", &notes);
+    let json = print::format_json(&voice, &[], "C", &notes, &[]);
     let data = parse_import(&json).expect("round-trip JSON should parse");
     assert_eq!(data.boops.len(), notes.len());
     for (orig, imp) in notes.iter().zip(data.boops.iter()) {

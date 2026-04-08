@@ -8,6 +8,7 @@ module Protocol exposing
     , VoiceParam
     , decodeServerMsg
     , encodeClearBoopPin
+    , encodeClearDronePin
     , encodeClearOverride
     , encodeExportVoice
     , encodeGetState
@@ -24,6 +25,7 @@ module Protocol exposing
     , encodeSetDronePhraseGap
     , encodeSetDroneRepeatCurve
     , encodeSetDroneRepeatRate
+    , encodeSetDroneSpec
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
@@ -69,6 +71,8 @@ type alias DroneInfo =
     , overridden : Bool
     , voice : List VoiceParam
     , lockedParams : List String
+    , droneSpecs : List BoopSpecInfo
+    , droneSpecRanges : BoopSpecRanges
     }
 
 
@@ -132,6 +136,7 @@ type ServerMsg
     | LockedParamsChanged String (Maybe Int) (List String)
     | LockedDronesChanged (List Int)
     | BoopSpecsChanged (List BoopSpecInfo)
+    | DroneSpecsChanged Int (List BoopSpecInfo)
     | ImportError String
     | Connected
     | Disconnected
@@ -196,6 +201,9 @@ serverMsgDecoder =
 
                     "boop_specs_changed" ->
                         boopSpecsChangedDecoder
+
+                    "drone_specs_changed" ->
+                        droneSpecsChangedDecoder
 
                     "import_error" ->
                         importErrorDecoder
@@ -334,6 +342,8 @@ droneInfoDecoderWithMeta metas =
                 |> D.map (\vals -> mergeVoiceParams vals metas)
             )
         |> andMap (D.field "locked_params" (D.list D.string))
+        |> andMap (D.field "specs" (D.list boopSpecInfoDecoder))
+        |> andMap (D.field "spec_ranges" boopSpecRangesDecoder)
 
 
 paramChangedDecoder : D.Decoder ServerMsg
@@ -477,6 +487,13 @@ lockedDronesChangedDecoder =
 boopSpecsChangedDecoder : D.Decoder ServerMsg
 boopSpecsChangedDecoder =
     D.map BoopSpecsChanged (D.field "specs" (D.list boopSpecInfoDecoder))
+
+
+droneSpecsChangedDecoder : D.Decoder ServerMsg
+droneSpecsChangedDecoder =
+    D.map2 DroneSpecsChanged
+        (D.field "index" D.int)
+        (D.field "specs" (D.list boopSpecInfoDecoder))
 
 
 importErrorDecoder : D.Decoder ServerMsg
@@ -779,5 +796,44 @@ encodeImportConfig text =
     E.object
         [ ( "type", E.string "import_config" )
         , ( "text", E.string text )
+        ]
+        |> E.encode 0
+
+
+encodeSetDroneSpec : Int -> Int -> Maybe Float -> Maybe Float -> String
+encodeSetDroneSpec index noteIndex maybeFreq maybeDuration =
+    let
+        base =
+            [ ( "type", E.string "set_drone_spec" )
+            , ( "index", E.int index )
+            , ( "note_index", E.int noteIndex )
+            ]
+
+        freqField =
+            case maybeFreq of
+                Just f ->
+                    [ ( "freq", E.float f ) ]
+
+                Nothing ->
+                    []
+
+        durationField =
+            case maybeDuration of
+                Just d ->
+                    [ ( "duration", E.float d ) ]
+
+                Nothing ->
+                    []
+    in
+    E.object (base ++ freqField ++ durationField)
+        |> E.encode 0
+
+
+encodeClearDronePin : Int -> Int -> String
+encodeClearDronePin index noteIndex =
+    E.object
+        [ ( "type", E.string "clear_drone_pin" )
+        , ( "index", E.int index )
+        , ( "note_index", E.int noteIndex )
         ]
         |> E.encode 0

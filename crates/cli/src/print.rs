@@ -52,6 +52,7 @@ pub(crate) fn format_toml(
   drone_voices: &[(String, Voice)],
   scale_key: &str,
   boops: &[BoopSpec],
+  drone_notes: &[(String, Vec<BoopSpec>)],
 ) -> String {
   let mut lines = vec![format!("scale_key = \"{scale_key}\"")];
   lines.push(String::new());
@@ -61,6 +62,14 @@ pub(crate) fn format_toml(
     lines.push("[[heartbeat.notes]]".to_string());
     lines.push(format!("freq = {}", float_lit(spec.freq)));
     lines.push(format!("duration = {}", float_lit(spec.duration)));
+  }
+  for (name, specs) in drone_notes {
+    for spec in specs {
+      lines.push(String::new());
+      lines.push(format!("[[drone_notes.{name}]]"));
+      lines.push(format!("freq = {}", float_lit(spec.freq)));
+      lines.push(format!("duration = {}", float_lit(spec.duration)));
+    }
   }
   for (name, voice) in drone_voices {
     lines.push(String::new());
@@ -109,6 +118,7 @@ pub(crate) fn format_nix(
   drone_voices: &[(String, Voice)],
   scale_key: &str,
   boops: &[BoopSpec],
+  drone_notes: &[(String, Vec<BoopSpec>)],
 ) -> String {
   let mut lines = vec![format!("scale_key = \"{scale_key}\";")];
   voice_nix_lines(&mut lines, "heartbeat.voice", heartbeat_voice);
@@ -122,6 +132,19 @@ pub(crate) fn format_nix(
       ));
     }
     lines.push("];".to_string());
+  }
+  for (name, specs) in drone_notes {
+    if !specs.is_empty() {
+      lines.push(format!("drone_notes.{name} = ["));
+      for spec in specs {
+        lines.push(format!(
+          "  {{ freq = {}; duration = {}; }}",
+          float_lit(spec.freq),
+          float_lit(spec.duration)
+        ));
+      }
+      lines.push("];".to_string());
+    }
   }
   for (name, voice) in drone_voices {
     voice_nix_lines(&mut lines, &format!("drone_voices.{name}"), voice);
@@ -168,6 +191,7 @@ pub(crate) fn format_json(
   drone_voices: &[(String, Voice)],
   scale_key: &str,
   boops: &[BoopSpec],
+  drone_notes: &[(String, Vec<BoopSpec>)],
 ) -> String {
   let mut heartbeat_obj =
     json!({ "voice": voice_to_json_value(heartbeat_voice) });
@@ -182,10 +206,19 @@ pub(crate) fn format_json(
   for (name, voice) in drone_voices {
     drone_voices_obj[name] = voice_to_json_value(voice);
   }
+  let mut drone_notes_obj = json!({});
+  for (name, specs) in drone_notes {
+    let notes_arr: Vec<_> = specs
+      .iter()
+      .map(|s| json!({"freq": s.freq, "duration": s.duration}))
+      .collect();
+    drone_notes_obj[name] = json!(notes_arr);
+  }
   let obj = json!({
     "scale_key": scale_key,
     "heartbeat": heartbeat_obj,
     "drone_voices": drone_voices_obj,
+    "drone_notes": drone_notes_obj,
   });
   serde_json::to_string_pretty(&obj).unwrap()
 }

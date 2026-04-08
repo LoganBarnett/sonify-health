@@ -62,6 +62,7 @@ pub(crate) struct ConfigFileRaw {
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
   drone_voices: Option<HashMap<String, VoiceOverrides>>,
+  drone_notes: Option<HashMap<String, Vec<NoteSpec>>>,
   oidc: Option<OidcSectionRaw>,
 }
 
@@ -85,9 +86,9 @@ struct HeartbeatSectionRaw {
 }
 
 /// A note specification as it appears in the config file under
-/// `[[heartbeat.notes]]`.
+/// `[[heartbeat.notes]]` or `[[drone_notes.<name>]]`.
 #[derive(Debug, Deserialize, Clone)]
-struct NoteSpec {
+pub(crate) struct NoteSpec {
   freq: f64,
   duration: f64,
 }
@@ -141,6 +142,10 @@ pub struct DaemonConfig {
   /// Per-drone voice overrides from `[drone_voices.<name>]`, keyed
   /// by metric name.
   pub drone_voice_overrides: HashMap<String, VoiceOverrides>,
+  /// Per-drone note specs from `[[drone_notes.<name>]]`, keyed by
+  /// metric name.  When present, these override algorithmic
+  /// generation and start pinned.
+  pub drone_notes: HashMap<String, Vec<BoopSpec>>,
 }
 
 impl Default for DaemonConfig {
@@ -153,6 +158,7 @@ impl Default for DaemonConfig {
       drone_metrics: Vec::new(),
       heartbeat_voice_overrides: None,
       drone_voice_overrides: HashMap::new(),
+      drone_notes: HashMap::new(),
     }
   }
 }
@@ -214,6 +220,22 @@ impl Config {
 
     let drone_voice_overrides = file.drone_voices.unwrap_or_default();
 
+    let drone_notes: HashMap<String, Vec<BoopSpec>> = file
+      .drone_notes
+      .unwrap_or_default()
+      .into_iter()
+      .map(|(name, specs)| {
+        let boops = specs
+          .iter()
+          .map(|n| BoopSpec {
+            freq: n.freq,
+            duration: n.duration,
+          })
+          .collect();
+        (name, boops)
+      })
+      .collect();
+
     let daemon = file
       .heartbeat
       .map(|hb| {
@@ -233,12 +255,14 @@ impl Config {
           drone_metrics: drone_metrics.clone(),
           heartbeat_voice_overrides: hb.voice,
           drone_voice_overrides: drone_voice_overrides.clone(),
+          drone_notes: drone_notes.clone(),
         }
       })
       .unwrap_or(DaemonConfig {
         drone_poll_interval_secs,
         drone_metrics,
         drone_voice_overrides,
+        drone_notes,
         ..DaemonConfig::default()
       });
 
@@ -478,6 +502,35 @@ mod tests {
     assert_eq!(dv["mem"].sine_ratio, None);
   }
 
+  #[test]
+  fn drone_notes_parse() {
+    let toml = r#"
+      [drone]
+      [[drone.metrics]]
+      name = "cpu"
+      command = "echo 0.5"
+      result_mode = "stdout"
+
+      [[drone_notes.cpu]]
+      freq = 460.0
+      duration = 0.5
+
+      [[drone_notes.cpu]]
+      freq = 920.0
+      duration = 0.25
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let notes = raw.drone_notes.unwrap();
+    assert_eq!(notes.len(), 1);
+    let cpu_notes = &notes["cpu"];
+    assert_eq!(cpu_notes.len(), 2);
+    assert!((cpu_notes[0].freq - 460.0).abs() < f64::EPSILON);
+    assert!((cpu_notes[0].duration - 0.5).abs() < f64::EPSILON);
+    assert!((cpu_notes[1].freq - 920.0).abs() < f64::EPSILON);
+    assert!((cpu_notes[1].duration - 0.25).abs() < f64::EPSILON);
+  }
+
   /// The exported TOML format must round-trip through config loading.
   /// `format_toml` produces `[heartbeat.voice]` and
   /// `[drone_voices.<name>]` sections; these must be parsed by
@@ -522,6 +575,14 @@ duration = 0.25
 [[heartbeat.notes]]
 freq = 880.0
 duration = 0.15
+
+[[drone_notes.cpu]]
+freq = 460.0
+duration = 0.5
+
+[[drone_notes.cpu]]
+freq = 920.0
+duration = 0.25
 
 [drone_voices.cpu]
 base_freq = {dr_base}
@@ -632,6 +693,18 @@ amplitude = {dr_amp}
     assert_eq!(hb_notes.len(), 2);
     assert!((hb_notes[0].freq - 440.0).abs() < f64::EPSILON);
     assert!((hb_notes[0].duration - 0.25).abs() < f64::EPSILON);
+
+    // Drone notes should survive.
+    let dn = raw
+      .drone_notes
+      .as_ref()
+      .expect("Export should produce a [drone_notes] section");
+    let cpu_notes = dn
+      .get("cpu")
+      .expect("Export should include cpu drone notes");
+    assert_eq!(cpu_notes.len(), 2);
+    assert!((cpu_notes[0].freq - 460.0).abs() < f64::EPSILON);
+    assert!((cpu_notes[0].duration - 0.5).abs() < f64::EPSILON);
   }
 
   /// The example config files must parse without error, including
@@ -675,6 +748,19 @@ amplitude = {dr_amp}
               .map(|dv| !dv.is_empty())
               .unwrap_or(false),
             "{}: [drone_voices] should parse",
+            path.display()
+          );
+        }
+
+        // If the example has [[drone_notes.…]], it must parse.
+        if contents.contains("[[drone_notes.") {
+          assert!(
+            raw
+              .drone_notes
+              .as_ref()
+              .map(|dn| !dn.is_empty())
+              .unwrap_or(false),
+            "{}: [drone_notes] should parse",
             path.display()
           );
         }
