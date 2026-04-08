@@ -21,7 +21,7 @@ use tracing::debug;
 /// - All annotated fields must be `f64`.
 #[derive(Debug, Clone, VoiceGenerate)]
 pub struct Voice {
-  #[voice_param(order = 0, range = 100.0..600.0)]
+  #[voice_param(order = 0, range = 100.0..4000.0)]
   pub base_freq: f64,
 
   #[voice_param(order = 1, range = 0.5..1.0)]
@@ -307,7 +307,7 @@ mod tests {
   fn parameters_within_range() {
     for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
       let v = Voice::from_hostname(name);
-      assert!((100.0..600.0).contains(&v.base_freq));
+      assert!((100.0..4000.0).contains(&v.base_freq));
       assert!((0.5..1.0).contains(&v.sine_ratio));
       assert!((0.0..0.3).contains(&v.tri_ratio));
       assert!((0.0..0.15).contains(&v.saw_ratio));
@@ -345,7 +345,12 @@ mod tests {
 
   #[test]
   fn drone_notes_within_octave_range() {
-    let v = Voice::from_hostname("test");
+    // Use a voice with base_freq forced into the mid range where the
+    // pentatonic scale has notes within ±1 octave.
+    let v = Voice::from_hostname("test").with_overrides(&VoiceOverrides {
+      base_freq: Some(400.0),
+      ..Default::default()
+    });
     let scale = PentatonicScale::from_key("local");
     let notes = v.drone_notes(&scale, 4);
     for &n in &notes {
@@ -403,7 +408,7 @@ mod tests {
     seed.copy_from_slice(&hash);
     let mut rng = Xoshiro256StarStar::from_seed(seed);
 
-    let expected_base_freq: f64 = rng.gen_range(100.0..600.0);
+    let expected_base_freq: f64 = rng.gen_range(100.0..4000.0);
     let expected_sine_ratio: f64 = rng.gen_range(0.5..1.0);
 
     let derived = Voice::from_hostname("silicon");
