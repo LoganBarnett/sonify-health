@@ -286,7 +286,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
         openidconnect::reqwest::async_http_client,
       )
       .await
-      .map_err(|e| ApplicationError::OidcDiscovery(e.to_string()))?;
+      .map_err(|e| ApplicationError::OidcDiscovery(format!("{e:?}")))?;
 
       info!(issuer = %oidc.issuer, "OIDC provider discovery complete");
 

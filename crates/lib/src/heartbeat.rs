@@ -133,13 +133,13 @@ pub fn heartbeat_graph_with_volume(
       as f32;
     let amp = profile.amplitude as f32;
     let dur = specs[i].duration as f32;
-    let attack = (voice.attack_ms as f32 / 1000.0).min(dur * 0.5);
+    let attack = voice.attack_ms as f32 / 1000.0;
     let release = voice.release_ms as f32 / 1000.0;
     let start = t as f32;
 
     timings.push(BoopTiming {
       start,
-      tail_end: start + dur + release,
+      tail_end: start + attack + dur + release,
       freq,
       amp,
       dur,
@@ -150,7 +150,7 @@ pub fn heartbeat_graph_with_volume(
       filter_q: profile.filter_q as f32,
     });
 
-    t += specs[i].duration;
+    t += (voice.attack_ms / 1000.0) + specs[i].duration;
     if i + 1 < count {
       t += gap_between(specs[i].duration, specs[i + 1].duration, max_dur);
     }
@@ -164,8 +164,8 @@ pub fn heartbeat_graph_with_volume(
   let freq_env = lfo(move |t: f32| {
     for p in freq_timings.iter().rev() {
       if t >= p.start && t < p.tail_end {
-        let local_t = t - p.start;
-        let chirp_t = (local_t / 0.04).min(1.0);
+        let body_t = (t - p.start - p.attack).max(0.0);
+        let chirp_t = (body_t / 0.04).min(1.0);
         return p.freq * chirp_ratio
           + (p.freq - p.freq * chirp_ratio) * chirp_t;
       }
