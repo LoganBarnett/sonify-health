@@ -39,6 +39,26 @@
   --space-md: 0.5rem;
   --space-lg: 0.75rem;
   --space-xl: 1rem;
+
+  /* Status dot */
+  --dot-size: 10px;
+
+  /* Button base */
+  --btn-py: 0.35rem;
+  --btn-px: var(--space-lg);
+  --btn-radius: var(--radius-md);
+  --btn-font: var(--font-base);
+  --btn-line-height: 1.4;
+
+  /* Badge base */
+  --badge-py: 0.1rem;
+  --badge-px: var(--space-md);
+  --badge-radius: var(--radius-sm);
+  --badge-font: var(--font-sm);
+
+  /* Panel base */
+  --panel-radius: var(--radius-lg);
+  --panel-padding: var(--space-xl);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -117,55 +137,92 @@ a:hover {
   flex-wrap: wrap;
 }
 
-/* Status dot */
+/* Status dots — one class each, no cascading */
 
-.status-dot {
+.status-dot-connected {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: var(--dot-size);
+  height: var(--dot-size);
+  border-radius: 50%;
+  background: var(--color-healthy-text);
+}
+
+.status-dot-disconnected {
+  display: inline-block;
+  width: var(--dot-size);
+  height: var(--dot-size);
   border-radius: 50%;
   background: var(--color-error);
 }
 
-.status-dot.connected {
-  background: var(--color-healthy-text);
-}
+/* Buttons — each variant is self-contained */
 
-/* Buttons */
-
-.btn {
+.action-btn {
   display: inline-block;
-  padding: 0.35rem var(--space-lg);
+  padding: var(--btn-py) var(--btn-px);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: var(--color-surface);
   color: var(--color-text);
   cursor: pointer;
-  font-size: var(--font-base);
+  font-size: var(--btn-font);
   text-decoration: none;
-  line-height: 1.4;
+  line-height: var(--btn-line-height);
 }
-
-.btn:hover {
+.action-btn:hover {
   background: var(--color-border);
   text-decoration: none;
 }
 
-.btn-danger {
+.mute-btn {
+  display: inline-block;
+  padding: var(--btn-py) var(--btn-px);
+  border: 1px solid var(--color-down-text);
+  border-radius: var(--btn-radius);
   background: var(--color-down);
-  border-color: var(--color-down-text);
   color: var(--color-down-text);
+  cursor: pointer;
+  font-size: var(--btn-font);
+  text-decoration: none;
+  line-height: var(--btn-line-height);
+}
+.mute-btn:hover {
+  background: var(--color-border);
+  text-decoration: none;
 }
 
-.btn-live {
-  background: var(--color-healthy);
-  border-color: var(--color-healthy-text);
-  color: var(--color-healthy-text);
-}
-
-.btn-sm {
+.trigger-btn {
+  display: inline-block;
   padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--btn-radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
   font-size: var(--font-sm);
+  text-decoration: none;
+  line-height: var(--btn-line-height);
+}
+.trigger-btn:hover {
+  background: var(--color-border);
+  text-decoration: none;
+}
+
+.live-btn {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--color-healthy-text);
+  border-radius: var(--btn-radius);
+  background: var(--color-healthy);
+  color: var(--color-healthy-text);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  text-decoration: none;
+  line-height: var(--btn-line-height);
+}
+.live-btn:hover {
+  background: var(--color-border);
+  text-decoration: none;
 }
 
 /* Panels */
@@ -179,11 +236,20 @@ a:hover {
 .panel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-xl);
+  border-radius: var(--panel-radius);
+  padding: var(--panel-padding);
 }
 
-.panel h2 {
+.panel-log {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--panel-radius);
+  padding: var(--panel-padding);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.panel-heading {
   font-size: var(--font-lg);
   margin: 0 0 var(--space-lg);
   text-transform: uppercase;
@@ -191,7 +257,7 @@ a:hover {
   color: var(--color-text-muted);
 }
 
-.panel h3 {
+.panel-subheading {
   font-size: var(--font-base);
   margin: var(--space-lg) 0 var(--space-md);
   color: var(--color-text-muted);
@@ -268,27 +334,40 @@ a:hover {
   font-style: italic;
 }
 
-/* Severity badges */
+/* Severity badges — one class each, no cascading */
 
-.severity-badge {
+.badge-healthy {
   display: inline-block;
-  padding: 0.1rem var(--space-md);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-sm);
+  padding: var(--badge-py) var(--badge-px);
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-}
-
-.severity-badge.healthy {
   background: var(--color-healthy);
   color: var(--color-healthy-text);
 }
-.severity-badge.degraded {
+
+.badge-degraded {
+  display: inline-block;
+  padding: var(--badge-py) var(--badge-px);
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   background: var(--color-degraded);
   color: var(--color-degraded-text);
 }
-.severity-badge.down {
+
+.badge-down {
+  display: inline-block;
+  padding: var(--badge-py) var(--badge-px);
+  border-radius: var(--badge-radius);
+  font-size: var(--badge-font);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   background: var(--color-down);
   color: var(--color-down-text);
 }
@@ -335,11 +414,6 @@ a:hover {
 }
 
 /* Check log */
-
-.panel-log {
-  max-height: 300px;
-  overflow-y: auto;
-}
 
 .log-entries {
   display: flex;
@@ -391,7 +465,7 @@ a:hover {
   overflow-y: auto;
 }
 
-.modal h3 {
+.modal-title {
   margin: 0 0 var(--space-xl);
   font-size: 1rem;
 }

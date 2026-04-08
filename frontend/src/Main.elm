@@ -427,25 +427,21 @@ viewToolbar model =
         , div [ class "toolbar-actions" ]
             [ span
                 [ class
-                    ("status-dot "
-                        ++ (if model.connected then
-                                "connected"
+                    (if model.connected then
+                        "status-dot-connected"
 
-                            else
-                                "disconnected"
-                           )
+                     else
+                        "status-dot-disconnected"
                     )
                 ]
                 []
             , button
                 [ class
-                    ("btn "
-                        ++ (if model.muted then
-                                "btn-danger"
+                    (if model.muted then
+                        "mute-btn"
 
-                            else
-                                "btn-default"
-                           )
+                     else
+                        "action-btn"
                     )
                 , onClick ToggleMute
                 ]
@@ -457,11 +453,11 @@ viewToolbar model =
                         "Mute"
                     )
                 ]
-            , button [ class "btn btn-default", onClick RevertAll ]
+            , button [ class "action-btn", onClick RevertAll ]
                 [ text "Revert" ]
-            , button [ class "btn btn-default", onClick ExportToml ]
+            , button [ class "action-btn", onClick ExportToml ]
                 [ text "Export TOML" ]
-            , a [ href "/scalar", class "btn btn-default" ]
+            , a [ href "/scalar", class "action-btn" ]
                 [ text "API Docs" ]
             ]
         ]
@@ -470,7 +466,7 @@ viewToolbar model =
 viewVoicePanel : Model -> Html Msg
 viewVoicePanel model =
     section [ class "panel" ]
-        [ h2 [] [ text "Voice" ]
+        [ h2 [ class "panel-heading" ] [ text "Voice" ]
         , div [ class "slider-grid" ]
             (List.map viewVoiceSlider model.voice)
         ]
@@ -499,7 +495,7 @@ viewVoiceSlider param =
 viewHeartbeatPanel : Model -> Html Msg
 viewHeartbeatPanel model =
     section [ class "panel" ]
-        [ h2 [] [ text "Heartbeat" ]
+        [ h2 [ class "panel-heading" ] [ text "Heartbeat" ]
         , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Volume" ]
             , input
@@ -526,7 +522,7 @@ viewHeartbeatPanel model =
                 , text " Loop"
                 ]
             , button
-                [ class "btn btn-default btn-sm"
+                [ class "trigger-btn"
                 , onClick TriggerHeartbeat
                 ]
                 [ text "Play Now" ]
@@ -536,7 +532,7 @@ viewHeartbeatPanel model =
 
           else
             div [ class "checks-list" ]
-                (h3 [] [ text "Checks" ]
+                (h3 [ class "panel-subheading" ] [ text "Checks" ]
                     :: List.indexedMap viewCheck model.checks
                 )
         ]
@@ -546,7 +542,7 @@ viewCheck : Int -> CheckInfo -> Html Msg
 viewCheck index check =
     div [ class "check-row" ]
         [ span [ class "check-name" ] [ text check.name ]
-        , span [ class ("severity-badge " ++ check.severity) ]
+        , span [ class ("badge-" ++ check.severity) ]
             [ text check.severity ]
         , select
             [ onInput (OverrideCheck index)
@@ -584,7 +580,7 @@ viewCheck index check =
 viewDronePanel : Model -> Html Msg
 viewDronePanel model =
     section [ class "panel" ]
-        [ h2 [] [ text "Drones" ]
+        [ h2 [ class "panel-heading" ] [ text "Drones" ]
         , if List.isEmpty model.drones then
             p [ class "text-muted" ] [ text "No drone metrics configured." ]
 
@@ -623,7 +619,7 @@ viewDrone index drone =
                 [ text (formatFloat drone.value) ]
             , if drone.overridden then
                 button
-                    [ class "btn btn-sm btn-live"
+                    [ class "live-btn"
                     , onClick (ClearDroneOverride index)
                     ]
                     [ text "Live" ]
@@ -649,8 +645,8 @@ viewDrone index drone =
 
 viewCheckLog : Model -> Html Msg
 viewCheckLog model =
-    section [ class "panel panel-log" ]
-        [ h2 [] [ text "Check Log" ]
+    section [ class "panel-log" ]
+        [ h2 [ class "panel-heading" ] [ text "Check Log" ]
         , if List.isEmpty model.checkLog then
             p [ class "text-muted" ] [ text "Waiting for check results..." ]
 
@@ -665,7 +661,7 @@ viewLogEntry entry =
     div [ class "log-entry" ]
         [ span [ class "log-layer" ] [ text entry.layer ]
         , span [ class "log-name" ] [ text entry.name ]
-        , span [ class ("severity-badge " ++ entry.result) ]
+        , span [ class ("badge-" ++ entry.result) ]
             [ text entry.result ]
         , if entry.overridden then
             span [ class "override-indicator" ] [ text "(override)" ]
@@ -685,7 +681,7 @@ viewExportModal model =
                     , Html.Events.stopPropagationOn "click"
                         (Json.Decode.succeed ( NoOp, True ))
                     ]
-                    [ h3 [] [ text "Exported TOML" ]
+                    [ h3 [ class "modal-title" ] [ text "Exported TOML" ]
                     , textarea
                         [ class "export-textarea"
                         , Html.Attributes.readonly True
@@ -693,7 +689,7 @@ viewExportModal model =
                         ]
                         []
                     , button
-                        [ class "btn btn-default"
+                        [ class "action-btn"
                         , onClick DismissExport
                         ]
                         [ text "Close" ]
