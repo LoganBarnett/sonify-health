@@ -1,4 +1,4 @@
-use crate::drone::{DroneRegister, DroneTexture};
+use crate::drone::DroneRegister;
 use crate::severity::Severity;
 use serde::Deserialize;
 use std::process::Command;
@@ -29,7 +29,10 @@ pub struct DroneMetricConfig {
   pub command: String,
   pub result_mode: ResultMode,
   pub register: DroneRegister,
-  pub texture: Option<DroneTexture>,
+  /// Override base frequency for note selection (Hz).
+  pub base_freq: Option<f64>,
+  /// Number of boops per drone phrase.
+  pub boops: Option<usize>,
 }
 
 #[derive(Debug, Error)]
@@ -163,7 +166,8 @@ mod tests {
       command: "echo 0.75".into(),
       result_mode: ResultMode::Stdout,
       register: DroneRegister::Low,
-      texture: None,
+      base_freq: None,
+      boops: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
     assert!((val - 0.75).abs() < 0.001);
@@ -189,7 +193,8 @@ mod tests {
       command: "echo 5.0".into(),
       result_mode: ResultMode::Stdout,
       register: DroneRegister::Mid,
-      texture: None,
+      base_freq: None,
+      boops: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
     assert!(val <= 1.0);

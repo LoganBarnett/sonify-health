@@ -19,8 +19,9 @@ module Protocol exposing
     , encodeRevertAll
     , encodeSetBoopCount
     , encodeSetBoopSpec
+    , encodeSetDroneBoops
+    , encodeSetDroneFreq
     , encodeSetDroneRegister
-    , encodeSetDroneTexture
     , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
@@ -57,7 +58,8 @@ type alias DroneInfo =
     { name : String
     , value : Float
     , volume : Float
-    , texture : String
+    , baseFreq : Maybe Float
+    , boops : Int
     , register : String
     , overridden : Bool
     }
@@ -113,7 +115,7 @@ type ServerMsg
     | OverrideChanged String Int (Maybe String) Bool
     | HeartbeatLoopChanged Bool
     | BoopCountChanged Int
-    | DroneConfigChanged Int String String
+    | DroneConfigChanged Int (Maybe Float) Int String
     | CheckLog CheckLogEntry
     | VoiceExport { toml : String, json : String, nix : String }
     | LockedParamsChanged (List String)
@@ -289,11 +291,12 @@ checkInfoDecoder =
 
 droneInfoDecoder : D.Decoder DroneInfo
 droneInfoDecoder =
-    D.map6 DroneInfo
+    D.map7 DroneInfo
         (D.field "name" D.string)
         (D.field "value" D.float)
         (D.field "volume" D.float)
-        (D.field "texture" D.string)
+        (D.maybe (D.field "base_freq" D.float))
+        (D.field "boops" D.int)
         (D.field "register" D.string)
         (D.field "overridden" D.bool)
 
@@ -366,9 +369,10 @@ boopCountChangedDecoder =
 
 droneConfigChangedDecoder : D.Decoder ServerMsg
 droneConfigChangedDecoder =
-    D.map3 DroneConfigChanged
+    D.map4 DroneConfigChanged
         (D.field "index" D.int)
-        (D.field "texture" D.string)
+        (D.maybe (D.field "base_freq" D.float))
+        (D.field "boops" D.int)
         (D.field "register" D.string)
 
 
@@ -530,12 +534,22 @@ encodeRevertAll =
         |> E.encode 0
 
 
-encodeSetDroneTexture : Int -> String -> String
-encodeSetDroneTexture index texture =
+encodeSetDroneFreq : Int -> Float -> String
+encodeSetDroneFreq index freq =
     E.object
-        [ ( "type", E.string "set_drone_texture" )
+        [ ( "type", E.string "set_drone_freq" )
         , ( "index", E.int index )
-        , ( "texture", E.string texture )
+        , ( "freq", E.float freq )
+        ]
+        |> E.encode 0
+
+
+encodeSetDroneBoops : Int -> Int -> String
+encodeSetDroneBoops index boops =
+    E.object
+        [ ( "type", E.string "set_drone_boops" )
+        , ( "index", E.int index )
+        , ( "boops", E.int boops )
         ]
         |> E.encode 0
 

@@ -161,9 +161,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           return None;
         }
       }
-      preview
-        .drone_rebuild_requested
-        .store(true, Ordering::Relaxed);
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "param_changed",
@@ -338,33 +335,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_drone_texture" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let value = msg.get("texture").and_then(|v| v.as_str())?;
-      let texture = preview_state::texture_from_str(value)?;
-      {
-        let mut infos = preview.drone_infos.write().unwrap();
-        infos.get_mut(index)?.texture = texture;
-      }
-      preview
-        .drone_rebuild_requested
-        .store(true, Ordering::Relaxed);
-      let register = {
-        let infos = preview.drone_infos.read().unwrap();
-        preview_state::register_str(infos[index].register)
-      };
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "drone_config_changed",
-          "index": index,
-          "texture": value,
-          "register": register,
-        })
-        .to_string(),
-      );
-      None
-    }
-
     "set_drone_register" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let value = msg.get("register").and_then(|v| v.as_str())?;
@@ -373,19 +343,57 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         let mut infos = preview.drone_infos.write().unwrap();
         infos.get_mut(index)?.register = register;
       }
-      preview
-        .drone_rebuild_requested
-        .store(true, Ordering::Relaxed);
-      let texture = {
-        let infos = preview.drone_infos.read().unwrap();
-        preview_state::texture_str(infos[index].texture)
-      };
+      let info = preview.drone_infos.read().unwrap()[index].clone();
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "drone_config_changed",
           "index": index,
-          "texture": texture,
           "register": value,
+          "base_freq": info.base_freq,
+          "boops": info.boops,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_drone_freq" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let freq = msg.get("freq").and_then(|v| v.as_f64())?;
+      {
+        let mut infos = preview.drone_infos.write().unwrap();
+        infos.get_mut(index)?.base_freq = Some(freq);
+      }
+      let info = preview.drone_infos.read().unwrap()[index].clone();
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_config_changed",
+          "index": index,
+          "register": preview_state::register_str(info.register),
+          "base_freq": info.base_freq,
+          "boops": info.boops,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_drone_boops" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let boops = msg.get("boops").and_then(|v| v.as_u64())? as usize;
+      let clamped = boops.clamp(1, 8);
+      {
+        let mut infos = preview.drone_infos.write().unwrap();
+        infos.get_mut(index)?.boops = clamped;
+      }
+      let info = preview.drone_infos.read().unwrap()[index].clone();
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "drone_config_changed",
+          "index": index,
+          "register": preview_state::register_str(info.register),
+          "base_freq": info.base_freq,
+          "boops": info.boops,
         })
         .to_string(),
       );
@@ -672,9 +680,6 @@ fn apply_import(
     }
   }
 
-  preview
-    .drone_rebuild_requested
-    .store(true, Ordering::Relaxed);
   preview.recompute_boop_specs();
 
   let snapshot = preview.state_snapshot();

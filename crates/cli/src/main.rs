@@ -14,12 +14,11 @@ use axum::{middleware, routing::get, Router};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ConfigError};
 use daemon::DaemonError;
-use fundsp::prelude32::shared;
 use logging::init_logging;
 use sha2::{Digest, Sha256};
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, scale, DroneRegister, DroneTexture, Severity, Voice,
+  drone, heartbeat, scale, DroneRegister, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -147,10 +146,9 @@ enum Command {
     #[arg(long, value_enum, default_value_t = DroneRegister::Mid)]
     register: DroneRegister,
 
-    /// Drone texture (bong/arpeggio/thrum/shimmer). Only used with
-    /// drone mode.  Defaults to a hostname-derived texture.
-    #[arg(long, value_enum)]
-    texture: Option<DroneTexture>,
+    /// Number of boops per drone phrase.
+    #[arg(long, default_value_t = 1)]
+    boops: usize,
 
     /// Playback duration in seconds for drone preview.
     #[arg(long, default_value_t = 5.0)]
@@ -223,7 +221,7 @@ async fn main() -> Result<(), ApplicationError> {
       heartbeat,
       drone,
       register,
-      texture,
+      boops,
       duration,
       continuous,
       voice,
@@ -239,7 +237,7 @@ async fn main() -> Result<(), ApplicationError> {
       match effective {
         SoundType::Heartbeat => run_heartbeat_preview(&config, &voice, &values),
         SoundType::Drone => run_drone_preview(
-          &config, &voice, register, texture, duration, continuous, &values,
+          &config, &voice, register, boops, duration, continuous, &values,
         ),
       }
     }
@@ -513,11 +511,13 @@ fn run_drone_preview(
   config: &Config,
   voice_args: &CliVoiceOverrides,
   register: DroneRegister,
-  texture: Option<DroneTexture>,
+  boops: usize,
   duration: f64,
   continuous: bool,
   values: &[String],
 ) -> Result<(), ApplicationError> {
+  use sonify_health_lib::audio::AudioMixer;
+
   if values.len() != 1 {
     return Err(ApplicationError::InvalidDroneMetric(format!(
       "expected exactly 1 metric value, got {}",
@@ -539,41 +539,100 @@ fn run_drone_preview(
 
   let voice = voice_args.resolve_voice(config);
   let scale = voice_args.resolve_scale(config);
-  let texture = texture.unwrap_or_else(|| voice.drone_texture(0));
-  let notes = if texture == DroneTexture::Arpeggio {
-    voice.drone_notes(&scale, 4)
-  } else {
-    vec![]
-  };
+  let effective_freq = voice.base_freq * register.multiplier();
+  let slot_secs = config.daemon.timing.slot_duration_secs;
   debug!(?voice, "Resolved voice");
   info!(
     base_freq = voice.base_freq,
     ?register,
-    ?texture,
+    effective_freq,
+    boops,
     metric,
     duration,
     "Playing drone preview"
   );
 
-  let metric_shared = shared(metric as f32);
-  let graph =
-    drone::drone_graph(&voice, register, texture, &metric_shared, &notes);
+  let mixer = AudioMixer::new(config.audio_device.as_deref())?;
 
   if continuous {
-    let _output = AudioOutput::play(graph, config.audio_device.as_deref())?;
-    info!("Playing continuously, press Ctrl-C to stop");
+    let run = Arc::new(AtomicBool::new(true));
     let (tx, rx) = std::sync::mpsc::channel();
     ctrlc::set_handler(move || {
       let _ = tx.send(());
     })
     .expect("Failed to install Ctrl-C handler");
+
+    info!("Playing continuously, press Ctrl-C to stop");
+    let play_run = Arc::clone(&run);
+    let handle = mixer.handle();
+    let play_handle = std::thread::spawn(move || {
+      while play_run.load(Ordering::Relaxed) {
+        let specs =
+          voice.drone_specs(&scale, 0, boops, effective_freq, slot_secs);
+        let severities: Vec<Severity> =
+          (0..specs.len()).map(|_| Severity::Healthy).collect();
+        let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
+        let phrase_dur = heartbeat::heartbeat_duration(
+          &specs,
+          voice.attack_ms / 1000.0,
+          voice.release_ms / 1000.0,
+          voice.echo_delay,
+          voice.echo_mix,
+        );
+        let slot = handle.add(graph);
+        std::thread::sleep(phrase_dur);
+        handle.remove(slot);
+
+        if !play_run.load(Ordering::Relaxed) {
+          break;
+        }
+
+        let gap = drone::drone_gap_secs(metric as f32);
+        let deadline = std::time::Instant::now() + Duration::from_secs_f64(gap);
+        while std::time::Instant::now() < deadline
+          && play_run.load(Ordering::Relaxed)
+        {
+          std::thread::sleep(Duration::from_millis(100));
+        }
+      }
+    });
+
     rx.recv().ok();
+    run.store(false, Ordering::Relaxed);
+    let _ = play_handle.join();
   } else {
-    AudioOutput::play_for(
-      graph,
-      Duration::from_secs_f64(duration),
-      config.audio_device.as_deref(),
-    )?;
+    let deadline =
+      std::time::Instant::now() + Duration::from_secs_f64(duration);
+    while std::time::Instant::now() < deadline {
+      let specs =
+        voice.drone_specs(&scale, 0, boops, effective_freq, slot_secs);
+      let severities: Vec<Severity> =
+        (0..specs.len()).map(|_| Severity::Healthy).collect();
+      let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
+      let phrase_dur = heartbeat::heartbeat_duration(
+        &specs,
+        voice.attack_ms / 1000.0,
+        voice.release_ms / 1000.0,
+        voice.echo_delay,
+        voice.echo_mix,
+      );
+      let slot = mixer.add(graph);
+      std::thread::sleep(phrase_dur);
+      mixer.remove(slot);
+
+      if std::time::Instant::now() >= deadline {
+        break;
+      }
+
+      let gap = drone::drone_gap_secs(metric as f32);
+      let gap_deadline =
+        std::time::Instant::now() + Duration::from_secs_f64(gap);
+      while std::time::Instant::now() < gap_deadline
+        && std::time::Instant::now() < deadline
+      {
+        std::thread::sleep(Duration::from_millis(100));
+      }
+    }
   }
 
   Ok(())
@@ -609,7 +668,6 @@ fn run_voice(hostname: Option<&str>) {
     domain = %domain,
     domain_sha256_prefix = %domain_hash[..8].iter().map(|b| format!("{:02x}", b)).collect::<String>(),
     note_seed = voice.note_seed,
-    base_texture_index = (voice.note_seed * 6.0).floor() as usize,
     "Voice seed derivation"
   );
 

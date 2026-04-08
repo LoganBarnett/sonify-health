@@ -41,6 +41,11 @@ treefmt to specific files) so only staged files are reformatted.  If treefmt
 does not support per-file invocation, consider an alternative approach such as
 running the language-specific formatters directly on the staged files.
 
+* DONE Add protocol contract test for state snapshot
+  Write a Rust test that deserializes =state_snapshot()= JSON through
+  structs mirroring the Elm frontend decoders.  Demonstrate it catches
+  the texture→base_freq/boops drift that broke the UI.
+
 * TODO Filter slope (pole count)
 Discrete choice (2/4 poles).  4-pole = 24 dB/oct, much steeper cutoff.
 Chain two =lowpass()= nodes with same cutoff/Q.  Could be a voice param with

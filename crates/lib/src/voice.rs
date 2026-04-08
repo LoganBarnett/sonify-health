@@ -1,4 +1,3 @@
-use crate::drone::DroneTexture;
 use crate::scale::PentatonicScale;
 use rand::Rng;
 use rand::SeedableRng;
@@ -65,6 +64,9 @@ pub struct Voice {
 
   #[voice_param(order = 14, range = 0.0..0.6)]
   pub sub_octave: f64,
+
+  #[voice_param(order = 15, range = 0.0..1.0)]
+  pub note_spread: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -136,24 +138,32 @@ impl Voice {
     if let Some(v) = o.sub_octave {
       self.sub_octave = v;
     }
+    if let Some(v) = o.note_spread {
+      self.note_spread = v;
+    }
     self
   }
 
-  /// Draw pentatonic notes for drone arpeggio from a salted PRNG.
-  /// Hashing `note_seed + b"drone"` gives a stream fully independent
-  /// from heartbeat draws, so adding or removing drone metrics
-  /// cannot shift boop note selection.
-  pub fn drone_notes(&self, scale: &PentatonicScale, count: usize) -> Vec<f64> {
-    let mut hasher = Sha256::new();
-    hasher.update(self.note_seed.to_le_bytes());
-    hasher.update(b"drone");
-    let hash = hasher.finalize();
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&hash);
-    let mut rng = Xoshiro256StarStar::from_seed(seed);
+  /// Generate per-boop specs for a single drone phrase.  Each drone
+  /// gets its own sub-PRNG seeded from `note_seed + "drone" +
+  /// drone_index`, keeping every drone's note sequence independent
+  /// from heartbeats and from each other.
+  ///
+  /// `base_freq` is the effective drone frequency (after register
+  /// and any per-drone override).  Notes are narrowed to within
+  /// `note_spread` octaves of `base_freq`.
+  pub fn drone_specs(
+    &self,
+    scale: &PentatonicScale,
+    drone_index: usize,
+    count: usize,
+    base_freq: f64,
+    slot_secs: f64,
+  ) -> Vec<BoopSpec> {
+    use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
 
-    let lo = self.base_freq / 2.0;
-    let hi = self.base_freq * 2.0;
+    let lo = base_freq / 2_f64.powf(self.note_spread);
+    let hi = base_freq * 2_f64.powf(self.note_spread);
     let nearby: Vec<f64> = scale
       .notes()
       .iter()
@@ -166,37 +176,62 @@ impl Voice {
       &nearby
     };
 
-    let drawn_notes: Vec<f64> = (0..count)
-      .map(|_| notes[rng.gen_range(0..notes.len())])
+    let mut hasher = Sha256::new();
+    hasher.update(self.note_seed.to_le_bytes());
+    hasher.update(b"drone");
+    hasher.update((drone_index as u64).to_le_bytes());
+    let hash = hasher.finalize();
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&hash);
+    let mut rng = Xoshiro256StarStar::from_seed(seed);
+
+    let beat_secs = slot_secs / BEATS_PER_BAR;
+    let mut raw: Vec<(f64, f64)> = (0..count)
+      .map(|_| {
+        let note_idx = rng.gen_range(0..notes.len());
+        let note_val = NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())];
+        (notes[note_idx], note_val)
+      })
+      .collect();
+
+    // Fitting loop: downshift the longest note value until the bar
+    // fits, stopping at MIN_NOTE_VALUE.
+    loop {
+      let total_beats: f64 = raw.iter().map(|(_, v)| v).sum();
+      if total_beats <= BEATS_PER_BAR {
+        break;
+      }
+      let longest_idx = raw
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap())
+        .map(|(i, _)| i);
+      match longest_idx {
+        Some(i) if raw[i].1 > MIN_NOTE_VALUE => {
+          raw[i].1 /= 2.0;
+        }
+        _ => break,
+      }
+    }
+
+    let specs: Vec<BoopSpec> = raw
+      .into_iter()
+      .map(|(freq, note_val)| BoopSpec {
+        freq,
+        duration: note_val * beat_secs,
+      })
       .collect();
 
     debug!(
       note_seed = self.note_seed,
-      base_freq = format_args!("{:.1} Hz", self.base_freq),
+      drone_index,
+      base_freq = format_args!("{:.1} Hz", base_freq),
       candidate_notes = nearby.len(),
-      selected = ?drawn_notes.iter().map(|n| format!("{:.1}", n)).collect::<Vec<_>>(),
-      "Drone arpeggio notes selected"
+      specs = ?specs.iter().map(|s| format!("{:.1}Hz/{:.3}s", s.freq, s.duration)).collect::<Vec<_>>(),
+      "Drone phrase specs generated"
     );
 
-    drawn_notes
-  }
-
-  /// Derive a drone texture from the voice, offset by metric index.
-  /// Different hosts get different base textures; multiple metrics on
-  /// the same host cycle from that base so each sounds distinct.
-  pub fn drone_texture(&self, metric_index: usize) -> DroneTexture {
-    let base = (self.note_seed * 6.0).floor() as usize;
-    let resolved = DroneTexture::from_index(base + metric_index);
-
-    debug!(
-      note_seed = self.note_seed,
-      base_index = base,
-      metric_index,
-      resolved = ?resolved,
-      "Drone texture derived"
-    );
-
-    resolved
+    specs
   }
 
   /// Generate per-boop note and duration specs using a musical
@@ -217,11 +252,11 @@ impl Voice {
   ) -> Vec<BoopSpec> {
     use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
 
-    // Narrow the full scale to notes within one octave of
-    // base_freq so boops sound melodically related rather than
+    // Narrow the full scale to notes within note_spread octaves
+    // of base_freq so boops sound melodically related rather than
     // scattered across 4+ octaves.
-    let lo = self.base_freq / 2.0;
-    let hi = self.base_freq * 2.0;
+    let lo = self.base_freq / 2_f64.powf(self.note_spread);
+    let hi = self.base_freq * 2_f64.powf(self.note_spread);
     let nearby: Vec<f64> = scale
       .notes()
       .iter()
@@ -304,6 +339,7 @@ pub struct VoiceOverrides {
   pub brightness: Option<f64>,
   pub resonance: Option<f64>,
   pub sub_octave: Option<f64>,
+  pub note_spread: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -321,7 +357,8 @@ impl fmt::Display for Voice {
     writeln!(f, "echo_mix:     {:.3}", self.echo_mix)?;
     writeln!(f, "brightness:   {:.3}", self.brightness)?;
     writeln!(f, "resonance:    {:.3}", self.resonance)?;
-    write!(f, "sub_octave:   {:.3}", self.sub_octave)
+    writeln!(f, "sub_octave:   {:.3}", self.sub_octave)?;
+    write!(f, "note_spread:  {:.3}", self.note_spread)
   }
 }
 
@@ -370,6 +407,7 @@ mod tests {
       assert!((0.3..1.0).contains(&v.brightness));
       assert!((0.2..2.0).contains(&v.resonance));
       assert!((0.0..0.6).contains(&v.sub_octave));
+      assert!((0.0..1.0).contains(&v.note_spread));
     }
   }
 
@@ -386,44 +424,30 @@ mod tests {
   }
 
   #[test]
-  fn drone_notes_deterministic() {
+  fn drone_specs_deterministic() {
     let v = Voice::from_hostname("test");
     let scale = PentatonicScale::from_key("local");
-    let n1 = v.drone_notes(&scale, 4);
-    let n2 = v.drone_notes(&scale, 4);
-    assert_eq!(n1, n2);
-  }
-
-  #[test]
-  fn drone_notes_within_octave_range() {
-    // Use a voice with base_freq forced into the mid range where the
-    // pentatonic scale has notes within ±1 octave.
-    let v = Voice::from_hostname("test").with_overrides(&VoiceOverrides {
-      base_freq: Some(400.0),
-      ..Default::default()
-    });
-    let scale = PentatonicScale::from_key("local");
-    let notes = v.drone_notes(&scale, 4);
-    for &n in &notes {
-      assert!(
-        n >= v.base_freq / 2.0 && n <= v.base_freq * 2.0,
-        "Drone note {:.1} Hz outside +-1 octave of base {:.1} Hz",
-        n,
-        v.base_freq
-      );
+    let s1 = v.drone_specs(&scale, 0, 3, 400.0, 4.0);
+    let s2 = v.drone_specs(&scale, 0, 3, 400.0, 4.0);
+    assert_eq!(s1.len(), s2.len());
+    for (a, b) in s1.iter().zip(s2.iter()) {
+      assert_eq!(a.freq, b.freq);
+      assert_eq!(a.duration, b.duration);
     }
   }
 
   #[test]
-  fn drone_notes_independent_from_boop_draws() {
+  fn drone_specs_independent_across_indices() {
     let v = Voice::from_hostname("test");
     let scale = PentatonicScale::from_key("local");
-    let drone1 = v.drone_notes(&scale, 4);
-    // Calling boop_specs with different counts must not affect
-    // drone_notes, since they use separate PRNG streams.
-    let _specs = v.boop_specs(&scale, 3, 1, 4.0);
-    let drone2 = v.drone_notes(&scale, 4);
-    assert_eq!(drone1, drone2);
+    let s0 = v.drone_specs(&scale, 0, 3, 400.0, 4.0);
+    let s1 = v.drone_specs(&scale, 1, 3, 400.0, 4.0);
+    // Different drone indices should produce different note sequences.
+    let same = s0
+      .iter()
+      .zip(s1.iter())
+      .all(|(a, b)| a.freq == b.freq && a.duration == b.duration);
+    assert!(!same, "Different drone indices should produce different specs");
   }
 
   #[test]

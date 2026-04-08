@@ -92,7 +92,7 @@ type Msg
     | DroneVolDebounce Int Int Float
     | OverrideCheck Int String
     | ClearCheckOverride Int
-    | SetDroneTexture Int String
+    | SetDroneBoops Int String
     | SetDroneRegister Int String
     | OverrideDroneValue Int String
     | ClearDroneOverride Int
@@ -394,11 +394,16 @@ update msg model =
             , Ports.websocketSend (encodeClearOverride "heartbeat" index)
             )
 
-        SetDroneTexture index texture ->
-            ( model
-            , Ports.websocketSend
-                (Protocol.encodeSetDroneTexture index texture)
-            )
+        SetDroneBoops index valStr ->
+            case String.toInt valStr of
+                Just boops ->
+                    ( model
+                    , Ports.websocketSend
+                        (Protocol.encodeSetDroneBoops index boops)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         SetDroneRegister index register ->
             ( model
@@ -719,13 +724,13 @@ handleServerMsg raw model =
                 _ ->
                     ( model, Cmd.none )
 
-        Just (DroneConfigChanged index texture register) ->
+        Just (DroneConfigChanged index baseFreq boops register) ->
             ( { model
                 | drones =
                     List.indexedMap
                         (\i d ->
                             if i == index then
-                                { d | texture = texture, register = register }
+                                { d | baseFreq = baseFreq, boops = boops, register = register }
 
                             else
                                 d
@@ -1158,16 +1163,16 @@ viewDrone lockedDrones index drone =
                 ]
             , span [ class "drone-name" ] [ text drone.name ]
             , select
-                [ onInput (SetDroneTexture index)
+                [ onInput (SetDroneBoops index)
                 , class "override-select"
                 ]
                 (List.map
-                    (\t ->
+                    (\n ->
                         option
-                            [ value t, selected (drone.texture == t) ]
-                            [ text t ]
+                            [ value (String.fromInt n), selected (drone.boops == n) ]
+                            [ text (String.fromInt n ++ "b") ]
                     )
-                    [ "bong", "arpeggio", "thrum", "shimmer", "reactor", "warpcore" ]
+                    (List.range 1 8)
                 )
             , select
                 [ onInput (SetDroneRegister index)

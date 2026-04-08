@@ -73,6 +73,10 @@ pub(crate) struct CliVoiceOverrides {
   /// Override sub-octave mix (0.0–1.0).
   #[arg(long, help_heading = "Voice overrides")]
   sub_octave: Option<f64>,
+
+  /// Override note spread (0.0–1.0, octaves around base frequency).
+  #[arg(long, help_heading = "Voice overrides")]
+  note_spread: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -102,6 +106,7 @@ impl CliVoiceOverrides {
       brightness: self.brightness,
       resonance: self.resonance,
       sub_octave: self.sub_octave,
+      note_spread: self.note_spread,
     }
   }
 
@@ -140,7 +145,6 @@ impl CliVoiceOverrides {
         .map(|b| format!("{b:02x}"))
         .collect::<String>(),
       note_seed = voice.note_seed,
-      base_texture_index = (voice.note_seed * 6.0).floor() as usize,
       "Voice seed derivation"
     );
 

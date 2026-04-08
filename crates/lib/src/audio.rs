@@ -195,6 +195,15 @@ pub struct AudioMixer {
   sample_rate: f64,
 }
 
+/// Thread-safe handle to the mixer's slot table.  Unlike
+/// `AudioMixer`, this does not own the cpal stream and is `Send +
+/// Sync`, so it can be shared across threads.
+#[derive(Clone)]
+pub struct MixerHandle {
+  inner: Arc<MixerInner>,
+  sample_rate: f64,
+}
+
 impl AudioMixer {
   /// Open one cpal output stream on the given device.  All graphs
   /// added via `add` are mixed together in the audio callback.
@@ -365,6 +374,56 @@ impl AudioMixer {
   pub fn clear(&self) {
     let mut slots = self.inner.slots.lock().unwrap();
     slots.clear();
+  }
+
+  /// Obtain a lightweight, thread-safe handle for adding and
+  /// removing slots from other threads.
+  pub fn handle(&self) -> MixerHandle {
+    MixerHandle {
+      inner: Arc::clone(&self.inner),
+      sample_rate: self.sample_rate,
+    }
+  }
+}
+
+impl MixerHandle {
+  /// Add a graph to the mixer and return its slot ID.
+  pub fn add(&self, mut graph: Box<dyn AudioUnit>) -> usize {
+    graph.set_sample_rate(self.sample_rate);
+    graph.allocate();
+    let slot = MixerSlot {
+      adapter: BigBlockAdapter::new(graph),
+      left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+      right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+    };
+
+    let mut slots = self.inner.slots.lock().unwrap();
+
+    let empty = slots.iter().position(Option::is_none);
+    let slot_id = match empty {
+      Some(i) => {
+        slots[i] = Some(slot);
+        i
+      }
+      None => {
+        slots.push(Some(slot));
+        slots.len() - 1
+      }
+    };
+
+    let active = slots.iter().filter(|s| s.is_some()).count();
+    tracing::info!(slot_id, active, "MixerHandle: slot added");
+    slot_id
+  }
+
+  /// Remove the graph at the given slot, silencing it.
+  pub fn remove(&self, id: usize) {
+    let mut slots = self.inner.slots.lock().unwrap();
+    if let Some(entry) = slots.get_mut(id) {
+      *entry = None;
+    }
+    let active = slots.iter().filter(|s| s.is_some()).count();
+    tracing::info!(id, active, "MixerHandle: slot removed");
   }
 }
 

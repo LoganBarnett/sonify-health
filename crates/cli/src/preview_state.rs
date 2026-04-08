@@ -4,7 +4,7 @@ use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
-  drone::{DroneRegister, DroneTexture},
+  drone::DroneRegister,
   state::{DroneState, HeartbeatState},
   BoopSpec, PentatonicScale, Severity, Voice,
 };
@@ -146,7 +146,8 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
 pub struct DroneMetricInfo {
   pub name: String,
   pub register: DroneRegister,
-  pub texture: DroneTexture,
+  pub base_freq: Option<f64>,
+  pub boops: usize,
 }
 
 /// Shared mutable state backing the real-time preview UI.
@@ -171,7 +172,6 @@ pub struct PreviewState {
   pub drone_state: Arc<DroneState>,
   pub heartbeat_overrides: RwLock<Vec<Option<Severity>>>,
   pub drone_overrides: RwLock<Vec<Option<f32>>>,
-  pub drone_rebuild_requested: AtomicBool,
   pub heartbeat_loop: AtomicBool,
   pub heartbeat_trigger: AtomicBool,
   pub broadcast_tx: broadcast::Sender<String>,
@@ -211,11 +211,11 @@ impl PreviewState {
 
     let drone_infos: Vec<DroneMetricInfo> = drone_metrics
       .iter()
-      .enumerate()
-      .map(|(i, m)| DroneMetricInfo {
+      .map(|m| DroneMetricInfo {
         name: m.name.clone(),
         register: m.register,
-        texture: m.texture.unwrap_or_else(|| voice.drone_texture(i)),
+        base_freq: m.base_freq,
+        boops: m.boops.unwrap_or(1),
       })
       .collect();
 
@@ -235,7 +235,6 @@ impl PreviewState {
       drone_state: Arc::new(DroneState::new(drone_count)),
       heartbeat_overrides: RwLock::new(vec![None; check_count]),
       drone_overrides: RwLock::new(vec![None; drone_count]),
-      drone_rebuild_requested: AtomicBool::new(false),
       heartbeat_loop: AtomicBool::new(false),
       heartbeat_trigger: AtomicBool::new(false),
       broadcast_tx,
@@ -361,7 +360,8 @@ impl PreviewState {
           "name": info.name,
           "value": self.drone_state.metrics[i].value(),
           "volume": self.drone_volumes[i].value(),
-          "texture": texture_str(info.texture),
+          "base_freq": info.base_freq,
+          "boops": info.boops,
           "register": register_str(info.register),
           "overridden": drone_overrides[i].is_some(),
         })
@@ -505,7 +505,6 @@ impl PreviewState {
     self
       .boop_count
       .store(self.original_boop_count, Ordering::Relaxed);
-    self.drone_rebuild_requested.store(true, Ordering::Relaxed);
 
     // Clear boop pins and recompute specs from reverted voice.
     {
@@ -589,34 +588,11 @@ pub fn severity_from_shared(value: f32) -> Severity {
   }
 }
 
-pub fn texture_str(t: DroneTexture) -> &'static str {
-  match t {
-    DroneTexture::Bong => "bong",
-    DroneTexture::Arpeggio => "arpeggio",
-    DroneTexture::Thrum => "thrum",
-    DroneTexture::Shimmer => "shimmer",
-    DroneTexture::Reactor => "reactor",
-    DroneTexture::Warpcore => "warpcore",
-  }
-}
-
 pub fn register_str(r: DroneRegister) -> &'static str {
   match r {
     DroneRegister::Low => "low",
     DroneRegister::Mid => "mid",
     DroneRegister::High => "high",
-  }
-}
-
-pub fn texture_from_str(s: &str) -> Option<DroneTexture> {
-  match s {
-    "bong" => Some(DroneTexture::Bong),
-    "arpeggio" => Some(DroneTexture::Arpeggio),
-    "thrum" => Some(DroneTexture::Thrum),
-    "shimmer" => Some(DroneTexture::Shimmer),
-    "reactor" => Some(DroneTexture::Reactor),
-    "warpcore" => Some(DroneTexture::Warpcore),
-    _ => None,
   }
 }
 
@@ -626,5 +602,187 @@ pub fn register_from_str(s: &str) -> Option<DroneRegister> {
     "mid" => Some(DroneRegister::Mid),
     "high" => Some(DroneRegister::High),
     _ => None,
+  }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+mod tests {
+  use super::*;
+  use serde::Deserialize;
+  use sonify_health_lib::{
+    check::{DroneMetricConfig, HeartbeatCheckConfig, ResultMode},
+    drone::DroneRegister,
+    Voice,
+  };
+
+  // Contract structs mirror the Elm frontend decoders exactly.
+  // If the backend JSON shape drifts from what the frontend expects,
+  // deserialization fails and the test catches it.
+  //
+  // Fields are never read directly — their purpose is to fail
+  // deserialization when the backend omits or renames them.
+
+  #[derive(Deserialize)]
+  struct StateContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    voice: serde_json::Map<String, serde_json::Value>,
+    voice_params: Vec<VoiceParamContract>,
+    muted: bool,
+    heartbeat_volume: f64,
+    heartbeat_loop: bool,
+    boop_count: u64,
+    checks: Vec<CheckContract>,
+    drones: Vec<DroneContract>,
+    locked_params: Vec<String>,
+    locked_drones: Vec<u64>,
+    boop_specs: Vec<BoopSpecContract>,
+    boop_spec_ranges: BoopSpecRangesContract,
+  }
+
+  #[derive(Deserialize)]
+  struct VoiceParamContract {
+    name: String,
+    description: String,
+    min: f64,
+    max: f64,
+    step: f64,
+  }
+
+  #[derive(Deserialize)]
+  struct CheckContract {
+    name: String,
+    severity: String,
+    overridden: bool,
+  }
+
+  /// Mirrors the Elm `DroneInfo` decoder.  The `base_freq` field is
+  /// nullable (Elm `Maybe Float`), so it uses `Option<f64>`.
+  #[derive(Deserialize)]
+  struct DroneContract {
+    name: String,
+    value: f64,
+    volume: f64,
+    base_freq: Option<f64>,
+    boops: u64,
+    register: String,
+    overridden: bool,
+  }
+
+  #[derive(Deserialize)]
+  struct BoopSpecContract {
+    freq: f64,
+    duration: f64,
+    pinned: bool,
+  }
+
+  #[derive(Deserialize)]
+  struct BoopSpecRangesContract {
+    freq_min: f64,
+    freq_max: f64,
+    freq_step: f64,
+    duration_min: f64,
+    duration_max: f64,
+    duration_step: f64,
+  }
+
+  /// Mirrors the Elm `DroneConfigChanged` decoder.
+  #[derive(Deserialize)]
+  struct DroneConfigChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    index: u64,
+    base_freq: Option<f64>,
+    boops: u64,
+    register: String,
+  }
+
+  fn test_preview() -> PreviewState {
+    let voice = Voice::from_hostname("test");
+    let scale = PentatonicScale::from_key("C");
+    let checks = vec![HeartbeatCheckConfig {
+      name: "cpu".to_string(),
+      command: "echo healthy".to_string(),
+      result_mode: ResultMode::ExitCode,
+    }];
+    let drones = vec![DroneMetricConfig {
+      name: "load".to_string(),
+      command: "echo 0.5".to_string(),
+      result_mode: ResultMode::Stdout,
+      register: DroneRegister::Mid,
+      base_freq: None,
+      boops: Some(2),
+    }];
+    PreviewState::new(
+      voice,
+      scale,
+      "C".to_string(),
+      Arc::new(AtomicBool::new(false)),
+      &checks,
+      &drones,
+      4.0,
+    )
+  }
+
+  #[test]
+  fn state_snapshot_matches_frontend_contract() {
+    let preview = test_preview();
+    let json = preview.state_snapshot();
+    let state: StateContract = serde_json::from_str(&json)
+      .expect("state_snapshot JSON does not match the Elm frontend contract");
+
+    assert_eq!(state.msg_type, "state");
+    assert!(!state.voice_params.is_empty());
+    assert_eq!(state.checks.len(), 1);
+    assert_eq!(state.checks[0].name, "cpu");
+    assert_eq!(state.drones.len(), 1);
+    assert_eq!(state.drones[0].name, "load");
+    assert_eq!(state.drones[0].boops, 2);
+    assert_eq!(state.drones[0].register, "mid");
+  }
+
+  #[test]
+  fn drone_config_changed_matches_frontend_contract() {
+    let info = DroneMetricInfo {
+      name: "load".to_string(),
+      register: DroneRegister::Mid,
+      base_freq: Some(220.0),
+      boops: 3,
+    };
+    let msg = serde_json::json!({
+      "type": "drone_config_changed",
+      "index": 0,
+      "register": register_str(info.register),
+      "base_freq": info.base_freq,
+      "boops": info.boops,
+    })
+    .to_string();
+
+    let parsed: DroneConfigChangedContract = serde_json::from_str(&msg).expect(
+      "drone_config_changed JSON does not match the Elm frontend \
+         contract",
+    );
+
+    assert_eq!(parsed.msg_type, "drone_config_changed");
+    assert_eq!(parsed.base_freq, Some(220.0));
+    assert_eq!(parsed.boops, 3);
+    assert_eq!(parsed.register, "mid");
+  }
+
+  #[test]
+  fn drone_config_changed_null_base_freq() {
+    let msg = serde_json::json!({
+      "type": "drone_config_changed",
+      "index": 0,
+      "register": "low",
+      "base_freq": null,
+      "boops": 1,
+    })
+    .to_string();
+
+    let parsed: DroneConfigChangedContract = serde_json::from_str(&msg)
+      .expect("drone_config_changed with null base_freq should still decode");
+    assert_eq!(parsed.base_freq, None);
   }
 }

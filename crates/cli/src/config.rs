@@ -349,6 +349,27 @@ mod tests {
     assert_eq!(drone.metrics[0].register, DroneRegister::Low);
     assert_eq!(drone.metrics[1].name, "mem");
     assert_eq!(drone.metrics[1].register, DroneRegister::High);
+    assert_eq!(drone.metrics[0].base_freq, None);
+    assert_eq!(drone.metrics[0].boops, None);
+  }
+
+  #[test]
+  fn drone_base_freq_and_boops_parse() {
+    let toml = r#"
+      [drone]
+      [[drone.metrics]]
+      name = "cpu"
+      command = "echo 0.5"
+      result_mode = "stdout"
+      register = "mid"
+      base_freq = 220.0
+      boops = 3
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let drone = raw.drone.unwrap();
+    assert_eq!(drone.metrics[0].base_freq, Some(220.0));
+    assert_eq!(drone.metrics[0].boops, Some(3));
   }
 
   #[test]

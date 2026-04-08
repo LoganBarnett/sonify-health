@@ -4,9 +4,7 @@ use crate::preview_state::{severity_from_shared, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  check, drone, heartbeat,
-  state::DroneState,
-  DroneTexture, PentatonicScale, Voice,
+  check, drone, heartbeat, PentatonicScale, Severity, Voice,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -35,10 +33,10 @@ pub struct DaemonContext<'a> {
   pub preview: Arc<PreviewState>,
 }
 
-/// Run the daemon's main loop: spawn check threads, build drone
-/// audio streams, play heartbeat boops at the configured time slot,
-/// and respond to preview-UI actions.  Shuts down when `running`
-/// becomes false.
+/// Run the daemon's main loop: spawn check threads, drone play
+/// threads, play heartbeat boops at the configured time slot, and
+/// respond to preview-UI actions.  Shuts down when `running` becomes
+/// false.
 pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   let DaemonContext {
     config,
@@ -159,9 +157,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
   let mixer = AudioMixer::new(audio_device)?;
 
-  let mut drone_slot_ids =
-    build_drone_slots(&mixer, voice, scale, &drone_state, &preview);
-
   // -- Drone poll threads -----------------------------------------------------
 
   let drone_handles: Vec<_> = config
@@ -228,6 +223,74 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     })
     .collect();
 
+  // -- Drone play threads -----------------------------------------------------
+  // Each drone gets its own thread that loops: build a heartbeat
+  // phrase from current voice + drone config, play it, then sleep
+  // for a metric-driven gap before repeating.
+
+  let drone_play_handles: Vec<_> = (0..config.drone_metrics.len())
+    .map(|i| {
+      let run = Arc::clone(&running);
+      let prev = Arc::clone(&preview);
+      let ds = Arc::clone(&drone_state);
+      let mix = mixer.handle();
+      let scale = scale.clone();
+      thread::spawn(move || {
+        while run.load(Ordering::Relaxed) {
+          // Read current voice, drone config, and metric.
+          let voice = prev.voice.read().unwrap().clone();
+          let info = {
+            let infos = prev.drone_infos.read().unwrap();
+            match infos.get(i) {
+              Some(info) => info.clone(),
+              None => break,
+            }
+          };
+          let metric = ds.metrics[i].value();
+
+          let effective_freq = info
+            .base_freq
+            .unwrap_or(voice.base_freq * info.register.multiplier());
+          let slot_secs = prev.slot_secs;
+
+          let specs =
+            voice.drone_specs(&scale, i, info.boops, effective_freq, slot_secs);
+          let severities: Vec<Severity> =
+            (0..specs.len()).map(|_| Severity::Healthy).collect();
+
+          let graph = heartbeat::heartbeat_graph_with_volume(
+            &voice,
+            &severities,
+            &specs,
+            Some(&prev.combined_volumes[i]),
+          );
+
+          let attack_secs = voice.attack_ms / 1000.0;
+          let release_secs = voice.release_ms / 1000.0;
+          let phrase_dur = heartbeat::heartbeat_duration(
+            &specs,
+            attack_secs,
+            release_secs,
+            voice.echo_delay,
+            voice.echo_mix,
+          );
+
+          let slot = mix.add(graph);
+          sleep_checking(&run, phrase_dur);
+          mix.remove(slot);
+
+          if !run.load(Ordering::Relaxed) {
+            break;
+          }
+
+          // Gap between phrases, driven by the metric value.
+          let gap = drone::drone_gap_secs(metric);
+          sleep_checking(&run, Duration::from_secs_f64(gap));
+        }
+      })
+    })
+    .collect();
+
   info!(
     slot = config.timing.slot,
     cycle_secs = config.timing.cycle_duration_secs,
@@ -240,20 +303,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   // -- Main timing loop -------------------------------------------------------
 
   while running.load(Ordering::Relaxed) {
-    // Handle pending drone rebuild.
-    if preview
-      .drone_rebuild_requested
-      .swap(false, Ordering::Relaxed)
-    {
-      rebuild_drones(
-        &mixer,
-        &mut drone_slot_ids,
-        &preview,
-        scale,
-        &drone_state,
-      );
-    }
-
     // Handle mute transitions.
     let is_muted = muted.load(Ordering::Relaxed);
     if is_muted != was_muted {
@@ -294,18 +343,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       while std::time::Instant::now() < deadline
         && running.load(Ordering::Relaxed)
       {
-        if preview
-          .drone_rebuild_requested
-          .swap(false, Ordering::Relaxed)
-        {
-          rebuild_drones(
-            &mixer,
-            &mut drone_slot_ids,
-            &preview,
-            scale,
-            &drone_state,
-          );
-        }
         if preview.heartbeat_trigger.load(Ordering::Relaxed)
           || preview.heartbeat_loop.load(Ordering::Relaxed)
         {
@@ -339,8 +376,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     .max(Duration::from_millis(500));
     let end = std::time::Instant::now() + remaining;
     while std::time::Instant::now() < end && running.load(Ordering::Relaxed) {
-      if preview.drone_rebuild_requested.load(Ordering::Relaxed)
-        || preview.heartbeat_trigger.load(Ordering::Relaxed)
+      if preview.heartbeat_trigger.load(Ordering::Relaxed)
         || preview.heartbeat_loop.load(Ordering::Relaxed)
       {
         break;
@@ -356,68 +392,14 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   for h in drone_handles {
     let _ = h.join();
   }
+  for h in drone_play_handles {
+    let _ = h.join();
+  }
 
   // Clear all mixer slots so audio stops before we log.
   mixer.clear();
   info!("Daemon stopped");
   Ok(())
-}
-
-// -- Drone build / rebuild ---------------------------------------------------
-
-fn build_drone_slots(
-  mixer: &AudioMixer,
-  voice: &Voice,
-  scale: &PentatonicScale,
-  drone_state: &DroneState,
-  preview: &PreviewState,
-) -> Vec<usize> {
-  let infos = preview.drone_infos.read().unwrap();
-  infos
-    .iter()
-    .enumerate()
-    .map(|(i, info)| {
-      let notes = if info.texture == DroneTexture::Arpeggio {
-        voice.drone_notes(scale, 4)
-      } else {
-        vec![]
-      };
-      let texture = info.texture;
-      debug!(
-        metric = info.name,
-        ?texture,
-        arpeggio_notes = notes.len(),
-        "Drone texture resolved"
-      );
-      let graph = drone::drone_graph_with_volume(
-        voice,
-        info.register,
-        info.texture,
-        &drone_state.metrics[i],
-        &notes,
-        Some(&preview.combined_volumes[i]),
-      );
-      let slot = mixer.add(graph);
-      info!(metric = info.name, slot, "Drone added to mixer");
-      slot
-    })
-    .collect()
-}
-
-fn rebuild_drones(
-  mixer: &AudioMixer,
-  drone_slot_ids: &mut Vec<usize>,
-  preview: &PreviewState,
-  scale: &PentatonicScale,
-  drone_state: &DroneState,
-) {
-  for id in drone_slot_ids.drain(..) {
-    mixer.remove(id);
-  }
-  let voice = preview.voice.read().unwrap();
-  info!("Rebuilding drone audio streams");
-  *drone_slot_ids =
-    build_drone_slots(mixer, &voice, scale, drone_state, preview);
 }
 
 // -- Heartbeat ---------------------------------------------------------------
@@ -481,6 +463,17 @@ fn play_heartbeat_preview(
 
 // -- Helpers -----------------------------------------------------------------
 
+/// Sleep for `dur` in ~100 ms increments, checking `running` flag.
+fn sleep_checking(running: &AtomicBool, dur: Duration) {
+  let deadline = std::time::Instant::now() + dur;
+  while std::time::Instant::now() < deadline && running.load(Ordering::Relaxed)
+  {
+    let remaining =
+      deadline.saturating_duration_since(std::time::Instant::now());
+    thread::sleep(remaining.min(Duration::from_millis(100)));
+  }
+}
+
 fn log_voice_derivation(voice: &Voice) {
   use sha2::{Digest, Sha256};
   use sonify_health_lib::scale;
@@ -501,7 +494,6 @@ fn log_voice_derivation(voice: &Voice) {
       .map(|b| format!("{:02x}", b))
       .collect::<String>(),
     note_seed = voice.note_seed,
-    base_texture_index = (voice.note_seed * 6.0).floor() as usize,
     "Voice seed derivation"
   );
 }
