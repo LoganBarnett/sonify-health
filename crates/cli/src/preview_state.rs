@@ -28,7 +28,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
   VoiceParamMeta {
     name: "base_freq",
     min: 100.0,
-    max: 4000.0,
+    max: 12000.0,
     step: 1.0,
   },
   VoiceParamMeta {

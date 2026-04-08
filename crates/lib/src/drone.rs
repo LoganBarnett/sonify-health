@@ -6,6 +6,9 @@ use fundsp::shared::Shared;
 use serde::Deserialize;
 use tracing::debug;
 
+/// Maximum lowpass cutoff to avoid filter instability near Nyquist.
+const MAX_CUTOFF: f32 = 18000.0;
+
 /// Pitch register for a drone voice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -137,7 +140,7 @@ fn bong_graph(
     mix = "primary 0.55, bell1 0.15, bell2 0.06, sub 0.20, noise 0.04",
     noise_filter = "lowpole 300 Hz",
     filter = "lowpass, Q 0.3-0.8",
-    cutoff_range = "200-1500 Hz",
+    cutoff_range = format_args!("{:.0}-{:.0} Hz", freq * 0.5, freq * 4.0),
     reverb_mix = format_args!("{:.3}", voice.reverb_mix),
     "Bong harmonic recipe"
   );
@@ -155,7 +158,7 @@ fn bong_graph(
 
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
-    200.0 + m * 1300.0
+    (freq * (0.5 + m * 3.5)).min(MAX_CUTOFF)
   });
 
   let q = lfo(move |_t| {
@@ -225,7 +228,9 @@ fn arpeggio_graph(
     noise_filter = "lowpole 400 Hz, gain 0.03",
     chorus_params = "seed 0, sep 0.015, var 0.005, rate 0.2",
     filter = "lowpass, Q 0.5-0.8",
-    cutoff_range = "200-1500 Hz",
+    cutoff_range = format_args!("{:.0}-{:.0} Hz",
+      voice.base_freq as f32 * mult * 0.5,
+      voice.base_freq as f32 * mult * 4.0),
     reverb_mix = format_args!("{:.3}", voice.reverb_mix),
     "Arpeggio harmonic recipe"
   );
@@ -266,10 +271,11 @@ fn arpeggio_graph(
   let noise = pink() >> lowpole_hz(400.0);
   let osc_with_noise = osc + noise * 0.03;
 
+  let arp_base = voice.base_freq as f32 * mult;
   let metric_cutoff = metric.clone();
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
-    200.0 + m * 1300.0
+    (arp_base * (0.5 + m * 3.5)).min(MAX_CUTOFF)
   });
 
   let metric_q = metric.clone();
@@ -342,7 +348,7 @@ fn thrum_graph(
     tremolo = "primary 0.5-6 Hz + macro 0.03 Hz, blend 70/30",
     filter_wobble = "0.08 Hz, +/-60 Hz",
     filter = "lowpass, Q 0.4-0.8",
-    cutoff_range = "150-750 Hz",
+    cutoff_range = format_args!("{:.0}-{:.0} Hz", freq * 0.4, freq * 2.0),
     reverb_mix = format_args!("{:.3}", voice.reverb_mix),
     "Thrum harmonic recipe"
   );
@@ -359,9 +365,9 @@ fn thrum_graph(
   let metric_cutoff = metric.clone();
   let cutoff = lfo(move |t| {
     let m = metric_cutoff.value();
-    let center = 150.0 + m * 600.0;
-    let wobble = (t * 0.08 * std::f32::consts::TAU).sin() * 60.0;
-    center + wobble
+    let center = freq * (0.4 + m * 1.6);
+    let wobble = (t * 0.08 * std::f32::consts::TAU).sin() * freq * 0.15;
+    (center + wobble).min(MAX_CUTOFF)
   });
 
   let metric_q = metric.clone();
@@ -434,7 +440,7 @@ fn shimmer_graph(
     air_filter = "bandpass 2000 Hz Q=2.0, gain 0.02",
     chorus_params = "seed 42, sep 0.020, var 0.008, rate 0.15",
     filter = "lowpass, Q 0.5-0.7",
-    cutoff_range = "400-2400 Hz",
+    cutoff_range = format_args!("{:.0}-{:.0} Hz", base * 1.0, base * 6.0),
     reverb_mix = format_args!("{:.3}", voice.reverb_mix),
     "Shimmer harmonic recipe"
   );
@@ -474,7 +480,7 @@ fn shimmer_graph(
   let metric_cutoff = metric.clone();
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
-    400.0 + m * 2000.0
+    (base * (1.0 + m * 5.0)).min(MAX_CUTOFF)
   });
 
   let metric_q = metric.clone();
@@ -545,7 +551,7 @@ fn reactor_graph(
     noise_filter = "lowpole 80 Hz",
     power_pulse = "0.05-0.15 Hz, floor 60%",
     filter = "lowpass, Q 0.5-1.1",
-    cutoff_range = "100-600 Hz",
+    cutoff_range = format_args!("{:.0}-{:.0} Hz", freq * 0.3, freq * 1.5),
     reverb_mix = format_args!("{:.3}", voice.reverb_mix),
     "Reactor harmonic recipe"
   );
@@ -568,7 +574,7 @@ fn reactor_graph(
   let metric_cutoff = metric.clone();
   let cutoff = lfo(move |_t| {
     let m = metric_cutoff.value();
-    100.0 + m * 500.0
+    (freq * (0.3 + m * 1.2)).min(MAX_CUTOFF)
   });
 
   let metric_q = metric.clone();
@@ -638,7 +644,7 @@ fn warp_core_graph(
     pulse = "0.3-2.0 Hz, floor 30%, shaped .powf(0.6)",
     phaser_params = "feedback 0.5, rate 0.04 Hz",
     filter = "lowpass, Q 0.4-0.8",
-    cutoff_range = "200-1800 Hz",
+    cutoff_range = format_args!("{:.0}-{:.0} Hz", freq * 0.5, freq * 4.5),
     reverb_mix = format_args!("{:.3}", voice.reverb_mix),
     "WarpCore harmonic recipe"
   );
@@ -663,7 +669,7 @@ fn warp_core_graph(
     let m = metric_cutoff.value();
     let rate = 0.3 + m * 1.7;
     let sweep = 0.5 * (1.0 + (t * rate * std::f32::consts::TAU + 0.5).sin());
-    200.0 + sweep * 1600.0
+    (freq * (0.5 + sweep * 4.0)).min(MAX_CUTOFF)
   });
 
   let metric_q = metric.clone();

@@ -7,6 +7,9 @@ use std::time::Duration;
 /// Total time budget for boops (excluding gaps).
 pub const TOTAL_BOOP_TIME: f64 = 1.2;
 
+/// Maximum lowpass cutoff to avoid filter instability near Nyquist.
+const MAX_CUTOFF: f32 = 18000.0;
+
 /// Base gap between consecutive boops.  Actual gaps scale
 /// proportionally with the shorter of the two adjacent boops.
 const GAP_SECS: f64 = 0.1;
@@ -126,7 +129,7 @@ pub fn heartbeat_graph_with_volume(
       attack,
       release,
       harshness: profile.harshness as f32,
-      filter_cutoff: profile.filter_cutoff as f32,
+      filter_cutoff: (freq * profile.filter_cutoff as f32).min(MAX_CUTOFF),
       filter_q: profile.filter_q as f32,
     });
 
@@ -204,7 +207,7 @@ pub fn heartbeat_graph_with_volume(
         return p.filter_cutoff;
       }
     }
-    4000.0
+    20000.0
   });
 
   // Lowpass Q: higher resonance at worse severity creates a
@@ -270,7 +273,7 @@ pub fn boop_graph(
   let waveform =
     sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
 
-  let cutoff = dc(profile.filter_cutoff as f32);
+  let cutoff = dc((freq * profile.filter_cutoff as f32).min(MAX_CUTOFF));
   let q_val = dc(profile.filter_q as f32);
 
   let env = envelope(move |t: f32| {

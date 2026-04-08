@@ -20,7 +20,9 @@ pub struct BoopProfile {
   pub amplitude: f64,
   /// Saw-wave bleed-in weight (0.0 pure voice blend to 0.6 buzzy).
   pub harshness: f64,
-  /// Lowpass cutoff in Hz (4000 open/bright to 1800 narrow/nasal).
+  /// Lowpass cutoff as a multiplier of the boop frequency.
+  /// Applied as `freq * filter_cutoff` in the audio graph so the
+  /// filter scales with pitch.
   pub filter_cutoff: f64,
   /// Lowpass resonance Q (0.5 flat to 2.0 honky resonant peak).
   pub filter_q: f64,
@@ -37,21 +39,21 @@ impl Severity {
         detune_cents: 0.0,
         amplitude: 0.08,
         harshness: 0.0,
-        filter_cutoff: 4000.0,
+        filter_cutoff: 13.0,
         filter_q: 0.5,
       },
       Severity::Degraded => BoopProfile {
         detune_cents: 12.0,
         amplitude: 0.14,
         harshness: 0.25,
-        filter_cutoff: 2800.0,
+        filter_cutoff: 9.0,
         filter_q: 1.2,
       },
       Severity::Down => BoopProfile {
         detune_cents: 25.0,
         amplitude: 0.18,
         harshness: 0.6,
-        filter_cutoff: 1800.0,
+        filter_cutoff: 6.0,
         filter_q: 2.0,
       },
     }
