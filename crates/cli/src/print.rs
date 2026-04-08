@@ -27,6 +27,8 @@ pub(crate) fn format_toml(voice: &Voice, scale_key: &str) -> String {
     format!("stereo_pan = {}", float_lit(voice.stereo_pan)),
     format!("reverb_mix = {}", float_lit(voice.reverb_mix)),
     format!("note_seed = {}", float_lit(voice.note_seed)),
+    format!("echo_delay = {}", float_lit(voice.echo_delay)),
+    format!("echo_mix = {}", float_lit(voice.echo_mix)),
   ]
   .join("\n")
 }
@@ -46,6 +48,8 @@ pub(crate) fn format_nix(voice: &Voice, scale_key: &str) -> String {
     format!("  stereo_pan = {};", float_lit(voice.stereo_pan)),
     format!("  reverb_mix = {};", float_lit(voice.reverb_mix)),
     format!("  note_seed = {};", float_lit(voice.note_seed)),
+    format!("  echo_delay = {};", float_lit(voice.echo_delay)),
+    format!("  echo_mix = {};", float_lit(voice.echo_mix)),
     "};".to_string(),
   ]
   .join("\n")
@@ -66,6 +70,8 @@ pub(crate) fn format_cli(voice: &Voice, scale_key: &str) -> String {
     format!("--stereo-pan {}", voice.stereo_pan),
     format!("--reverb-mix {}", voice.reverb_mix),
     format!("--note-seed {}", voice.note_seed),
+    format!("--echo-delay {}", voice.echo_delay),
+    format!("--echo-mix {}", voice.echo_mix),
   ]
   .join(" ")
 }

@@ -85,6 +85,18 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
+  VoiceParamMeta {
+    name: "echo_delay",
+    min: 0.05,
+    max: 0.25,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "echo_mix",
+    min: 0.0,
+    max: 0.4,
+    step: 0.01,
+  },
 ];
 
 /// Metadata for a configured drone metric.
@@ -128,6 +140,7 @@ pub struct PreviewState {
   pub boop_count: AtomicUsize,
   original_boop_count: usize,
   pub locked_params: RwLock<HashSet<String>>,
+  pub locked_drones: RwLock<HashSet<usize>>,
   pub boop_specs: RwLock<Vec<BoopSpec>>,
   pub boop_pins: RwLock<Vec<bool>>,
 }
@@ -190,6 +203,7 @@ impl PreviewState {
       boop_count: AtomicUsize::new(1),
       original_boop_count: 1,
       locked_params: RwLock::new(HashSet::new()),
+      locked_drones: RwLock::new(HashSet::new()),
       boop_specs: RwLock::new(initial_specs),
       boop_pins: RwLock::new(initial_pins),
     }
@@ -310,6 +324,9 @@ impl PreviewState {
       .collect();
 
     let locked_json: Vec<_> = locked.iter().map(|s| json!(s)).collect();
+    let locked_drones = self.locked_drones.read().unwrap();
+    let locked_drones_json: Vec<_> =
+      locked_drones.iter().map(|i| json!(i)).collect();
 
     let boop_specs_json: Vec<_> = specs
       .iter()
@@ -334,6 +351,7 @@ impl PreviewState {
       "checks": checks_json,
       "drones": drones_json,
       "locked_params": locked_json,
+      "locked_drones": locked_drones_json,
       "boop_specs": boop_specs_json,
     })
     .to_string()
@@ -346,7 +364,7 @@ impl PreviewState {
   }
 
   /// Reset everything to startup values.  Locked voice params
-  /// survive the reset; boop pins are cleared.
+  /// and locked drones survive the reset; boop pins are cleared.
   pub fn revert(&self) {
     // Snapshot locked param values before resetting the voice.
     let locked = self.locked_params.read().unwrap().clone();
@@ -356,6 +374,20 @@ impl PreviewState {
         .iter()
         .filter_map(|name| {
           get_voice_param(&voice, name).map(|v| (name.clone(), v))
+        })
+        .collect()
+    };
+
+    // Snapshot locked drone settings before resetting.
+    let locked_drone_indices = self.locked_drones.read().unwrap().clone();
+    let locked_drone_snapshots: Vec<(usize, DroneMetricInfo, f32)> = {
+      let infos = self.drone_infos.read().unwrap();
+      locked_drone_indices
+        .iter()
+        .filter_map(|&i| {
+          infos
+            .get(i)
+            .map(|info| (i, info.clone(), self.drone_volumes[i].value()))
         })
         .collect()
     };
@@ -374,6 +406,17 @@ impl PreviewState {
 
     for dv in &self.drone_volumes {
       dv.set_value(1.0);
+    }
+
+    // Restore locked drone settings.
+    {
+      let mut infos = self.drone_infos.write().unwrap();
+      for (i, info, vol) in &locked_drone_snapshots {
+        if let Some(entry) = infos.get_mut(*i) {
+          *entry = info.clone();
+        }
+        self.drone_volumes[*i].set_value(*vol);
+      }
     }
     self.heartbeat_volume.set_value(1.0);
     self.update_all_combined_volumes();
@@ -416,6 +459,8 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "stereo_pan" => Some(voice.stereo_pan),
     "reverb_mix" => Some(voice.reverb_mix),
     "note_seed" => Some(voice.note_seed),
+    "echo_delay" => Some(voice.echo_delay),
+    "echo_mix" => Some(voice.echo_mix),
     _ => None,
   }
 }
@@ -432,6 +477,8 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "stereo_pan" => voice.stereo_pan = value,
     "reverb_mix" => voice.reverb_mix = value,
     "note_seed" => voice.note_seed = value,
+    "echo_delay" => voice.echo_delay = value,
+    "echo_mix" => voice.echo_mix = value,
     _ => return false,
   }
   true
@@ -449,6 +496,8 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "stereo_pan": voice.stereo_pan,
     "reverb_mix": voice.reverb_mix,
     "note_seed": voice.note_seed,
+    "echo_delay": voice.echo_delay,
+    "echo_mix": voice.echo_mix,
   })
 }
 

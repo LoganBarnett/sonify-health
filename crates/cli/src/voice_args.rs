@@ -53,6 +53,14 @@ pub(crate) struct CliVoiceOverrides {
   /// Override note seed (0.0 to 1.0).
   #[arg(long, help_heading = "Voice overrides")]
   note_seed: Option<f64>,
+
+  /// Override echo delay time (seconds).
+  #[arg(long, help_heading = "Voice overrides")]
+  echo_delay: Option<f64>,
+
+  /// Override echo wet/dry mix.
+  #[arg(long, help_heading = "Voice overrides")]
+  echo_mix: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -77,6 +85,8 @@ impl CliVoiceOverrides {
       stereo_pan: self.stereo_pan,
       reverb_mix: self.reverb_mix,
       note_seed: self.note_seed,
+      echo_delay: self.echo_delay,
+      echo_mix: self.echo_mix,
     }
   }
 

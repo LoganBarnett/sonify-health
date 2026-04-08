@@ -225,11 +225,16 @@ pub fn heartbeat_graph_with_volume(
   };
   let ext_vol = var(&ext) >> follow(0.1);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let waveform =
     (sine() * sine_w_env) & (triangle() * tri_w) & (saw() * saw_w_env);
   let signal = freq_env >> waveform;
-  let mix = (signal | cutoff_env | q_env) >> (lowpass() * amp_env * ext_vol);
-  let stereo = mix
+  let mono = (signal | cutoff_env | q_env) >> (lowpass() * amp_env * ext_vol);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let stereo = with_echo
     >> pan(voice.stereo_pan as f32)
     >> reverb_stereo(0.3, 0.8, voice.reverb_mix as f32);
   Box::new(stereo)
@@ -279,7 +284,11 @@ pub fn boop_graph(
     fade_in * fade_out * amp
   });
 
-  Box::new((waveform | cutoff | q_val) >> (lowpass() * env))
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
+  let mono = (waveform | cutoff | q_val) >> (lowpass() * env);
+  Box::new(mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix)))
 }
 
 #[cfg(test)]

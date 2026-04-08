@@ -50,6 +50,12 @@ pub struct Voice {
 
   #[voice_param(order = 9, range = 0.0..1.0)]
   pub note_seed: f64,
+
+  #[voice_param(order = 10, range = 0.05..0.25)]
+  pub echo_delay: f64,
+
+  #[voice_param(order = 11, range = 0.0..0.4)]
+  pub echo_mix: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -105,6 +111,12 @@ impl Voice {
     }
     if let Some(v) = o.note_seed {
       self.note_seed = v;
+    }
+    if let Some(v) = o.echo_delay {
+      self.echo_delay = v;
+    }
+    if let Some(v) = o.echo_mix {
+      self.echo_mix = v;
     }
     self
   }
@@ -245,6 +257,8 @@ pub struct VoiceOverrides {
   pub stereo_pan: Option<f64>,
   pub reverb_mix: Option<f64>,
   pub note_seed: Option<f64>,
+  pub echo_delay: Option<f64>,
+  pub echo_mix: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -257,7 +271,9 @@ impl fmt::Display for Voice {
     writeln!(f, "release_ms:   {:.1} ms", self.release_ms)?;
     writeln!(f, "chirp_ratio:  {:.3}", self.chirp_ratio)?;
     writeln!(f, "stereo_pan:   {:.3}", self.stereo_pan)?;
-    write!(f, "reverb_mix:   {:.3}", self.reverb_mix)
+    writeln!(f, "reverb_mix:   {:.3}", self.reverb_mix)?;
+    writeln!(f, "echo_delay:   {:.3} s", self.echo_delay)?;
+    write!(f, "echo_mix:     {:.3}", self.echo_mix)
   }
 }
 
@@ -301,6 +317,8 @@ mod tests {
       assert!((-0.3..0.3).contains(&v.stereo_pan));
       assert!((0.3..0.6).contains(&v.reverb_mix));
       assert!((0.0..1.0).contains(&v.note_seed));
+      assert!((0.05..0.25).contains(&v.echo_delay));
+      assert!((0.0..0.4).contains(&v.echo_mix));
     }
   }
 

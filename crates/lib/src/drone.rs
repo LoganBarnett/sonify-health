@@ -180,9 +180,15 @@ fn bong_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
-  let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 3.0, reverb_mix);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let stereo = with_echo
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.6, 3.0, reverb_mix);
   Box::new(stereo)
 }
 
@@ -293,8 +299,13 @@ fn arpeggio_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let mono = (osc_with_noise | cutoff | q) >> (lowpass() * am * vol * ext_vol);
-  let mono_chorus = mono >> chorus(0, 0.015, 0.005, 0.2);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let mono_chorus = with_echo >> chorus(0, 0.015, 0.005, 0.2);
   let stereo = mono_chorus
     >> pan(voice.stereo_pan as f32)
     >> reverb_stereo(0.6, 5.0, reverb_mix);
@@ -384,9 +395,15 @@ fn thrum_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
-  let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.6, 2.5, reverb_mix);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let stereo = with_echo
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.6, 2.5, reverb_mix);
   Box::new(stereo)
 }
 
@@ -484,8 +501,13 @@ fn shimmer_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let mono = (osc_with_air | cutoff | q) >> (lowpass() * am * vol * ext_vol);
-  let mono_chorus = mono >> chorus(42, 0.020, 0.008, 0.15);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let mono_chorus = with_echo >> chorus(42, 0.020, 0.008, 0.15);
   let stereo = mono_chorus
     >> pan(voice.stereo_pan as f32)
     >> reverb_stereo(0.6, 6.0, reverb_mix);
@@ -573,9 +595,15 @@ fn reactor_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
-  let stereo =
-    mono >> pan(voice.stereo_pan as f32) >> reverb_stereo(0.7, 3.0, reverb_mix);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let stereo = with_echo
+    >> pan(voice.stereo_pan as f32)
+    >> reverb_stereo(0.7, 3.0, reverb_mix);
   Box::new(stereo)
 }
 
@@ -662,8 +690,13 @@ fn warp_core_graph(
   };
   let ext_vol = var(&ext) >> follow(0.5);
 
+  let echo_delay = voice.echo_delay as f32;
+  let echo_mix = voice.echo_mix as f32;
+
   let mono = (osc | cutoff | q) >> (lowpass() * am * vol * ext_vol);
-  let mono_phased = mono >> phaser(0.5, |t| sin_hz(0.04, t) * 0.5 + 0.5);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let mono_phased = with_echo >> phaser(0.5, |t| sin_hz(0.04, t) * 0.5 + 0.5);
   let stereo = mono_phased
     >> pan(voice.stereo_pan as f32)
     >> reverb_stereo(0.6, 3.5, reverb_mix);
