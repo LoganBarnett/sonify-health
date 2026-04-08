@@ -8,7 +8,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::Severity;
+use sonify_health_lib::{BoopSpec, Severity};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -486,6 +486,189 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       )
     }
 
+    "import_config" => {
+      let text = msg.get("text").and_then(|v| v.as_str())?;
+      match parse_import(text) {
+        Ok((overrides, boops)) => {
+          apply_import(preview, &overrides, &boops);
+          None
+        }
+        Err(e) => Some(
+          json!({
+            "type": "import_error",
+            "message": e,
+          })
+          .to_string(),
+        ),
+      }
+    }
+
     _ => None,
   }
+}
+
+/// Intermediate structure for deserializing voice params from import.
+#[derive(Default, serde::Deserialize)]
+struct ImportVoice {
+  base_freq: Option<f64>,
+  sine_ratio: Option<f64>,
+  tri_ratio: Option<f64>,
+  saw_ratio: Option<f64>,
+  attack_ms: Option<f64>,
+  release_ms: Option<f64>,
+  chirp_ratio: Option<f64>,
+  stereo_pan: Option<f64>,
+  reverb_mix: Option<f64>,
+  note_seed: Option<f64>,
+  echo_delay: Option<f64>,
+  echo_mix: Option<f64>,
+  brightness: Option<f64>,
+}
+
+#[derive(serde::Deserialize)]
+struct ImportBoop {
+  freq: f64,
+  duration: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct ImportToml {
+  voice: Option<ImportVoice>,
+  boops: Option<Vec<ImportBoop>>,
+}
+
+#[derive(serde::Deserialize)]
+struct ImportJson {
+  voice: Option<ImportVoice>,
+  boops: Option<Vec<ImportBoop>>,
+}
+
+/// Parsed voice param overrides paired with optional boop specs.
+type ImportResult = Result<(Vec<(&'static str, f64)>, Vec<BoopSpec>), String>;
+
+/// Auto-detect format and parse into voice param overrides + boop specs.
+fn parse_import(text: &str) -> ImportResult {
+  let trimmed = text.trim();
+  if trimmed.starts_with('{') {
+    parse_import_json(trimmed)
+  } else {
+    parse_import_toml(trimmed)
+  }
+}
+
+fn voice_fields(v: &ImportVoice) -> Vec<(&'static str, f64)> {
+  let mut out = Vec::new();
+  if let Some(x) = v.base_freq {
+    out.push(("base_freq", x));
+  }
+  if let Some(x) = v.sine_ratio {
+    out.push(("sine_ratio", x));
+  }
+  if let Some(x) = v.tri_ratio {
+    out.push(("tri_ratio", x));
+  }
+  if let Some(x) = v.saw_ratio {
+    out.push(("saw_ratio", x));
+  }
+  if let Some(x) = v.attack_ms {
+    out.push(("attack_ms", x));
+  }
+  if let Some(x) = v.release_ms {
+    out.push(("release_ms", x));
+  }
+  if let Some(x) = v.chirp_ratio {
+    out.push(("chirp_ratio", x));
+  }
+  if let Some(x) = v.stereo_pan {
+    out.push(("stereo_pan", x));
+  }
+  if let Some(x) = v.reverb_mix {
+    out.push(("reverb_mix", x));
+  }
+  if let Some(x) = v.note_seed {
+    out.push(("note_seed", x));
+  }
+  if let Some(x) = v.echo_delay {
+    out.push(("echo_delay", x));
+  }
+  if let Some(x) = v.echo_mix {
+    out.push(("echo_mix", x));
+  }
+  if let Some(x) = v.brightness {
+    out.push(("brightness", x));
+  }
+  out
+}
+
+fn boops_from_import(raw: &[ImportBoop]) -> Vec<BoopSpec> {
+  raw
+    .iter()
+    .map(|b| BoopSpec {
+      freq: b.freq,
+      duration: b.duration,
+    })
+    .collect()
+}
+
+fn parse_import_json(text: &str) -> ImportResult {
+  let parsed: ImportJson =
+    serde_json::from_str(text).map_err(|e| format!("JSON parse error: {e}"))?;
+  let params = parsed.voice.as_ref().map(voice_fields).unwrap_or_default();
+  let boops = parsed
+    .boops
+    .as_deref()
+    .map(boops_from_import)
+    .unwrap_or_default();
+  Ok((params, boops))
+}
+
+fn parse_import_toml(text: &str) -> ImportResult {
+  let parsed: ImportToml =
+    toml::from_str(text).map_err(|e| format!("TOML parse error: {e}"))?;
+  let params = parsed.voice.as_ref().map(voice_fields).unwrap_or_default();
+  let boops = parsed
+    .boops
+    .as_deref()
+    .map(boops_from_import)
+    .unwrap_or_default();
+  Ok((params, boops))
+}
+
+/// Apply imported voice params and boop specs to preview state.
+/// Locked params are skipped.  Imported boops are pinned.
+fn apply_import(
+  preview: &PreviewState,
+  params: &[(&str, f64)],
+  boops: &[BoopSpec],
+) {
+  let locked = preview.locked_params.read().unwrap().clone();
+  {
+    let mut voice = preview.voice.write().unwrap();
+    for &(name, value) in params {
+      if !locked.contains(name) {
+        preview_state::set_voice_param(&mut voice, name, value);
+      }
+    }
+  }
+
+  if !boops.is_empty() {
+    let mut specs = preview.boop_specs.write().unwrap();
+    let mut pins = preview.boop_pins.write().unwrap();
+    for (i, boop) in boops.iter().enumerate() {
+      if i < specs.len() {
+        specs[i] = boop.clone();
+        if i < pins.len() {
+          pins[i] = true;
+        }
+      }
+    }
+  }
+
+  preview
+    .drone_rebuild_requested
+    .store(true, Ordering::Relaxed);
+  preview.recompute_boop_specs();
+
+  let snapshot = preview.state_snapshot();
+  let _ = preview.broadcast_tx.send(snapshot);
 }

@@ -109,6 +109,7 @@ pub fn heartbeat_graph_with_volume(
 ) -> Box<dyn AudioUnit> {
   let count = Ord::min(specs.len(), severities.len());
   let chirp_ratio = voice.chirp_ratio as f32;
+  let brightness = voice.brightness as f32;
 
   let total_ratio = voice.sine_ratio + voice.tri_ratio + voice.saw_ratio;
   let norm = if total_ratio > 0.0 {
@@ -150,7 +151,8 @@ pub fn heartbeat_graph_with_volume(
       attack,
       release,
       harshness: profile.harshness as f32,
-      filter_cutoff: (freq * profile.filter_cutoff as f32).min(MAX_CUTOFF),
+      filter_cutoff: (freq * profile.filter_cutoff as f32 * brightness)
+        .min(MAX_CUTOFF),
       filter_q: profile.filter_q as f32,
     });
 
@@ -301,7 +303,10 @@ pub fn boop_graph(
   let waveform =
     sine_hz(freq) * sine_w + triangle_hz(freq) * tri_w + saw_hz(freq) * saw_w;
 
-  let cutoff = dc((freq * profile.filter_cutoff as f32).min(MAX_CUTOFF));
+  let cutoff = dc(
+    (freq * profile.filter_cutoff as f32 * voice.brightness as f32)
+      .min(MAX_CUTOFF),
+  );
   let q_val = dc(profile.filter_q as f32);
 
   let env = envelope(move |t: f32| {

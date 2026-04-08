@@ -11,6 +11,7 @@ module Protocol exposing
     , encodeClearOverride
     , encodeExportVoice
     , encodeGetState
+    , encodeImportConfig
     , encodeLockDrone
     , encodeLockParam
     , encodeOverrideCheck
@@ -118,6 +119,7 @@ type ServerMsg
     | LockedParamsChanged (List String)
     | LockedDronesChanged (List Int)
     | BoopSpecsChanged (List BoopSpecInfo)
+    | ImportError String
     | Connected
     | Disconnected
 
@@ -172,6 +174,9 @@ serverMsgDecoder =
 
                     "boop_specs_changed" ->
                         boopSpecsChangedDecoder
+
+                    "import_error" ->
+                        importErrorDecoder
 
                     "connected" ->
                         D.succeed Connected
@@ -410,6 +415,11 @@ boopSpecsChangedDecoder =
     D.map BoopSpecsChanged (D.field "specs" (D.list boopSpecInfoDecoder))
 
 
+importErrorDecoder : D.Decoder ServerMsg
+importErrorDecoder =
+    D.map ImportError (D.field "message" D.string)
+
+
 
 -- Client messages (outgoing)
 
@@ -621,5 +631,14 @@ encodeClearBoopPin index =
     E.object
         [ ( "type", E.string "clear_boop_pin" )
         , ( "index", E.int index )
+        ]
+        |> E.encode 0
+
+
+encodeImportConfig : String -> String
+encodeImportConfig text =
+    E.object
+        [ ( "type", E.string "import_config" )
+        , ( "text", E.string text )
         ]
         |> E.encode 0

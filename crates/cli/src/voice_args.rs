@@ -61,6 +61,10 @@ pub(crate) struct CliVoiceOverrides {
   /// Override echo wet/dry mix.
   #[arg(long, help_heading = "Voice overrides")]
   echo_mix: Option<f64>,
+
+  /// Override brightness (lowpass cutoff scaler, 0.05–1.0).
+  #[arg(long, help_heading = "Voice overrides")]
+  brightness: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -87,6 +91,7 @@ impl CliVoiceOverrides {
       note_seed: self.note_seed,
       echo_delay: self.echo_delay,
       echo_mix: self.echo_mix,
+      brightness: self.brightness,
     }
   }
 

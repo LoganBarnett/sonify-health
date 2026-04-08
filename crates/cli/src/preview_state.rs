@@ -115,6 +115,14 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
+  VoiceParamMeta {
+    name: "brightness",
+    description:
+      "Lowpass cutoff scaler. 1.0 = full brightness, lower = darker tone.",
+    min: 0.05,
+    max: 1.0,
+    step: 0.01,
+  },
 ];
 
 /// Metadata for a configured drone metric.
@@ -392,19 +400,22 @@ impl PreviewState {
   /// Format the current voice as a TOML `[voice]` block.
   pub fn export_toml(&self) -> String {
     let voice = self.voice.read().unwrap();
-    print::format_toml(&voice, &self.scale_key)
+    let specs = self.boop_specs.read().unwrap();
+    print::format_toml(&voice, &self.scale_key, &specs)
   }
 
   /// Format the current voice as a JSON object.
   pub fn export_json(&self) -> String {
     let voice = self.voice.read().unwrap();
-    print::format_json(&voice, &self.scale_key)
+    let specs = self.boop_specs.read().unwrap();
+    print::format_json(&voice, &self.scale_key, &specs)
   }
 
   /// Format the current voice as a Nix attribute set.
   pub fn export_nix(&self) -> String {
     let voice = self.voice.read().unwrap();
-    print::format_nix(&voice, &self.scale_key)
+    let specs = self.boop_specs.read().unwrap();
+    print::format_nix(&voice, &self.scale_key, &specs)
   }
 
   /// Reset everything to startup values.  Locked voice params
@@ -505,6 +516,7 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "note_seed" => Some(voice.note_seed),
     "echo_delay" => Some(voice.echo_delay),
     "echo_mix" => Some(voice.echo_mix),
+    "brightness" => Some(voice.brightness),
     _ => None,
   }
 }
@@ -523,6 +535,7 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "note_seed" => voice.note_seed = value,
     "echo_delay" => voice.echo_delay = value,
     "echo_mix" => voice.echo_mix = value,
+    "brightness" => voice.brightness = value,
     _ => return false,
   }
   true
@@ -542,6 +555,7 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "note_seed": voice.note_seed,
     "echo_delay": voice.echo_delay,
     "echo_mix": voice.echo_mix,
+    "brightness": voice.brightness,
   })
 }
 

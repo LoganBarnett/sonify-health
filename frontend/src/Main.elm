@@ -71,6 +71,8 @@ type alias Model =
     , lockedDrones : Set Int
     , boopSpecs : List BoopSpecInfo
     , boopSpecRanges : BoopSpecRanges
+    , importText : String
+    , importError : Maybe String
     }
 
 
@@ -108,6 +110,8 @@ type Msg
     | SetBoopDuration Int String
     | BoopDurationDebounce Int Int Float
     | ClearBoopPin Int
+    | SetImportText String
+    | SubmitImport
     | NoOp
 
 
@@ -157,6 +161,8 @@ init _ url key =
             , durationMax = 1.2
             , durationStep = 0.01
             }
+      , importText = ""
+      , importError = Nothing
       }
     , cmdForRoute route
     )
@@ -452,7 +458,7 @@ update msg model =
             )
 
         DismissExport ->
-            ( { model | exportData = Nothing }, Cmd.none )
+            ( { model | exportData = Nothing, importError = Nothing }, Cmd.none )
 
         SetExportTab tab ->
             ( { model | exportTab = tab }, Cmd.none )
@@ -581,6 +587,14 @@ update msg model =
         ClearBoopPin index ->
             ( model
             , Ports.websocketSend (encodeClearBoopPin index)
+            )
+
+        SetImportText text ->
+            ( { model | importText = text, importError = Nothing }, Cmd.none )
+
+        SubmitImport ->
+            ( { model | importError = Nothing }
+            , Ports.websocketSend (encodeImportConfig model.importText)
             )
 
         NoOp ->
@@ -743,6 +757,9 @@ handleServerMsg raw model =
 
         Just (BoopSpecsChanged specs) ->
             ( { model | boopSpecs = specs }, Cmd.none )
+
+        Just (ImportError message) ->
+            ( { model | importError = Just message }, Cmd.none )
 
         Just Connected ->
             ( { model | connected = True }, Cmd.none )
@@ -1243,17 +1260,6 @@ viewExportModal model =
     case model.exportData of
         Just data ->
             let
-                content =
-                    case model.exportTab of
-                        "json" ->
-                            data.json
-
-                        "nix" ->
-                            data.nix
-
-                        _ ->
-                            data.toml
-
                 tabButton label_ tabKey =
                     button
                         [ class
@@ -1266,6 +1272,54 @@ viewExportModal model =
                         , onClick (SetExportTab tabKey)
                         ]
                         [ text label_ ]
+
+                isImport =
+                    model.exportTab == "import"
+
+                modalBody =
+                    if isImport then
+                        div []
+                            [ textarea
+                                [ class "export-textarea"
+                                , placeholder "Paste TOML or JSON config here..."
+                                , value model.importText
+                                , onInput SetImportText
+                                ]
+                                []
+                            , case model.importError of
+                                Just err ->
+                                    p [ class "import-error" ] [ text err ]
+
+                                Nothing ->
+                                    text ""
+                            , button
+                                [ class "btn-action"
+                                , onClick SubmitImport
+                                ]
+                                [ text "Apply" ]
+                            ]
+
+                    else
+                        let
+                            content =
+                                case model.exportTab of
+                                    "json" ->
+                                        data.json
+
+                                    "nix" ->
+                                        data.nix
+
+                                    _ ->
+                                        data.toml
+                        in
+                        div []
+                            [ textarea
+                                [ class "export-textarea"
+                                , Html.Attributes.readonly True
+                                , value content
+                                ]
+                                []
+                            ]
             in
             div [ class "modal-backdrop", onClick DismissExport ]
                 [ div
@@ -1273,18 +1327,22 @@ viewExportModal model =
                     , Html.Events.stopPropagationOn "click"
                         (Decode.succeed ( NoOp, True ))
                     ]
-                    [ h3 [ class "modal-title" ] [ text "Export Voice" ]
+                    [ h3 [ class "modal-title" ]
+                        [ text
+                            (if isImport then
+                                "Import Config"
+
+                             else
+                                "Export Voice"
+                            )
+                        ]
                     , div [ class "tab-bar" ]
                         [ tabButton "TOML" "toml"
                         , tabButton "JSON" "json"
                         , tabButton "Nix" "nix"
+                        , tabButton "Import" "import"
                         ]
-                    , textarea
-                        [ class "export-textarea"
-                        , Html.Attributes.readonly True
-                        , value content
-                        ]
-                        []
+                    , modalBody
                     , button
                         [ class "btn-action"
                         , onClick DismissExport
