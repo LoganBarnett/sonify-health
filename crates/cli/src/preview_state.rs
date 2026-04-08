@@ -443,8 +443,8 @@ impl PreviewState {
 
     json!({
       "type": "state",
-      "heartbeat_voice": heartbeat_voice_json,
-      "heartbeat_locked_params": heartbeat_locked,
+      "voice": heartbeat_voice_json,
+      "locked_params": heartbeat_locked,
       "voice_params": voice_params_json,
       "muted": self.muted.load(Ordering::Relaxed),
       "heartbeat_volume": self.heartbeat_volume.value(),
@@ -734,8 +734,8 @@ mod tests {
   struct StateContract {
     #[serde(rename = "type")]
     msg_type: String,
-    heartbeat_voice: serde_json::Map<String, serde_json::Value>,
-    heartbeat_locked_params: Vec<String>,
+    voice: serde_json::Map<String, serde_json::Value>,
+    locked_params: Vec<String>,
     voice_params: Vec<VoiceParamContract>,
     muted: bool,
     heartbeat_volume: f64,
@@ -986,7 +986,7 @@ mod tests {
     let json = preview.state_snapshot();
     let state: StateContract =
       serde_json::from_str(&json).expect("state_snapshot should decode");
-    let hb_freq = state.heartbeat_voice["base_freq"].as_f64().unwrap();
+    let hb_freq = state.voice["base_freq"].as_f64().unwrap();
     let drone_freq = state.drones[0].voice["base_freq"].as_f64().unwrap();
     assert!((hb_freq - 111.0).abs() < f64::EPSILON);
     assert!((drone_freq - 222.0).abs() < f64::EPSILON);
