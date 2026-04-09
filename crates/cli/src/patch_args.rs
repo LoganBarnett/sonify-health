@@ -121,6 +121,18 @@ pub(crate) struct CliPatchOverrides {
   /// Override sustain level (0.0–1.0). Body amplitude after attack.
   #[arg(long, help_heading = "Patch overrides")]
   sustain: Option<f64>,
+
+  /// Override per-check output volume (0.0–2.0).
+  #[arg(long, help_heading = "Patch overrides")]
+  volume: Option<f64>,
+
+  /// Override phrase gap in seconds (0.0–16.0).
+  #[arg(long, help_heading = "Patch overrides")]
+  phrase_gap: Option<f64>,
+
+  /// Override repeat rate multiplier (0.1–10.0).
+  #[arg(long, help_heading = "Patch overrides")]
+  repeat_rate: Option<f64>,
 }
 
 impl CliPatchOverrides {
@@ -162,6 +174,9 @@ impl CliPatchOverrides {
       fm_depth: self.fm_depth,
       downsample: self.downsample,
       sustain: self.sustain,
+      volume: self.volume,
+      phrase_gap: self.phrase_gap,
+      repeat_rate: self.repeat_rate,
     }
   }
 

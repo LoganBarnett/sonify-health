@@ -227,6 +227,27 @@ pub struct Patch {
   )]
   pub sustain: f64,
 
+  #[patch_param(
+    order = 28, range = 0.1..0.5,
+    min = 0.0, max = 2.0, step = 0.01,
+    description = "Per-check output volume. 0 = silent, 2 = doubled."
+  )]
+  pub volume: f64,
+
+  #[patch_param(
+    order = 29, range = 0.0..4.0,
+    min = 0.0, max = 16.0, step = 0.1,
+    description = "Seconds of silence between phrase repetitions."
+  )]
+  pub phrase_gap: f64,
+
+  #[patch_param(
+    order = 30, range = 0.5..2.0,
+    min = 0.1, max = 10.0, step = 0.1,
+    description = "Speed multiplier on phrase repetition. Divides the gap."
+  )]
+  pub repeat_rate: f64,
+
   /// Per-note duration in seconds.  Not a `#[patch_param]` — set
   /// by `with_note()` or `heartbeat_notes()`/`drone_notes()`,
   /// defaulting to 0.0 from `from_hostname`.
@@ -481,6 +502,9 @@ mod tests {
       assert!((0.0..0.1).contains(&v.fm_depth));
       assert!((0.0..0.01).contains(&v.downsample));
       assert!((0.0..1.0).contains(&v.sustain));
+      assert!((0.1..0.5).contains(&v.volume));
+      assert!((0.0..4.0).contains(&v.phrase_gap));
+      assert!((0.5..2.0).contains(&v.repeat_rate));
     }
   }
 
@@ -650,7 +674,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 28);
+    assert_eq!(Patch::PARAMS.len(), 31);
   }
 
   #[test]

@@ -62,7 +62,6 @@ type alias Model =
     , heartbeatLoop : Bool
     , boopCount : Int
     , checks : List CheckInfo
-    , drones : List DroneInfo
     , checkLog : List CheckLogEntry
     , exportData : Maybe { toml : String, json : String, nix : String }
     , exportTab : String
@@ -91,14 +90,6 @@ type Msg
     | HeartbeatVolDebounce Int Float
     | SetBoopCount String
     | BoopCountDebounce Int Int
-    | SetDroneVolume Int String
-    | DroneVolDebounce Int Int Float
-    | SetDroneRepeatRate Int String
-    | DroneRepeatRateDebounce Int Int Float
-    | SetDroneRepeatCurve Int String
-    | DroneRepeatCurveDebounce Int Int Float
-    | SetDronePhraseGap Int String
-    | DronePhraseGapDebounce Int Int Float
     | SetDroneInterpCurve Int String
     | DroneInterpCurveDebounce Int Int Float
     | OverrideCheck Int String
@@ -160,7 +151,6 @@ init _ url key =
       , heartbeatLoop = False
       , boopCount = 1
       , checks = []
-      , drones = []
       , checkLog = []
       , exportData = Nothing
       , exportTab = "toml"
@@ -267,16 +257,11 @@ update msg model =
                     case ( layer, maybeIndex ) of
                         ( "drone_lo", Just i ) ->
                             ( { model
-                                | drones =
-                                    List.indexedMap
-                                        (\idx d ->
-                                            if idx == i then
-                                                { d | patchLo = List.map updateParam d.patchLo }
-
-                                            else
-                                                d
-                                        )
-                                        model.drones
+                                | checks =
+                                    updateCheckByKindIndex "drone"
+                                        i
+                                        (\c -> { c | patchLo = List.map updateParam c.patchLo })
+                                        model.checks
                                 , debounces = Dict.insert key id model.debounces
                                 , nextDebounce = id + 1
                               }
@@ -287,16 +272,11 @@ update msg model =
 
                         ( "drone_hi", Just i ) ->
                             ( { model
-                                | drones =
-                                    List.indexedMap
-                                        (\idx d ->
-                                            if idx == i then
-                                                { d | patchHi = List.map updateParam d.patchHi }
-
-                                            else
-                                                d
-                                        )
-                                        model.drones
+                                | checks =
+                                    updateCheckByKindIndex "drone"
+                                        i
+                                        (\c -> { c | patchHi = List.map updateParam c.patchHi })
+                                        model.checks
                                 , debounces = Dict.insert key id model.debounces
                                 , nextDebounce = id + 1
                               }
@@ -423,166 +403,19 @@ update msg model =
             else
                 ( model, Cmd.none )
 
-        SetDroneVolume index valStr ->
-            case String.toFloat valStr of
-                Just vol ->
-                    let
-                        id =
-                            model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d | volume = vol }
-
-                                    else
-                                        d
-                                )
-                                model.drones
-                    in
-                    ( { model
-                        | drones = newDrones
-                        , nextDebounce = id + 1
-                      }
-                    , Process.sleep 50
-                        |> Task.perform
-                            (\_ -> DroneVolDebounce id index vol)
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        DroneVolDebounce _ index vol ->
-            ( model
-            , Ports.websocketSend (encodeSetDroneVolume index vol)
-            )
-
-        SetDroneRepeatRate index valStr ->
-            case String.toFloat valStr of
-                Just rate ->
-                    let
-                        id =
-                            model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d | repeatRate = rate }
-
-                                    else
-                                        d
-                                )
-                                model.drones
-                    in
-                    ( { model
-                        | drones = newDrones
-                        , nextDebounce = id + 1
-                      }
-                    , Process.sleep 50
-                        |> Task.perform
-                            (\_ -> DroneRepeatRateDebounce id index rate)
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        DroneRepeatRateDebounce _ index rate ->
-            ( model
-            , Ports.websocketSend (encodeSetDroneRepeatRate index rate)
-            )
-
-        SetDroneRepeatCurve index valStr ->
-            case String.toFloat valStr of
-                Just curve ->
-                    let
-                        id =
-                            model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d | repeatCurve = curve }
-
-                                    else
-                                        d
-                                )
-                                model.drones
-                    in
-                    ( { model
-                        | drones = newDrones
-                        , nextDebounce = id + 1
-                      }
-                    , Process.sleep 50
-                        |> Task.perform
-                            (\_ -> DroneRepeatCurveDebounce id index curve)
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        DroneRepeatCurveDebounce _ index curve ->
-            ( model
-            , Ports.websocketSend (encodeSetDroneRepeatCurve index curve)
-            )
-
-        SetDronePhraseGap index valStr ->
-            case String.toFloat valStr of
-                Just gap ->
-                    let
-                        id =
-                            model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d | phraseGap = gap }
-
-                                    else
-                                        d
-                                )
-                                model.drones
-                    in
-                    ( { model
-                        | drones = newDrones
-                        , nextDebounce = id + 1
-                      }
-                    , Process.sleep 50
-                        |> Task.perform
-                            (\_ -> DronePhraseGapDebounce id index gap)
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        DronePhraseGapDebounce _ index gap ->
-            ( model
-            , Ports.websocketSend (encodeSetDronePhraseGap index gap)
-            )
-
         SetDroneInterpCurve index valStr ->
             case String.toFloat valStr of
                 Just curve ->
                     let
                         id =
                             model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d | interpCurve = curve }
-
-                                    else
-                                        d
-                                )
-                                model.drones
                     in
                     ( { model
-                        | drones = newDrones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                index
+                                (\c -> { c | interpCurve = curve })
+                                model.checks
                         , nextDebounce = id + 1
                       }
                     , Process.sleep 50
@@ -608,7 +441,10 @@ update msg model =
             else
                 ( model
                 , Ports.websocketSend
-                    (encodeOverrideCheck "heartbeat" index severity)
+                    (encodeOverrideCheck "heartbeat"
+                        index
+                        (severityToMetric severity)
+                    )
                 )
 
         ClearCheckOverride index ->
@@ -631,19 +467,14 @@ update msg model =
             case String.toFloat valStr of
                 Just val ->
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d | value = val }
-
-                                    else
-                                        d
-                                )
-                                model.drones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                index
+                                (\c -> { c | value = val })
+                                model.checks
                       }
                     , Ports.websocketSend
-                        (Protocol.encodeOverrideDrone index val)
+                        (encodeOverrideCheck "drone" index val)
                     )
 
                 Nothing ->
@@ -689,34 +520,27 @@ update msg model =
                 ( "drone_lo", Just i ) ->
                     let
                         isLocked =
-                            List.drop i model.drones
-                                |> List.head
+                            getCheckByKindIndex "drone" i model.checks
                                 |> Maybe.map
-                                    (\d -> List.member param d.lockedParamsLo)
+                                    (\c -> List.member param c.lockedParamsLo)
                                 |> Maybe.withDefault False
-
-                        toggleLocked d =
-                            if isLocked then
-                                { d
-                                    | lockedParamsLo =
-                                        List.filter (\p -> p /= param)
-                                            d.lockedParamsLo
-                                }
-
-                            else
-                                { d | lockedParamsLo = param :: d.lockedParamsLo }
                     in
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\idx d ->
-                                    if idx == i then
-                                        toggleLocked d
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                i
+                                (\c ->
+                                    if isLocked then
+                                        { c
+                                            | lockedParamsLo =
+                                                List.filter (\p -> p /= param)
+                                                    c.lockedParamsLo
+                                        }
 
                                     else
-                                        d
+                                        { c | lockedParamsLo = param :: c.lockedParamsLo }
                                 )
-                                model.drones
+                                model.checks
                       }
                     , Ports.websocketSend
                         (if isLocked then
@@ -730,34 +554,27 @@ update msg model =
                 ( "drone_hi", Just i ) ->
                     let
                         isLocked =
-                            List.drop i model.drones
-                                |> List.head
+                            getCheckByKindIndex "drone" i model.checks
                                 |> Maybe.map
-                                    (\d -> List.member param d.lockedParamsHi)
+                                    (\c -> List.member param c.lockedParamsHi)
                                 |> Maybe.withDefault False
-
-                        toggleLocked d =
-                            if isLocked then
-                                { d
-                                    | lockedParamsHi =
-                                        List.filter (\p -> p /= param)
-                                            d.lockedParamsHi
-                                }
-
-                            else
-                                { d | lockedParamsHi = param :: d.lockedParamsHi }
                     in
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\idx d ->
-                                    if idx == i then
-                                        toggleLocked d
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                i
+                                (\c ->
+                                    if isLocked then
+                                        { c
+                                            | lockedParamsHi =
+                                                List.filter (\p -> p /= param)
+                                                    c.lockedParamsHi
+                                        }
 
                                     else
-                                        d
+                                        { c | lockedParamsHi = param :: c.lockedParamsHi }
                                 )
-                                model.drones
+                                model.checks
                       }
                     , Ports.websocketSend
                         (if isLocked then
@@ -907,40 +724,39 @@ update msg model =
                 Just freq ->
                     let
                         key =
-                            "drone_note_freq:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+                            "drone_note_freq:"
+                                ++ String.fromInt droneIdx
+                                ++ ":"
+                                ++ String.fromInt noteIdx
 
                         id =
                             model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\di d ->
-                                    if di == droneIdx then
-                                        { d
-                                            | droneSpecs =
-                                                List.indexedMap
-                                                    (\ni s ->
-                                                        if ni == noteIdx then
-                                                            { s | freq = freq, pinned = True }
-
-                                                        else
-                                                            s
-                                                    )
-                                                    d.droneSpecs
-                                        }
-
-                                    else
-                                        d
-                                )
-                                model.drones
                     in
                     ( { model
-                        | drones = newDrones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                droneIdx
+                                (\c ->
+                                    { c
+                                        | specs =
+                                            List.indexedMap
+                                                (\ni s ->
+                                                    if ni == noteIdx then
+                                                        { s | freq = freq, pinned = True }
+
+                                                    else
+                                                        s
+                                                )
+                                                c.specs
+                                    }
+                                )
+                                model.checks
                         , debounces = Dict.insert key id model.debounces
                         , nextDebounce = id + 1
                       }
                     , Process.sleep 50
-                        |> Task.perform (\_ -> DroneNoteFreqDebounce droneIdx noteIdx id freq)
+                        |> Task.perform
+                            (\_ -> DroneNoteFreqDebounce droneIdx noteIdx id freq)
                     )
 
                 Nothing ->
@@ -949,7 +765,10 @@ update msg model =
         DroneNoteFreqDebounce droneIdx noteIdx id freq ->
             let
                 key =
-                    "drone_note_freq:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+                    "drone_note_freq:"
+                        ++ String.fromInt droneIdx
+                        ++ ":"
+                        ++ String.fromInt noteIdx
             in
             if Dict.get key model.debounces == Just id then
                 ( model
@@ -965,40 +784,39 @@ update msg model =
                 Just dur ->
                     let
                         key =
-                            "drone_note_dur:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+                            "drone_note_dur:"
+                                ++ String.fromInt droneIdx
+                                ++ ":"
+                                ++ String.fromInt noteIdx
 
                         id =
                             model.nextDebounce
-
-                        newDrones =
-                            List.indexedMap
-                                (\di d ->
-                                    if di == droneIdx then
-                                        { d
-                                            | droneSpecs =
-                                                List.indexedMap
-                                                    (\ni s ->
-                                                        if ni == noteIdx then
-                                                            { s | duration = dur, pinned = True }
-
-                                                        else
-                                                            s
-                                                    )
-                                                    d.droneSpecs
-                                        }
-
-                                    else
-                                        d
-                                )
-                                model.drones
                     in
                     ( { model
-                        | drones = newDrones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                droneIdx
+                                (\c ->
+                                    { c
+                                        | specs =
+                                            List.indexedMap
+                                                (\ni s ->
+                                                    if ni == noteIdx then
+                                                        { s | duration = dur, pinned = True }
+
+                                                    else
+                                                        s
+                                                )
+                                                c.specs
+                                    }
+                                )
+                                model.checks
                         , debounces = Dict.insert key id model.debounces
                         , nextDebounce = id + 1
                       }
                     , Process.sleep 50
-                        |> Task.perform (\_ -> DroneNoteDurationDebounce droneIdx noteIdx id dur)
+                        |> Task.perform
+                            (\_ -> DroneNoteDurationDebounce droneIdx noteIdx id dur)
                     )
 
                 Nothing ->
@@ -1007,7 +825,10 @@ update msg model =
         DroneNoteDurationDebounce droneIdx noteIdx id dur ->
             let
                 key =
-                    "drone_note_dur:" ++ String.fromInt droneIdx ++ ":" ++ String.fromInt noteIdx
+                    "drone_note_dur:"
+                        ++ String.fromInt droneIdx
+                        ++ ":"
+                        ++ String.fromInt noteIdx
             in
             if Dict.get key model.debounces == Just id then
                 ( model
@@ -1047,7 +868,6 @@ handleServerMsg raw model =
                 , heartbeatLoop = s.heartbeatLoop
                 , boopCount = s.boopCount
                 , checks = s.checks
-                , drones = s.drones
                 , lockedParams = Set.fromList s.lockedParams
                 , lockedDrones = Set.fromList s.lockedDrones
                 , boopSpecs = s.boopSpecs
@@ -1069,32 +889,22 @@ handleServerMsg raw model =
             case ( layer, maybeIndex ) of
                 ( "drone_lo", Just i ) ->
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\idx d ->
-                                    if idx == i then
-                                        { d | patchLo = List.map updateParam d.patchLo }
-
-                                    else
-                                        d
-                                )
-                                model.drones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                i
+                                (\c -> { c | patchLo = List.map updateParam c.patchLo })
+                                model.checks
                       }
                     , Cmd.none
                     )
 
                 ( "drone_hi", Just i ) ->
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\idx d ->
-                                    if idx == i then
-                                        { d | patchHi = List.map updateParam d.patchHi }
-
-                                    else
-                                        d
-                                )
-                                model.drones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                i
+                                (\c -> { c | patchHi = List.map updateParam c.patchHi })
+                                model.checks
                       }
                     , Cmd.none
                     )
@@ -1115,155 +925,46 @@ handleServerMsg raw model =
                 "heartbeat" ->
                     ( { model | heartbeatVolume = vol }, Cmd.none )
 
-                "drone" ->
-                    case maybeIndex of
-                        Just index ->
-                            ( { model
-                                | drones =
-                                    List.indexedMap
-                                        (\i d ->
-                                            if i == index then
-                                                { d | volume = vol }
-
-                                            else
-                                                d
-                                        )
-                                        model.drones
-                              }
-                            , Cmd.none
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
                 _ ->
                     ( model, Cmd.none )
 
         Just (OverrideChanged layer index maybeValue overridden) ->
-            case layer of
-                "heartbeat" ->
-                    ( { model
-                        | checks =
-                            List.indexedMap
-                                (\i c ->
-                                    if i == index then
-                                        { c
-                                            | severity =
-                                                Maybe.withDefault
-                                                    c.severity
-                                                    maybeValue
-                                            , overridden = overridden
-                                        }
-
-                                    else
-                                        c
-                                )
-                                model.checks
-                      }
-                    , Cmd.none
-                    )
-
-                "drone" ->
-                    ( { model
-                        | drones =
-                            List.indexedMap
-                                (\i d ->
-                                    if i == index then
-                                        { d
-                                            | overridden = overridden
-                                            , value =
-                                                maybeValue
-                                                    |> Maybe.andThen String.toFloat
-                                                    |> Maybe.withDefault d.value
-                                        }
-
-                                    else
-                                        d
-                                )
-                                model.drones
-                      }
-                    , Cmd.none
-                    )
-
-                _ ->
-                    ( model, Cmd.none )
+            ( { model
+                | checks =
+                    updateCheckByKindIndex layer
+                        index
+                        (\c ->
+                            { c
+                                | value =
+                                    maybeValue
+                                        |> Maybe.andThen String.toFloat
+                                        |> Maybe.withDefault c.value
+                                , overridden = overridden
+                            }
+                        )
+                        model.checks
+              }
+            , Cmd.none
+            )
 
         Just (DroneConfigChanged index boops) ->
             ( { model
-                | drones =
-                    List.indexedMap
-                        (\i d ->
-                            if i == index then
-                                { d | boops = boops }
-
-                            else
-                                d
-                        )
-                        model.drones
-              }
-            , Cmd.none
-            )
-
-        Just (DroneRepeatRateChanged index rate) ->
-            ( { model
-                | drones =
-                    List.indexedMap
-                        (\i d ->
-                            if i == index then
-                                { d | repeatRate = rate }
-
-                            else
-                                d
-                        )
-                        model.drones
-              }
-            , Cmd.none
-            )
-
-        Just (DroneRepeatCurveChanged index curve) ->
-            ( { model
-                | drones =
-                    List.indexedMap
-                        (\i d ->
-                            if i == index then
-                                { d | repeatCurve = curve }
-
-                            else
-                                d
-                        )
-                        model.drones
-              }
-            , Cmd.none
-            )
-
-        Just (DronePhraseGapChanged index gap) ->
-            ( { model
-                | drones =
-                    List.indexedMap
-                        (\i d ->
-                            if i == index then
-                                { d | phraseGap = gap }
-
-                            else
-                                d
-                        )
-                        model.drones
+                | checks =
+                    updateCheckByKindIndex "drone"
+                        index
+                        (\c -> { c | boops = boops })
+                        model.checks
               }
             , Cmd.none
             )
 
         Just (DroneInterpCurveChanged index curve) ->
             ( { model
-                | drones =
-                    List.indexedMap
-                        (\i d ->
-                            if i == index then
-                                { d | interpCurve = curve }
-
-                            else
-                                d
-                        )
-                        model.drones
+                | checks =
+                    updateCheckByKindIndex "drone"
+                        index
+                        (\c -> { c | interpCurve = curve })
+                        model.checks
               }
             , Cmd.none
             )
@@ -1286,32 +987,22 @@ handleServerMsg raw model =
             case ( layer, maybeIndex ) of
                 ( "drone_lo", Just i ) ->
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\idx d ->
-                                    if idx == i then
-                                        { d | lockedParamsLo = params }
-
-                                    else
-                                        d
-                                )
-                                model.drones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                i
+                                (\c -> { c | lockedParamsLo = params })
+                                model.checks
                       }
                     , Cmd.none
                     )
 
                 ( "drone_hi", Just i ) ->
                     ( { model
-                        | drones =
-                            List.indexedMap
-                                (\idx d ->
-                                    if idx == i then
-                                        { d | lockedParamsHi = params }
-
-                                    else
-                                        d
-                                )
-                                model.drones
+                        | checks =
+                            updateCheckByKindIndex "drone"
+                                i
+                                (\c -> { c | lockedParamsHi = params })
+                                model.checks
                       }
                     , Cmd.none
                     )
@@ -1329,16 +1020,11 @@ handleServerMsg raw model =
 
         Just (DroneSpecsChanged index newSpecs) ->
             ( { model
-                | drones =
-                    List.indexedMap
-                        (\i d ->
-                            if i == index then
-                                { d | droneSpecs = newSpecs }
-
-                            else
-                                d
-                        )
-                        model.drones
+                | checks =
+                    updateCheckByKindIndex "drone"
+                        index
+                        (\c -> { c | specs = newSpecs })
+                        model.checks
               }
             , Cmd.none
             )
@@ -1551,6 +1237,10 @@ viewPatchSlider layer maybeIndex locked param =
 
 viewHeartbeatPanel : Model -> Html Msg
 viewHeartbeatPanel model =
+    let
+        hbChecks =
+            List.filter (\c -> c.kind == "heartbeat") model.checks
+    in
     section [ class "panel" ]
         [ h2 [ class "panel-heading" ] [ text "Heartbeat" ]
         , div [ class "control-row" ]
@@ -1607,14 +1297,14 @@ viewHeartbeatPanel model =
                 ]
                 [ text "Play Now" ]
             ]
-        , viewBoopSpecs model.boopCount model.checks model.boopSpecs model.boopSpecRanges
-        , if List.isEmpty model.checks then
+        , viewBoopSpecs model.boopCount hbChecks model.boopSpecs model.boopSpecRanges
+        , if List.isEmpty hbChecks then
             text ""
 
           else
             div [ class "checks-list" ]
                 (h3 [ class "panel-subheading" ] [ text "Checks" ]
-                    :: List.indexedMap viewCheck model.checks
+                    :: List.map viewCheck hbChecks
                 )
         , if List.isEmpty model.patch then
             text ""
@@ -1716,14 +1406,18 @@ viewBoopRow boopCount checks ranges index spec =
         ]
 
 
-viewCheck : Int -> CheckInfo -> Html Msg
-viewCheck index check =
+viewCheck : CheckInfo -> Html Msg
+viewCheck check =
+    let
+        severity =
+            metricToSeverity check.value
+    in
     div [ class "check-row" ]
         [ span [ class "check-name" ] [ text check.name ]
-        , span [ class ("badge-" ++ check.severity) ]
-            [ text check.severity ]
+        , span [ class ("badge-" ++ severity) ]
+            [ text severity ]
         , select
-            [ onInput (OverrideCheck index)
+            [ onInput (OverrideCheck check.checkIndex)
             , class "override-select"
             ]
             [ option
@@ -1733,17 +1427,17 @@ viewCheck index check =
                 [ text "live" ]
             , option
                 [ value "healthy"
-                , selected (check.overridden && check.severity == "healthy")
+                , selected (check.overridden && severity == "healthy")
                 ]
                 [ text "healthy" ]
             , option
                 [ value "degraded"
-                , selected (check.overridden && check.severity == "degraded")
+                , selected (check.overridden && severity == "degraded")
                 ]
                 [ text "degraded" ]
             , option
                 [ value "down"
-                , selected (check.overridden && check.severity == "down")
+                , selected (check.overridden && severity == "down")
                 ]
                 [ text "down" ]
             ]
@@ -1757,23 +1451,27 @@ viewCheck index check =
 
 viewDronePanel : Model -> Html Msg
 viewDronePanel model =
+    let
+        dChecks =
+            List.filter (\c -> c.kind == "drone") model.checks
+    in
     section [ class "panel" ]
         [ h2 [ class "panel-heading" ] [ text "Drones" ]
-        , if List.isEmpty model.drones then
+        , if List.isEmpty dChecks then
             p [ class "text-muted" ] [ text "No drone metrics configured." ]
 
           else
             div [ class "drone-list" ]
-                (List.indexedMap
-                    (viewDrone model.lockedDrones)
-                    model.drones
-                )
+                (List.map (viewDrone model.lockedDrones) dChecks)
         ]
 
 
-viewDrone : Set Int -> Int -> DroneInfo -> Html Msg
-viewDrone lockedDrones index drone =
+viewDrone : Set Int -> CheckInfo -> Html Msg
+viewDrone lockedDrones check =
     let
+        index =
+            check.checkIndex
+
         isLocked =
             Set.member index lockedDrones
     in
@@ -1797,7 +1495,7 @@ viewDrone lockedDrones index drone =
                         "U"
                     )
                 ]
-            , span [ class "drone-name" ] [ text drone.name ]
+            , span [ class "drone-name" ] [ text check.name ]
             , label [ class "slider-label" ] [ text "Boops" ]
             , select
                 [ onInput (SetDroneBoops index)
@@ -1806,103 +1504,11 @@ viewDrone lockedDrones index drone =
                 (List.map
                     (\n ->
                         option
-                            [ value (String.fromInt n), selected (drone.boops == n) ]
+                            [ value (String.fromInt n), selected (check.boops == n) ]
                             [ text (String.fromInt n) ]
                     )
                     (List.range 1 8)
                 )
-            ]
-        , div [ class "control-row" ]
-            [ label [ class "slider-label" ] [ text "Volume" ]
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "1"
-                , step "0.01"
-                , value (String.fromFloat drone.volume)
-                , onInput (SetDroneVolume index)
-                , class "slider"
-                ]
-                []
-            , input
-                [ type_ "number"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "1"
-                , step "0.01"
-                , value (String.fromFloat drone.volume)
-                , onInput (SetDroneVolume index)
-                , class "slider-value-input"
-                ]
-                []
-            ]
-        , div [ class "control-row" ]
-            [ label [ class "slider-label" ] [ text "Repeat" ]
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0.1"
-                , Html.Attributes.max "10"
-                , step "0.1"
-                , value (String.fromFloat drone.repeatRate)
-                , onInput (SetDroneRepeatRate index)
-                , class "slider"
-                ]
-                []
-            , input
-                [ type_ "number"
-                , Html.Attributes.min "0.1"
-                , Html.Attributes.max "10"
-                , step "0.1"
-                , value (String.fromFloat drone.repeatRate)
-                , onInput (SetDroneRepeatRate index)
-                , class "slider-value-input"
-                ]
-                []
-            ]
-        , div [ class "control-row" ]
-            [ label [ class "slider-label" ] [ text "Curve" ]
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0.1"
-                , Html.Attributes.max "5"
-                , step "0.1"
-                , value (String.fromFloat drone.repeatCurve)
-                , onInput (SetDroneRepeatCurve index)
-                , class "slider"
-                ]
-                []
-            , input
-                [ type_ "number"
-                , Html.Attributes.min "0.1"
-                , Html.Attributes.max "5"
-                , step "0.1"
-                , value (String.fromFloat drone.repeatCurve)
-                , onInput (SetDroneRepeatCurve index)
-                , class "slider-value-input"
-                ]
-                []
-            ]
-        , div [ class "control-row" ]
-            [ label [ class "slider-label" ] [ text "Gap" ]
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "16"
-                , step "0.1"
-                , value (String.fromFloat drone.phraseGap)
-                , onInput (SetDronePhraseGap index)
-                , class "slider"
-                ]
-                []
-            , input
-                [ type_ "number"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "16"
-                , step "0.1"
-                , value (String.fromFloat drone.phraseGap)
-                , onInput (SetDronePhraseGap index)
-                , class "slider-value-input"
-                ]
-                []
             ]
         , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Interp" ]
@@ -1911,7 +1517,7 @@ viewDrone lockedDrones index drone =
                 , Html.Attributes.min "0.1"
                 , Html.Attributes.max "5"
                 , step "0.1"
-                , value (String.fromFloat drone.interpCurve)
+                , value (String.fromFloat check.interpCurve)
                 , onInput (SetDroneInterpCurve index)
                 , class "slider"
                 ]
@@ -1921,7 +1527,7 @@ viewDrone lockedDrones index drone =
                 , Html.Attributes.min "0.1"
                 , Html.Attributes.max "5"
                 , step "0.1"
-                , value (String.fromFloat drone.interpCurve)
+                , value (String.fromFloat check.interpCurve)
                 , onInput (SetDroneInterpCurve index)
                 , class "slider-value-input"
                 ]
@@ -1930,8 +1536,8 @@ viewDrone lockedDrones index drone =
         , div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Value" ]
             , span [ class "slider-value" ]
-                [ text (formatFloat drone.value) ]
-            , if drone.overridden then
+                [ text (formatFloat check.value) ]
+            , if check.overridden then
                 button
                     [ class "btn-live"
                     , onClick (ClearDroneOverride index)
@@ -1948,30 +1554,30 @@ viewDrone lockedDrones index drone =
                 , Html.Attributes.min "0"
                 , Html.Attributes.max "1"
                 , step "0.01"
-                , value (String.fromFloat drone.value)
+                , value (String.fromFloat check.value)
                 , onInput (OverrideDroneValue index)
                 , class "slider"
                 ]
                 []
             ]
-        , viewDroneBoopSpecs index drone.droneSpecs drone.droneSpecRanges
+        , viewDroneBoopSpecs index check.specs check.specRanges
         , h3 [ class "panel-subheading" ] [ text "Patch Lo" ]
         , div [ class "slider-grid" ]
             (List.map
                 (viewPatchSlider "drone_lo"
                     (Just index)
-                    (Set.fromList drone.lockedParamsLo)
+                    (Set.fromList check.lockedParamsLo)
                 )
-                drone.patchLo
+                check.patchLo
             )
         , h3 [ class "panel-subheading" ] [ text "Patch Hi" ]
         , div [ class "slider-grid" ]
             (List.map
                 (viewPatchSlider "drone_hi"
                     (Just index)
-                    (Set.fromList drone.lockedParamsHi)
+                    (Set.fromList check.lockedParamsHi)
                 )
-                drone.patchHi
+                check.patchHi
             )
         ]
 
@@ -2205,3 +1811,50 @@ formatFloat f =
 
     else
         s ++ ".0"
+
+
+updateCheckByKindIndex : String -> Int -> (CheckInfo -> CheckInfo) -> List CheckInfo -> List CheckInfo
+updateCheckByKindIndex kind idx updater checks =
+    List.map
+        (\c ->
+            if c.kind == kind && c.checkIndex == idx then
+                updater c
+
+            else
+                c
+        )
+        checks
+
+
+getCheckByKindIndex : String -> Int -> List CheckInfo -> Maybe CheckInfo
+getCheckByKindIndex kind idx checks =
+    List.filter (\c -> c.kind == kind && c.checkIndex == idx) checks
+        |> List.head
+
+
+metricToSeverity : Float -> String
+metricToSeverity v =
+    if v <= 0.25 then
+        "healthy"
+
+    else if v <= 0.75 then
+        "degraded"
+
+    else
+        "down"
+
+
+severityToMetric : String -> Float
+severityToMetric severity =
+    case severity of
+        "healthy" ->
+            0.0
+
+        "degraded" ->
+            0.5
+
+        "down" ->
+            1.0
+
+        _ ->
+            0.0

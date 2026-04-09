@@ -374,6 +374,9 @@ impl PreviewState {
     let locked = self.locked_params.read().unwrap();
     let specs = self.boop_specs.read().unwrap();
     let pins = self.boop_pins.read().unwrap();
+    let drone_specs_all = self.drone_boop_specs.read().unwrap();
+    let drone_pins_all = self.drone_boop_pins.read().unwrap();
+    let boops_per_check = self.boop_count.load(Ordering::Relaxed);
 
     let heartbeat_voice_json =
       serde_json::to_value(heartbeat_voice).unwrap_or_default();
@@ -396,30 +399,67 @@ impl PreviewState {
       })
       .collect();
 
-    let checks_json: Vec<_> = self
-      .check_names
-      .iter()
-      .enumerate()
-      .map(|(i, name)| {
-        let severity =
-          severity_from_metric(self.heartbeat_state.metrics[i].value());
-        json!({
-          "name": name,
-          "severity": severity.to_string(),
-          "overridden": hb_overrides[i].is_some(),
-        })
-      })
-      .collect();
-
     let base_freq_meta = Patch::PARAMS
       .iter()
       .find(|p| p.name == "base_freq")
       .unwrap();
 
-    let drone_specs = self.drone_boop_specs.read().unwrap();
-    let drone_pins = self.drone_boop_pins.read().unwrap();
+    let common_spec_ranges = json!({
+      "freq_min": base_freq_meta.min / 2.0,
+      "freq_max": base_freq_meta.max,
+      "freq_step": 1.0,
+      "duration_min": 0.05,
+      "duration_max": self.slot_secs,
+      "duration_step": 0.01,
+    });
 
-    let drones_json: Vec<_> = drone_infos
+    // Build unified checks array: heartbeat checks first, then
+    // drones.  Each entry carries the full set of fields so the
+    // frontend can treat them uniformly.
+    let heartbeat_checks_json: Vec<_> = self
+      .check_names
+      .iter()
+      .enumerate()
+      .map(|(i, name)| {
+        let start = i * boops_per_check;
+        let end = (start + boops_per_check).min(specs.len());
+        let check_specs: Vec<_> = if start < specs.len() {
+          specs[start..end]
+            .iter()
+            .enumerate()
+            .map(|(j, spec)| {
+              json!({
+                "freq": spec.freq,
+                "duration": spec.duration,
+                "pinned": pins
+                  .get(start + j)
+                  .copied()
+                  .unwrap_or(false),
+              })
+            })
+            .collect()
+        } else {
+          vec![]
+        };
+        json!({
+          "name": name,
+          "kind": "heartbeat",
+          "check_index": i,
+          "value": self.heartbeat_state.metrics[i].value(),
+          "interp_curve": 1.0,
+          "boops": boops_per_check,
+          "overridden": hb_overrides[i].is_some(),
+          "patch_lo": heartbeat_voice_json.clone(),
+          "patch_hi": heartbeat_voice_json.clone(),
+          "locked_params_lo": heartbeat_locked.clone(),
+          "locked_params_hi": heartbeat_locked.clone(),
+          "specs": check_specs,
+          "spec_ranges": common_spec_ranges.clone(),
+        })
+      })
+      .collect();
+
+    let drone_checks_json: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
@@ -439,8 +479,8 @@ impl PreviewState {
           .get(&PatchOwner::DroneHi(i))
           .map(|s| s.iter().map(|p| json!(p)).collect())
           .unwrap_or_default();
-        let d_specs = drone_specs.get(i).cloned().unwrap_or_default();
-        let d_pins = drone_pins.get(i).cloned().unwrap_or_default();
+        let d_specs = drone_specs_all.get(i).cloned().unwrap_or_default();
+        let d_pins = drone_pins_all.get(i).cloned().unwrap_or_default();
         let specs_json: Vec<_> = d_specs
           .iter()
           .enumerate()
@@ -448,12 +488,17 @@ impl PreviewState {
             json!({
               "freq": spec.freq,
               "duration": spec.duration,
-              "pinned": d_pins.get(j).copied().unwrap_or(false),
+              "pinned": d_pins
+                .get(j)
+                .copied()
+                .unwrap_or(false),
             })
           })
           .collect();
         json!({
           "name": info.name,
+          "kind": "drone",
+          "check_index": i,
           "value": self.drone_state.metrics[i].value(),
           "interp_curve": self.drone_interp_curves[i].value(),
           "boops": info.boops,
@@ -463,17 +508,13 @@ impl PreviewState {
           "locked_params_lo": lo_locked,
           "locked_params_hi": hi_locked,
           "specs": specs_json,
-          "spec_ranges": {
-            "freq_min": base_freq_meta.min / 2.0,
-            "freq_max": base_freq_meta.max,
-            "freq_step": 1.0,
-            "duration_min": 0.05,
-            "duration_max": self.slot_secs,
-            "duration_step": 0.01,
-          },
+          "spec_ranges": common_spec_ranges.clone(),
         })
       })
       .collect();
+
+    let mut checks_json = heartbeat_checks_json;
+    checks_json.extend(drone_checks_json);
 
     let locked_drones = self.locked_drones.read().unwrap();
     let locked_drones_json: Vec<_> =
@@ -502,17 +543,9 @@ impl PreviewState {
       "heartbeat_loop": self.heartbeat_loop.load(Ordering::Relaxed),
       "boop_count": self.boop_count.load(Ordering::Relaxed),
       "checks": checks_json,
-      "drones": drones_json,
       "locked_drones": locked_drones_json,
       "boop_specs": boop_specs_json,
-      "boop_spec_ranges": {
-        "freq_min": base_freq_meta.min / 2.0,
-        "freq_max": base_freq_meta.max,
-        "freq_step": 1.0,
-        "duration_min": 0.05,
-        "duration_max": self.slot_secs,
-        "duration_step": 0.01,
-      },
+      "boop_spec_ranges": common_spec_ranges,
     })
     .to_string()
   }
@@ -769,7 +802,6 @@ mod tests {
     heartbeat_loop: bool,
     boop_count: u64,
     checks: Vec<CheckContract>,
-    drones: Vec<DroneContract>,
     locked_drones: Vec<u64>,
     boop_specs: Vec<NoteSpecContract>,
     boop_spec_ranges: NoteSpecRangesContract,
@@ -784,17 +816,13 @@ mod tests {
     step: f64,
   }
 
+  /// Unified check contract — heartbeat and drone checks share
+  /// the same shape.
   #[derive(Deserialize)]
   struct CheckContract {
     name: String,
-    severity: String,
-    overridden: bool,
-  }
-
-  /// Mirrors the Elm `DroneInfo` decoder.
-  #[derive(Deserialize)]
-  struct DroneContract {
-    name: String,
+    kind: String,
+    check_index: u64,
     value: f64,
     interp_curve: f64,
     boops: u64,
@@ -870,11 +898,13 @@ mod tests {
 
     assert_eq!(state.msg_type, "state");
     assert!(!state.patch_params.is_empty());
-    assert_eq!(state.checks.len(), 1);
+    // Unified checks: 1 heartbeat ("cpu") + 1 drone ("load").
+    assert_eq!(state.checks.len(), 2);
     assert_eq!(state.checks[0].name, "cpu");
-    assert_eq!(state.drones.len(), 1);
-    assert_eq!(state.drones[0].name, "load");
-    assert_eq!(state.drones[0].boops, 2);
+    assert_eq!(state.checks[0].kind, "heartbeat");
+    assert_eq!(state.checks[1].name, "load");
+    assert_eq!(state.checks[1].kind, "drone");
+    assert_eq!(state.checks[1].boops, 2);
   }
 
   #[test]
@@ -992,8 +1022,10 @@ mod tests {
     let state: StateContract =
       serde_json::from_str(&json).expect("state_snapshot should decode");
     let hb_freq = state.patch["base_freq"].as_f64().unwrap();
-    let lo_freq = state.drones[0].patch_lo["base_freq"].as_f64().unwrap();
-    let hi_freq = state.drones[0].patch_hi["base_freq"].as_f64().unwrap();
+    // The drone is the second entry in the unified checks array
+    // (index 1, after the heartbeat check at index 0).
+    let lo_freq = state.checks[1].patch_lo["base_freq"].as_f64().unwrap();
+    let hi_freq = state.checks[1].patch_hi["base_freq"].as_f64().unwrap();
     assert!((hb_freq - 111.0).abs() < f64::EPSILON);
     assert!((lo_freq - 222.0).abs() < f64::EPSILON);
     assert!((hi_freq - 333.0).abs() < f64::EPSILON);
@@ -1099,35 +1131,37 @@ mod tests {
             )
           });
 
+        let total = heartbeat_checks.len() + drone_checks.len();
         assert_eq!(
           state.checks.len(),
-          heartbeat_checks.len(),
-          "{}: check count mismatch",
+          total,
+          "{}: unified check count mismatch",
           path.display()
         );
-        assert_eq!(
-          state.drones.len(),
-          drone_checks.len(),
-          "{}: drone count mismatch",
-          path.display()
-        );
-        for (i, drone) in state.drones.iter().enumerate() {
-          assert_eq!(
-            drone.name,
-            drone_checks[i].name,
-            "{}: drone[{i}] name mismatch",
-            path.display()
-          );
-          assert!(
-            !drone.patch_lo.is_empty(),
-            "{}: drone[{i}] patch_lo is empty",
-            path.display()
-          );
-          assert!(
-            !drone.patch_hi.is_empty(),
-            "{}: drone[{i}] patch_hi is empty",
-            path.display()
-          );
+        // Heartbeat checks come first.
+        for (i, c) in state.checks.iter().enumerate() {
+          if i < heartbeat_checks.len() {
+            assert_eq!(
+              c.kind,
+              "heartbeat",
+              "{}: check[{i}] kind",
+              path.display()
+            );
+          } else {
+            let di = i - heartbeat_checks.len();
+            assert_eq!(c.kind, "drone", "{}: check[{i}] kind", path.display());
+            assert_eq!(
+              c.name,
+              drone_checks[di].name,
+              "{}: check[{i}] name",
+              path.display()
+            );
+            assert!(
+              !c.patch_lo.is_empty(),
+              "{}: check[{i}] patch_lo is empty",
+              path.display()
+            );
+          }
         }
         tested += 1;
       }

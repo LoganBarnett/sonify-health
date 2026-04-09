@@ -3,7 +3,6 @@ module Protocol exposing
     , BoopSpecRanges
     , CheckInfo
     , CheckLogEntry
-    , DroneInfo
     , PatchParam
     , ServerMsg(..)
     , decodeServerMsg
@@ -16,18 +15,12 @@ module Protocol exposing
     , encodeLockDrone
     , encodeLockParam
     , encodeOverrideCheck
-    , encodeOverrideDrone
     , encodeRevertAll
     , encodeSetBoopCount
     , encodeSetBoopSpec
     , encodeSetDroneBoops
-    , encodeSetDroneFreq
     , encodeSetDroneInterpCurve
-    , encodeSetDronePhraseGap
-    , encodeSetDroneRepeatCurve
-    , encodeSetDroneRepeatRate
     , encodeSetDroneSpec
-    , encodeSetDroneVolume
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
     , encodeSetMasterVolume
@@ -55,18 +48,9 @@ type alias PatchParam =
 
 type alias CheckInfo =
     { name : String
-    , severity : String
-    , overridden : Bool
-    }
-
-
-type alias DroneInfo =
-    { name : String
+    , kind : String
+    , checkIndex : Int
     , value : Float
-    , volume : Float
-    , repeatRate : Float
-    , repeatCurve : Float
-    , phraseGap : Float
     , interpCurve : Float
     , boops : Int
     , overridden : Bool
@@ -74,8 +58,8 @@ type alias DroneInfo =
     , patchHi : List PatchParam
     , lockedParamsLo : List String
     , lockedParamsHi : List String
-    , droneSpecs : List BoopSpecInfo
-    , droneSpecRanges : BoopSpecRanges
+    , specs : List BoopSpecInfo
+    , specRanges : BoopSpecRanges
     }
 
 
@@ -118,7 +102,6 @@ type ServerMsg
         , heartbeatLoop : Bool
         , boopCount : Int
         , checks : List CheckInfo
-        , drones : List DroneInfo
         , lockedParams : List String
         , lockedDrones : List Int
         , boopSpecs : List BoopSpecInfo
@@ -131,9 +114,6 @@ type ServerMsg
     | HeartbeatLoopChanged Bool
     | BoopCountChanged Int
     | DroneConfigChanged Int Int
-    | DroneRepeatRateChanged Int Float
-    | DroneRepeatCurveChanged Int Float
-    | DronePhraseGapChanged Int Float
     | DroneInterpCurveChanged Int Float
     | CheckLog CheckLogEntry
     | PatchExport { toml : String, json : String, nix : String }
@@ -181,15 +161,6 @@ serverMsgDecoder =
 
                     "drone_config_changed" ->
                         droneConfigChangedDecoder
-
-                    "drone_repeat_rate_changed" ->
-                        droneRepeatRateChangedDecoder
-
-                    "drone_repeat_curve_changed" ->
-                        droneRepeatCurveChangedDecoder
-
-                    "drone_phrase_gap_changed" ->
-                        dronePhraseGapChangedDecoder
 
                     "drone_interp_curve_changed" ->
                         droneInterpCurveChangedDecoder
@@ -242,8 +213,8 @@ stateDecoderWithMeta :
     -> D.Decoder ServerMsg
 stateDecoderWithMeta metas =
     D.map8
-        (\patch muted masterVol hbVol hbLoop boopCount checks drones ->
-            \locked lockedDrones boopSpecs ranges ->
+        (\patch muted masterVol hbVol hbLoop boopCount checks locked ->
+            \lockedDrones boopSpecs ranges ->
                 StateMsg
                     { patch = patch
                     , muted = muted
@@ -252,7 +223,6 @@ stateDecoderWithMeta metas =
                     , heartbeatLoop = hbLoop
                     , boopCount = boopCount
                     , checks = checks
-                    , drones = drones
                     , lockedParams = locked
                     , lockedDrones = lockedDrones
                     , boopSpecs = boopSpecs
@@ -267,9 +237,8 @@ stateDecoderWithMeta metas =
         (D.field "heartbeat_volume" D.float)
         (D.field "heartbeat_loop" D.bool)
         (D.field "boop_count" D.int)
-        (D.field "checks" (D.list checkInfoDecoder))
-        (D.field "drones" (D.list (droneInfoDecoderWithMeta metas)))
-        |> andMap (D.field "locked_params" (D.list D.string))
+        (D.field "checks" (D.list (checkInfoDecoderWithMeta metas)))
+        (D.field "locked_params" (D.list D.string))
         |> andMap (D.field "locked_drones" (D.list D.int))
         |> andMap (D.field "boop_specs" (D.list boopSpecInfoDecoder))
         |> andMap (D.field "boop_spec_ranges" boopSpecRangesDecoder)
@@ -322,25 +291,15 @@ mergePatchParams values metas =
         metas
 
 
-checkInfoDecoder : D.Decoder CheckInfo
-checkInfoDecoder =
-    D.map3 CheckInfo
-        (D.field "name" D.string)
-        (D.field "severity" D.string)
-        (D.field "overridden" D.bool)
-
-
-droneInfoDecoderWithMeta :
+checkInfoDecoderWithMeta :
     List { name : String, description : String, min : Float, max : Float, step : Float }
-    -> D.Decoder DroneInfo
-droneInfoDecoderWithMeta metas =
-    D.succeed DroneInfo
+    -> D.Decoder CheckInfo
+checkInfoDecoderWithMeta metas =
+    D.succeed CheckInfo
         |> andMap (D.field "name" D.string)
+        |> andMap (D.field "kind" D.string)
+        |> andMap (D.field "check_index" D.int)
         |> andMap (D.field "value" D.float)
-        |> andMap (D.field "volume" D.float)
-        |> andMap (D.field "repeat_rate" D.float)
-        |> andMap (D.field "repeat_curve" D.float)
-        |> andMap (D.field "phrase_gap" D.float)
         |> andMap (D.field "interp_curve" D.float)
         |> andMap (D.field "boops" D.int)
         |> andMap (D.field "overridden" D.bool)
@@ -431,27 +390,6 @@ droneConfigChangedDecoder =
     D.map2 DroneConfigChanged
         (D.field "index" D.int)
         (D.field "boops" D.int)
-
-
-droneRepeatRateChangedDecoder : D.Decoder ServerMsg
-droneRepeatRateChangedDecoder =
-    D.map2 DroneRepeatRateChanged
-        (D.field "index" D.int)
-        (D.field "rate" D.float)
-
-
-droneRepeatCurveChangedDecoder : D.Decoder ServerMsg
-droneRepeatCurveChangedDecoder =
-    D.map2 DroneRepeatCurveChanged
-        (D.field "index" D.int)
-        (D.field "curve" D.float)
-
-
-dronePhraseGapChangedDecoder : D.Decoder ServerMsg
-dronePhraseGapChangedDecoder =
-    D.map2 DronePhraseGapChanged
-        (D.field "index" D.int)
-        (D.field "gap" D.float)
 
 
 droneInterpCurveChangedDecoder : D.Decoder ServerMsg
@@ -578,46 +516,6 @@ encodeSetHeartbeatVolume vol =
         |> E.encode 0
 
 
-encodeSetDroneVolume : Int -> Float -> String
-encodeSetDroneVolume index vol =
-    E.object
-        [ ( "type", E.string "set_drone_volume" )
-        , ( "index", E.int index )
-        , ( "volume", E.float vol )
-        ]
-        |> E.encode 0
-
-
-encodeSetDroneRepeatRate : Int -> Float -> String
-encodeSetDroneRepeatRate index rate =
-    E.object
-        [ ( "type", E.string "set_drone_repeat_rate" )
-        , ( "index", E.int index )
-        , ( "rate", E.float rate )
-        ]
-        |> E.encode 0
-
-
-encodeSetDroneRepeatCurve : Int -> Float -> String
-encodeSetDroneRepeatCurve index curve =
-    E.object
-        [ ( "type", E.string "set_drone_repeat_curve" )
-        , ( "index", E.int index )
-        , ( "curve", E.float curve )
-        ]
-        |> E.encode 0
-
-
-encodeSetDronePhraseGap : Int -> Float -> String
-encodeSetDronePhraseGap index gap =
-    E.object
-        [ ( "type", E.string "set_drone_phrase_gap" )
-        , ( "index", E.int index )
-        , ( "gap", E.float gap )
-        ]
-        |> E.encode 0
-
-
 encodeSetDroneInterpCurve : Int -> Float -> String
 encodeSetDroneInterpCurve index curve =
     E.object
@@ -628,22 +526,11 @@ encodeSetDroneInterpCurve index curve =
         |> E.encode 0
 
 
-encodeOverrideCheck : String -> Int -> String -> String
+encodeOverrideCheck : String -> Int -> Float -> String
 encodeOverrideCheck layer index value =
     E.object
         [ ( "type", E.string "override_check" )
         , ( "layer", E.string layer )
-        , ( "index", E.int index )
-        , ( "value", E.string value )
-        ]
-        |> E.encode 0
-
-
-encodeOverrideDrone : Int -> Float -> String
-encodeOverrideDrone index value =
-    E.object
-        [ ( "type", E.string "override_check" )
-        , ( "layer", E.string "drone" )
         , ( "index", E.int index )
         , ( "value", E.float value )
         ]
@@ -687,16 +574,6 @@ encodeTriggerHeartbeat =
 encodeRevertAll : String
 encodeRevertAll =
     E.object [ ( "type", E.string "revert_all" ) ]
-        |> E.encode 0
-
-
-encodeSetDroneFreq : Int -> Float -> String
-encodeSetDroneFreq index freq =
-    E.object
-        [ ( "type", E.string "set_drone_freq" )
-        , ( "index", E.int index )
-        , ( "freq", E.float freq )
-        ]
         |> E.encode 0
 
 

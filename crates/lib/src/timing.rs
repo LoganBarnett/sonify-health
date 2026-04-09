@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// modulo the cycle duration.  NTP synchronization provides the
 /// ~10 ms precision needed for second-level slots.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimingConfig {
   /// Total cycle duration covering all machines.
   #[serde(default = "default_cycle_secs")]
