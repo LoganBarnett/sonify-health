@@ -479,6 +479,21 @@ updateAt index fn list =
         list
 
 
+unique : List comparable -> List comparable
+unique list =
+    List.foldl
+        (\item ( seen, acc ) ->
+            if List.member item seen then
+                ( seen, acc )
+
+            else
+                ( item :: seen, acc ++ [ item ] )
+        )
+        ( [], [] )
+        list
+        |> Tuple.second
+
+
 
 -- Subscriptions
 
@@ -726,9 +741,13 @@ viewTransition trans =
                     (List.map
                         (\s ->
                             span [ class "transition-state" ]
-                                [ text
-                                    (s.patch
-                                        ++ " (<"
+                                [ a
+                                    [ href "#"
+                                    , onClick (SelectPatch s.patch)
+                                    ]
+                                    [ text s.patch ]
+                                , text
+                                    (" (<"
                                         ++ String.left 4 (String.fromFloat s.threshold)
                                         ++ ")"
                                     )
@@ -741,7 +760,19 @@ viewTransition trans =
         Gradient info ->
             div [ class "transition-info" ]
                 [ text "Gradient: "
-                , text (String.join " -> " info.patches)
+                , span []
+                    (List.intersperse (text " -> ")
+                        (List.map
+                            (\p ->
+                                a
+                                    [ href "#"
+                                    , onClick (SelectPatch p)
+                                    ]
+                                    [ text p ]
+                            )
+                            info.patches
+                        )
+                    )
                 , text (" (curve " ++ String.fromFloat info.curve ++ ")")
                 ]
 
@@ -795,27 +826,49 @@ logResultClass result =
 
 viewPatchList : Model -> Html Msg
 viewPatchList model =
+    let
+        activePatchNames =
+            List.concatMap transitionPatchNames model.heartbeats
+                |> unique
+
+        allNames =
+            Dict.keys model.library |> List.sort
+
+        ( active, rest ) =
+            List.partition (\n -> List.member n activePatchNames) allNames
+    in
     div [ class "section" ]
         [ h2 [] [ text "Patch Library" ]
         , div [ class "patch-list" ]
-            (Dict.keys model.library
-                |> List.sort
-                |> List.map
-                    (\name ->
-                        div
-                            [ class
-                                (if model.selectedPatch == Just name then
-                                    "patch-item selected"
-
-                                 else
-                                    "patch-item"
-                                )
-                            , onClick (SelectPatch name)
-                            ]
-                            [ text name ]
-                    )
+            (List.map (viewPatchItem model) active
+                ++ List.map (viewPatchItem model) rest
             )
         ]
+
+
+viewPatchItem : Model -> String -> Html Msg
+viewPatchItem model name =
+    div
+        [ class
+            (if model.selectedPatch == Just name then
+                "patch-item selected"
+
+             else
+                "patch-item"
+            )
+        , onClick (SelectPatch name)
+        ]
+        [ text name ]
+
+
+transitionPatchNames : HeartbeatInfo -> List String
+transitionPatchNames hb =
+    case hb.transition of
+        Discrete states ->
+            List.map .patch states
+
+        Gradient info ->
+            info.patches
 
 
 viewPatchEditor : Model -> Html Msg
