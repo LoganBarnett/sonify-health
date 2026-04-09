@@ -8,9 +8,19 @@
 #
 #   services.sonify-health = {
 #     enable = true;
-#     heartbeat.slot = 0;
-#     heartbeat.checks = [
-#       { name = "local"; command = "/path/to/check-lan"; resultMode = "exit-code"; }
+#     heartbeats = [
+#       {
+#         name = "gateway";
+#         command = "${pkgs.fping}/bin/fping -q -t 4000 -r 1 10.0.0.1";
+#         resultMode = "exit-code-severity";
+#         transition = {
+#           type = "discrete";
+#           states = [
+#             { threshold = 0.5; patch = "sine"; }
+#             { threshold = 1.01; patch = "alarm"; }
+#           ];
+#         };
+#       }
 #     ];
 #   };
 #
@@ -29,24 +39,6 @@
 #
 # Note: when using socket mode the reverse proxy user must be a member of
 # the service group (cfg.group) so it can connect to the socket.
-#
-# fping works well as a check command — its exit codes map directly to
-# healthy (0), degraded (1, some unreachable), and down (2, all unreachable):
-#
-#   services.sonify-health.heartbeat.checks = [
-#     {
-#       name = "lan";
-#       command = "${pkgs.fping}/bin/fping -q -t 4000 -r 1 10.0.0.1 10.0.0.2";
-#     }
-#     {
-#       name = "wan";
-#       command = "${pkgs.fping}/bin/fping -q -t 4000 -r 1 8.8.8.8 1.1.1.1";
-#     }
-#     {
-#       name = "dns";
-#       command = "${pkgs.fping}/bin/fping -q -t 4000 -r 1 google.com github.com";
-#     }
-#   ];
 {self}: {
   config,
   lib,
@@ -60,7 +52,7 @@
   # automatically, giving ALSA clients access to the PipeWire socket.
   pipewireEnabled = config.services.pipewire.enable or false;
 
-  # The TOML config file carries heartbeat/drone/voice settings.
+  # The TOML config file carries heartbeat and patch settings.
   # Listen address is passed via --listen on the command line so the
   # NixOS module retains structured socket/host/port options.
   configFile = tomlFormat.generate "sonify-health.toml" ({
@@ -70,106 +62,104 @@
     // lib.optionalAttrs (cfg.audioDevice != null) {
       audio_device = cfg.audioDevice;
     }
-    // {
-      heartbeat =
+    // lib.optionalAttrs (cfg.patches != {}) {
+      patches = cfg.patches;
+    }
+    // lib.optionalAttrs (cfg.heartbeats != []) {
+      heartbeats = map (hb:
         {
-          slot = cfg.heartbeat.slot;
-          cycle_duration_secs = cfg.heartbeat.cycleDurationSecs;
-          slot_duration_secs = cfg.heartbeat.slotDurationSecs;
+          name = hb.name;
+          command = hb.command;
+          result_mode = hb.resultMode;
+          transition = hb.transition;
         }
-        // lib.optionalAttrs (cfg.heartbeat.checks != []) {
-          checks =
-            map (c: {
-              name = c.name;
-              command = c.command;
-              result_mode = c.resultMode;
-            })
-            cfg.heartbeat.checks;
-        };
-    }
-    // lib.optionalAttrs (cfg.voice != {}) {
-      voice = cfg.voice;
-    }
-    // lib.optionalAttrs (cfg.drone.metrics != []) {
-      drone = {
-        poll_interval_secs = cfg.drone.pollIntervalSecs;
-        metrics = map (m:
-          {
-            name = m.name;
-            command = m.command;
-            result_mode = m.resultMode;
-            register = m.register;
-          }
-          // lib.optionalAttrs (m.texture != null) {
-            texture = m.texture;
-          })
-        cfg.drone.metrics;
-      };
+        // lib.optionalAttrs hb.continuous {
+          continuous = true;
+        }
+        // lib.optionalAttrs (hb.volume != 0.3) {
+          volume = hb.volume;
+        }
+        // lib.optionalAttrs (hb.phraseGap != 0.0) {
+          phrase_gap = hb.phraseGap;
+        }
+        // lib.optionalAttrs (hb.repeatRate != 1.0) {
+          repeat_rate = hb.repeatRate;
+        }
+        // lib.optionalAttrs (hb.pollIntervalSecs != 10.0) {
+          poll_interval_secs = hb.pollIntervalSecs;
+        }
+        // lib.optionalAttrs (hb.cycleSecs != 14.0) {
+          cycle_secs = hb.cycleSecs;
+        })
+      cfg.heartbeats;
     });
 
-  droneMetricSubmodule = lib.types.submodule {
+  heartbeatSubmodule = lib.types.submodule {
     options = {
       name = lib.mkOption {
         type = lib.types.str;
-        description = "Human-readable name for this drone metric.";
+        description = "Human-readable name for this heartbeat.";
       };
 
       command = lib.mkOption {
         type = lib.types.str;
-        description = "Shell command that outputs a 0.0..1.0 metric value.";
+        description = "Shell command that produces a probe metric.";
       };
 
       resultMode = lib.mkOption {
-        type = lib.types.enum ["exit-code" "stdout"];
-        default = "stdout";
+        type = lib.types.enum ["exit-code" "stdout" "exit-code-severity"];
+        default = "exit-code-severity";
         description = ''
-          How to read the command result.  "exit-code" maps the exit code
-          (0..255) linearly to 0.0..1.0.  "stdout" reads a float from stdout.
+          How to read the command result.  "exit-code" maps 0..255 linearly
+          to 0.0..1.0.  "exit-code-severity" maps 0/1/2 to 0.0/0.5/1.0.
+          "stdout" reads a float from stdout.
         '';
       };
 
-      register = lib.mkOption {
-        type = lib.types.enum ["low" "mid" "high"];
-        default = "mid";
+      transition = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
         description = ''
-          Pitch register for the drone voice.  "low" = half base frequency,
-          "mid" = base frequency, "high" = double base frequency.
+          Transition mapping from probe metric to patches.  Either:
+            { type = "discrete"; states = [{ threshold = 0.5; patch = "sine"; } ...]; }
+          or:
+            { type = "gradient"; patches = ["warm" "sharp" "alarm"]; curve = 2.0; }
         '';
       };
 
-      texture = lib.mkOption {
-        type = lib.types.nullOr (lib.types.enum ["bong" "arpeggio" "thrum" "shimmer" "reactor" "warpcore"]);
-        default = null;
-        description = ''
-          Drone texture.  "bong" = periodic bell strikes, "arpeggio" = cycling
-          pentatonic notes, "thrum" = continuous tremolo, "shimmer" = detuned
-          beating, "reactor" = deep pulsing power hum, "warpcore" = rhythmic
-          spectral sweep.  When null, auto-assigned by metric position.
-        '';
-      };
-    };
-  };
-
-  checkSubmodule = lib.types.submodule {
-    options = {
-      name = lib.mkOption {
-        type = lib.types.str;
-        description = "Human-readable name for this check.";
+      continuous = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Whether this heartbeat plays continuously (drone-style).";
       };
 
-      command = lib.mkOption {
-        type = lib.types.str;
-        description = "Shell command to execute.";
+      volume = lib.mkOption {
+        type = lib.types.number;
+        default = 0.3;
+        description = "Output volume for this heartbeat (0.0-1.0).";
       };
 
-      resultMode = lib.mkOption {
-        type = lib.types.enum ["exit-code" "stdout"];
-        default = "exit-code";
-        description = ''
-          How to read the command result.  "exit-code" maps exit codes
-          0/1/2 to healthy/degraded/down.  "stdout" reads the severity
-          value printed to stdout.
-        '';
+      phraseGap = lib.mkOption {
+        type = lib.types.number;
+        default = 0.0;
+        description = "Seconds of silence between phrase repetitions (continuous mode).";
+      };
+
+      repeatRate = lib.mkOption {
+        type = lib.types.number;
+        default = 1.0;
+        description = "Speed multiplier on phrase repetition.";
+      };
+
+      pollIntervalSecs = lib.mkOption {
+        type = lib.types.number;
+        default = 10.0;
+        description = "Seconds between probe command executions.";
+      };
+
+      cycleSecs = lib.mkOption {
+        type = lib.types.number;
+        default = 14.0;
+        description = "Seconds between plays for one-shot heartbeats.";
       };
     };
   };
@@ -248,97 +238,64 @@ in {
       '';
     };
 
-    voice = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
+    patches = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.attrsOf lib.types.anything);
       default = {};
       example = {
-        freq = 523.0;
-        sine_ratio = 0.8;
+        gateway-ok = {
+          freq = 523.0;
+          duration = 0.4;
+        };
+        gateway-bad = {
+          freq = 220.0;
+          saw_ratio = 1.0;
+          sine_ratio = 0.0;
+        };
       };
       description = ''
-        Hostname-derived voice parameter overrides.  Unspecified fields
-        use the hash-derived default.  Available: freq, sine_ratio,
-        tri_ratio, saw_ratio, square_ratio, attack_ms, release_ms,
-        chirp_ratio, stereo_pan, reverb_mix.
+        Named patch definitions.  Each patch is a set of parameter
+        overrides; unspecified fields use Patch::default().  Built-in
+        patches (sine, bell, warm, sharp, etc.) are always available
+        and can be overridden here.
       '';
     };
 
-    heartbeat = {
-      slot = lib.mkOption {
-        type = lib.types.ints.unsigned;
-        default = 0;
-        description = "Zero-indexed slot in the timing cycle.";
-      };
-
-      cycleDurationSecs = lib.mkOption {
-        type = lib.types.number;
-        default = 14;
-        description = "Total cycle duration covering all machines (seconds).";
-      };
-
-      slotDurationSecs = lib.mkOption {
-        type = lib.types.number;
-        default = 2;
-        description = "Time budget per machine within the cycle (seconds).";
-      };
-
-      checks = lib.mkOption {
-        type = lib.types.listOf checkSubmodule;
-        default = [];
-        example = lib.literalExpression ''
-          [
-            {
-              name = "lan";
-              command = "''${pkgs.fping}/bin/fping -q -t 4000 -r 1 10.0.0.1 10.0.0.2";
-            }
-            {
-              name = "wan";
-              command = "''${pkgs.fping}/bin/fping -q -t 4000 -r 1 8.8.8.8 1.1.1.1";
-            }
-            {
-              name = "dns";
-              command = "''${pkgs.fping}/bin/fping -q -t 4000 -r 1 google.com github.com";
-            }
-          ]
-        '';
-        description = ''
-          Heartbeat check commands.  Each maps to one boop in the
-          heartbeat pattern.  fping is a good fit — its exit codes
-          (0/1/2 = all/some/none reachable) map directly to the
-          healthy/degraded/down severities.
-        '';
-      };
-    };
-
-    drone = {
-      pollIntervalSecs = lib.mkOption {
-        type = lib.types.number;
-        default = 5;
-        description = "How often to run drone metric commands (seconds).";
-      };
-
-      metrics = lib.mkOption {
-        type = lib.types.listOf droneMetricSubmodule;
-        default = [];
-        example = lib.literalExpression ''
-          [
-            {
-              name = "gpu";
-              command = "/path/to/gpu-load";
-              register = "low";
-            }
-            {
-              name = "memory";
-              command = "/path/to/mem-pressure";
-              register = "mid";
-            }
-          ]
-        '';
-        description = ''
-          Drone metric commands.  Each metric drives a continuous audio
-          stream whose timbre and volume shift with the reported value.
-        '';
-      };
+    heartbeats = lib.mkOption {
+      type = lib.types.listOf heartbeatSubmodule;
+      default = [];
+      example = lib.literalExpression ''
+        [
+          {
+            name = "lan";
+            command = "''${pkgs.fping}/bin/fping -q -t 4000 -r 1 10.0.0.1 10.0.0.2";
+            resultMode = "exit-code-severity";
+            transition = {
+              type = "discrete";
+              states = [
+                { threshold = 0.5; patch = "sine"; }
+                { threshold = 1.01; patch = "alarm"; }
+              ];
+            };
+          }
+          {
+            name = "cpu";
+            command = "sh -c 'uptime | awk ...'";
+            resultMode = "stdout";
+            continuous = true;
+            volume = 0.2;
+            transition = {
+              type = "gradient";
+              patches = ["warm" "sharp" "alarm"];
+              curve = 2.0;
+            };
+          }
+        ]
+      '';
+      description = ''
+        Heartbeat definitions.  Each heartbeat joins a probe command
+        with a transition that maps the probe metric (0.0-1.0) to
+        patches from the library.
+      '';
     };
 
     oidc = {
@@ -469,9 +426,9 @@ in {
       requires =
         lib.optional (cfg.socket != null) "sonify-health.socket";
 
-      # Check commands are executed via "sh -c".  The default systemd PATH
-      # on NixOS does not include /bin, so we must ensure a shell is
-      # reachable.
+      # Probe commands are executed via "sh -c".  The default systemd
+      # PATH on NixOS does not include /bin, so we must ensure a shell
+      # is reachable.
       path = ["/bin" pkgs.bash];
 
       environment =
