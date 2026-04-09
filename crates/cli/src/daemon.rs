@@ -114,17 +114,27 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     let continuous = cfg.continuous;
     let phrase_gap = cfg.phrase_gap;
     let repeat_rate = cfg.repeat_rate;
-    let cycle_secs = cfg.cycle_secs;
-    let cycle_offset = cfg.cycle_offset_secs;
     handles.push(thread::spawn(move || {
       let mut slot_id: Option<usize> = None;
+
+      // Align to the wall-clock grid before the first play so that
+      // heartbeats with different offsets start staggered.
+      {
+        let cfg = &play_preview.heartbeat_configs.read().unwrap()[i];
+        let wait = seconds_until_next(cfg.cycle_secs, cfg.cycle_offset_secs);
+        if wait > 0.005 {
+          sleep_checking(&play_running, Duration::from_secs_f64(wait));
+        }
+      }
+
       while play_running.load(Ordering::Relaxed) {
-        // Resolve transition → patch.  Clone the transition under a
-        // brief read lock so live edits take effect immediately.
+        // Resolve transition → patch.  Re-read mutable config fields
+        // under a brief lock so live edits take effect immediately.
         let metric = play_preview.heartbeats[i].metric.value() as f64;
-        let transition = play_preview.heartbeat_configs.read().unwrap()[i]
-          .transition
-          .clone();
+        let (transition, cycle_secs, cycle_offset) = {
+          let cfg = &play_preview.heartbeat_configs.read().unwrap()[i];
+          (cfg.transition.clone(), cfg.cycle_secs, cfg.cycle_offset_secs)
+        };
         let lib = play_preview.library.read().unwrap();
         let patch = transition.resolve(metric, &lib);
         drop(lib);
