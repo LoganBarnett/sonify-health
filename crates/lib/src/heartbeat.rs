@@ -3,6 +3,14 @@ use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 use std::time::Duration;
 
+/// A single resolved note ready for audio rendering.
+#[derive(Clone)]
+pub struct ResolvedNote {
+  pub patch: Patch,
+  pub volume: f64,
+  pub offset: f64,
+}
+
 /// Maximum lowpass cutoff to avoid filter instability near Nyquist.
 const MAX_CUTOFF: f32 = 18000.0;
 
@@ -79,6 +87,286 @@ pub fn heartbeat_content_duration(patches: &[Patch]) -> Duration {
   Duration::from_secs_f64(attack_total + boop_sum + gap_sum)
 }
 
+/// Total wall-clock duration of a multi-note heartbeat.  Each note
+/// is independently timed from its offset, so the duration is the
+/// maximum across all notes of `offset + attack + duration + release
+/// + echo_tail`, plus a safety margin.
+pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
+  if notes.is_empty() {
+    return Duration::ZERO;
+  }
+  let max = notes
+    .iter()
+    .map(|n| {
+      let p = &n.patch;
+      let attack = p.attack_ms / 1000.0;
+      let release = p.release_ms / 1000.0;
+      let echo_tail = if p.echo_mix > 0.0 {
+        4.0 * p.echo_delay
+      } else {
+        0.0
+      };
+      n.offset + attack + p.duration + release + echo_tail
+    })
+    .fold(0.0f64, f64::max);
+  Duration::from_secs_f64(max + 0.05)
+}
+
+/// Build a multi-note heartbeat audio graph.  Each note gets its
+/// own timing slot based on its offset.  Per-note volume scales
+/// the note's amplitude.  The optional external volume Shared
+/// multiplies the final mixed output.
+pub fn heartbeat_graph_with_notes(
+  notes: &[ResolvedNote],
+  external_volume: Option<&Shared>,
+) -> Box<dyn AudioUnit> {
+  if notes.is_empty() {
+    let ext = match external_volume {
+      Some(s) => s.clone(),
+      None => fundsp::prelude32::shared(1.0),
+    };
+    return Box::new(dc(0.0) * var(&ext) | dc(0.0) * var(&ext));
+  }
+
+  let mut sorted: Vec<_> = notes.to_vec();
+  sorted.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap());
+
+  let patches: Vec<Patch> = sorted
+    .iter()
+    .map(|n| {
+      let mut p = n.patch.clone();
+      p.amplitude *= n.volume;
+      p
+    })
+    .collect();
+
+  let offsets: Vec<f64> = sorted.iter().map(|n| n.offset).collect();
+
+  heartbeat_graph_with_offsets(&patches, &offsets, external_volume)
+}
+
+/// Build a heartbeat graph where each patch starts at an explicit
+/// offset (seconds from graph start) rather than sequentially.
+fn heartbeat_graph_with_offsets(
+  patches: &[Patch],
+  offsets: &[f64],
+  external_volume: Option<&Shared>,
+) -> Box<dyn AudioUnit> {
+  let count = patches.len();
+  let shared = &patches[0];
+  let chirp_ratio = shared.chirp_ratio as f32;
+  let brightness = shared.brightness as f32;
+  let resonance = shared.resonance as f32;
+  let sub_mix = shared.sub_octave as f32;
+  let drive = (shared.drive as f32).max(0.01);
+  let drive_norm = 1.0 / drive.tanh();
+  let noise_mix = shared.noise_mix as f32;
+  let crush_param = shared.crush as f32;
+  let crush_levels = 2.0_f32.powf(1.0 + 15.0 * (1.0 - crush_param));
+  let downsample = shared.downsample as f32;
+  let ds_rate = 100_000.0_f32 / 2.0_f32.powf(downsample * 8.0);
+  let vibrato_rate = shared.vibrato_rate;
+  let vibrato_depth = shared.vibrato_depth;
+  let tremolo_rate = shared.tremolo_rate;
+  let tremolo_depth = shared.tremolo_depth;
+  let fm_ratio = shared.fm_ratio as f32;
+  let fm_depth = shared.fm_depth as f32;
+
+  let total_ratio = shared.sine_ratio
+    + shared.tri_ratio
+    + shared.saw_ratio
+    + shared.square_ratio;
+  let norm = if total_ratio > 0.0 {
+    1.0 / total_ratio
+  } else {
+    1.0
+  } as f32;
+
+  let sine_w = shared.sine_ratio as f32 * norm;
+  let tri_w = shared.tri_ratio as f32 * norm;
+  let saw_w = shared.saw_ratio as f32 * norm;
+  let square_w = shared.square_ratio as f32 * norm;
+
+  // Pre-compute start times and per-boop parameters using offsets.
+  let mut timings = Vec::with_capacity(count);
+  for i in 0..count {
+    let p = &patches[i];
+    let freq = p.freq as f32;
+    let amp = p.amplitude as f32;
+    let dur = p.duration as f32;
+    let attack = p.attack_ms as f32 / 1000.0;
+    let release = p.release_ms as f32 / 1000.0;
+    let sustain_level = p.sustain as f32;
+    let start = offsets[i] as f32;
+
+    timings.push(BoopTiming {
+      start,
+      tail_end: start + attack + dur + release,
+      freq,
+      amp,
+      dur,
+      attack,
+      release,
+      sustain: sustain_level,
+      harshness: 0.0,
+      filter_cutoff: (freq * 13.0 * brightness).min(MAX_CUTOFF),
+      filter_q: 0.5 * resonance,
+    });
+  }
+
+  // Frequency LFO.
+  let freq_timings = timings.clone();
+  let freq_env = lfo(move |t: f32| {
+    for p in freq_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        let body_t = (t - p.start - p.attack).max(0.0);
+        let chirp_t = (body_t / 0.04).min(1.0);
+        let base =
+          p.freq * chirp_ratio + (p.freq - p.freq * chirp_ratio) * chirp_t;
+        let vib = 2f64.powf(
+          vibrato_depth
+            * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
+            / 12.0,
+        ) as f32;
+        let fm_freq = base * fm_ratio;
+        let fm_mod =
+          fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+        return (base * vib + fm_mod).max(0.01);
+      }
+    }
+    0.01
+  });
+
+  // Amplitude envelope.
+  let amp_timings = timings.clone();
+  let amp_env = envelope(move |t: f32| {
+    let mut total = 0.0f32;
+    for p in amp_timings.iter() {
+      if t >= p.start && t < p.tail_end {
+        let local_t = t - p.start;
+        let level = if p.attack > 0.0 && local_t < p.attack {
+          local_t / p.attack
+        } else {
+          let body_end = p.attack + p.dur;
+          if local_t <= body_end {
+            p.sustain
+          } else if p.release > 0.0 {
+            (p.sustain * (body_end + p.release - local_t) / p.release).max(0.0)
+          } else {
+            0.0
+          }
+        };
+        let trem = (1.0
+          - tremolo_depth
+            * (1.0 - (std::f64::consts::TAU * tremolo_rate * t as f64).sin())
+            / 2.0) as f32;
+        total += level * p.amp * trem;
+      }
+    }
+    total
+  });
+
+  // Sine weight envelope.
+  let sine_timings = timings.clone();
+  let sine_w_env = envelope(move |t: f32| {
+    for p in sine_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        return sine_w * (1.0 - p.harshness);
+      }
+    }
+    sine_w
+  });
+
+  // Saw weight envelope.
+  let saw_timings = timings.clone();
+  let saw_w_env = envelope(move |t: f32| {
+    for p in saw_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        return saw_w + p.harshness;
+      }
+    }
+    saw_w
+  });
+
+  // Lowpass cutoff envelope.
+  let cutoff_timings = timings.clone();
+  let cutoff_env = lfo(move |t: f32| {
+    for p in cutoff_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        return p.filter_cutoff;
+      }
+    }
+    20000.0
+  });
+
+  // Sub-octave oscillator.
+  let sub_freq_timings = timings.clone();
+  let sub_freq_env = lfo(move |t: f32| {
+    for p in sub_freq_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        let body_t = (t - p.start - p.attack).max(0.0);
+        let chirp_t = (body_t / 0.04).min(1.0);
+        let half = p.freq * 0.5;
+        let base = half * chirp_ratio + (half - half * chirp_ratio) * chirp_t;
+        let vib = 2f64.powf(
+          vibrato_depth
+            * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
+            / 12.0,
+        ) as f32;
+        let fm_freq = base * fm_ratio;
+        let fm_mod =
+          fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+        return (base * vib + fm_mod).max(0.01);
+      }
+    }
+    0.01
+  });
+  let sub_waveform = (sine() * sine_w)
+    & (triangle() * tri_w)
+    & (saw() * saw_w)
+    & (square() * square_w);
+  let sub_osc = sub_freq_env >> sub_waveform;
+
+  // Lowpass Q envelope.
+  let q_timings = timings;
+  let q_env = lfo(move |t: f32| {
+    for p in q_timings.iter().rev() {
+      if t >= p.start && t < p.tail_end {
+        return p.filter_q;
+      }
+    }
+    0.5
+  });
+
+  let ext = match external_volume {
+    Some(s) => s.clone(),
+    None => fundsp::prelude32::shared(1.0),
+  };
+  let ext_vol = var(&ext) >> follow(0.1);
+
+  let echo_delay = shared.echo_delay as f32;
+  let echo_mix = shared.echo_mix as f32;
+
+  let waveform = (sine() * sine_w_env)
+    & (triangle() * tri_w)
+    & (saw() * saw_w_env)
+    & (square() * square_w);
+  let signal = ((freq_env >> waveform) + (sub_osc * sub_mix))
+    >> (shape(Tanh(drive)) * drive_norm)
+    >> (pass() + (pink() * noise_mix));
+  let moog_q = q_env * 0.2;
+  let mono = (signal | cutoff_env | moog_q)
+    >> (moog() * amp_env * ext_vol)
+    >> shape(Crush(crush_levels))
+    >> hold_hz(ds_rate, 0.0);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let stereo = with_echo
+    >> pan(shared.stereo_pan as f32)
+    >> reverb_stereo(0.3, 0.8, shared.reverb_mix as f32);
+  Box::new(stereo)
+}
+
 /// Parameters for a single boop inside the heartbeat closure.
 #[derive(Clone)]
 struct BoopTiming {
@@ -109,6 +397,9 @@ pub fn heartbeat_graph(patches: &[Patch]) -> Box<dyn AudioUnit> {
 /// are read from `patches[0]`; per-note params (`freq`,
 /// `duration`, `attack_ms`, `release_ms`, `sustain`) from each
 /// `patches[i]`.
+///
+/// This is the sequential-boop API.  For offset-based multi-note
+/// rendering, use `heartbeat_graph_with_notes`.
 pub fn heartbeat_graph_with_volume(
   patches: &[Patch],
   external_volume: Option<&Shared>,

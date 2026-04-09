@@ -78,14 +78,16 @@ result_mode = "exit-code-severity"
 cycle_secs = 15
 cycle_offset_secs = 0
 
-[heartbeats.transition]
+[[heartbeats.notes]]
+
+[heartbeats.notes.transition]
 type = "discrete"
 
-[[heartbeats.transition.states]]
+[[heartbeats.notes.transition.states]]
 threshold = 0.5
 patch = "reactor-ok"
 
-[[heartbeats.transition.states]]
+[[heartbeats.notes.transition.states]]
 threshold = 1.01
 patch = "alarm"
 
@@ -97,14 +99,16 @@ result_mode = "exit-code-severity"
 cycle_secs = 15
 cycle_offset_secs = 5
 
-[heartbeats.transition]
+[[heartbeats.notes]]
+
+[heartbeats.notes.transition]
 type = "discrete"
 
-[[heartbeats.transition.states]]
+[[heartbeats.notes.transition.states]]
 threshold = 0.5
 patch = "reactor-ok"
 
-[[heartbeats.transition.states]]
+[[heartbeats.notes.transition.states]]
 threshold = 1.01
 patch = "alarm"
 
@@ -114,12 +118,14 @@ name = "cpu"
 command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \\"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\\$1/\\$2; print (v>1?1:v)}"'"""
 result_mode = "stdout"
 continuous = true
-volume = 0.2
 poll_interval_secs = 5
 cycle_secs = 15
 cycle_offset_secs = 10
 
-[heartbeats.transition]
+[[heartbeats.notes]]
+volume = 0.2
+
+[heartbeats.notes.transition]
 type = "gradient"
 patches = ["reactor-cpu", "alarm"]
 curve = 2.0

@@ -2,7 +2,7 @@ use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  heartbeat, probe, seconds_until_next, Patch,
+  heartbeat, probe, seconds_until_next, Patch, ResolvedNote,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -128,32 +128,39 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       }
 
       while play_running.load(Ordering::Relaxed) {
-        // Resolve transition → patch.  Re-read mutable config fields
+        // Resolve notes → patches.  Re-read mutable config fields
         // under a brief lock so live edits take effect immediately.
         let metric = play_preview.heartbeats[i].metric.value() as f64;
-        let (transition, cycle_secs, cycle_offset) = {
+        let (note_configs, cycle_secs, cycle_offset) = {
           let cfg = &play_preview.heartbeat_configs.read().unwrap()[i];
-          (cfg.transition.clone(), cfg.cycle_secs, cfg.cycle_offset_secs)
+          (cfg.notes.clone(), cfg.cycle_secs, cfg.cycle_offset_secs)
         };
         let lib = play_preview.library.read().unwrap();
-        let patch = transition.resolve(metric, &lib);
+        let notes: Vec<ResolvedNote> = note_configs
+          .iter()
+          .filter_map(|nc| {
+            let patch = nc.transition.resolve(metric, &lib)?;
+            Some(ResolvedNote {
+              patch,
+              volume: nc.volume,
+              offset: nc.offset,
+            })
+          })
+          .collect();
         drop(lib);
 
-        let patch = match patch {
-          Some(p) => p,
-          None => {
-            thread::sleep(Duration::from_secs(1));
-            continue;
-          }
-        };
+        if notes.is_empty() {
+          thread::sleep(Duration::from_secs(1));
+          continue;
+        }
 
-        // Build single-note audio graph with effective volume.
+        // Build multi-note audio graph with effective volume.
         play_preview.update_effective_volume(i);
-        let graph = heartbeat::heartbeat_graph_with_volume(
-          &[patch.clone()],
+        let graph = heartbeat::heartbeat_graph_with_notes(
+          &notes,
           Some(&play_preview.heartbeats[i].effective_volume),
         );
-        let dur = heartbeat::heartbeat_duration(&[patch]);
+        let dur = heartbeat::heartbeat_notes_duration(&notes);
 
         if continuous {
           // Continuous: loop with phrase_gap / repeat_rate sleep.
@@ -171,10 +178,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
           let gap = phrase_gap / repeat_rate.max(0.1);
           let sleep_dur = if gap == 0.0 {
-            heartbeat::heartbeat_content_duration(&[Patch {
-              duration: dur.as_secs_f64(),
-              ..Patch::default()
-            }])
+            let content_patches: Vec<Patch> =
+              notes.iter().map(|n| n.patch.clone()).collect();
+            heartbeat::heartbeat_content_duration(&content_patches)
           } else {
             dur
           };

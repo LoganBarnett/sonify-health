@@ -2,7 +2,7 @@ use crate::probe::ResultMode;
 use crate::transition::Transition;
 use serde::{Deserialize, Serialize};
 
-fn default_volume() -> f64 {
+pub fn default_volume() -> f64 {
   0.3
 }
 
@@ -18,24 +18,33 @@ fn default_cycle_secs() -> f64 {
   15.0
 }
 
-/// A heartbeat joins a probe command with a transition that maps
-/// the probe's metric to patches from the library.
+/// A single note within a heartbeat, with its own transition,
+/// volume, and time offset from heartbeat start.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteConfig {
+  pub transition: Transition,
+
+  #[serde(default = "default_volume")]
+  pub volume: f64,
+
+  #[serde(default)]
+  pub offset: f64,
+}
+
+/// A heartbeat joins a probe command with one or more notes, each
+/// mapping the probe's metric to patches from the library.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatConfig {
   pub name: String,
   pub command: String,
   pub result_mode: ResultMode,
-  pub transition: Transition,
+  pub notes: Vec<NoteConfig>,
 
   /// Whether this heartbeat plays continuously (drone-style) or
   /// as a one-shot at each cycle.
   #[serde(default)]
   pub continuous: bool,
-
-  /// Output volume for this heartbeat (0.0–1.0).
-  #[serde(default = "default_volume")]
-  pub volume: f64,
 
   /// Seconds of silence between phrase repetitions (continuous
   /// mode).

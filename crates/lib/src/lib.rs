@@ -8,7 +8,8 @@ pub mod probe;
 pub mod timing;
 pub mod transition;
 
-pub use heartbeat_config::HeartbeatConfig;
+pub use heartbeat::ResolvedNote;
+pub use heartbeat_config::{HeartbeatConfig, NoteConfig};
 pub use library::{builtin_library, PatchLibrary};
 pub use logging::{LogFormat, LogLevel};
 pub use patch::{Patch, PatchOverrides, PatchParamMeta};

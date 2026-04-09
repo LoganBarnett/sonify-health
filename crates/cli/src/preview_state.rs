@@ -12,7 +12,6 @@ use tokio::sync::broadcast;
 pub struct HeartbeatState {
   pub metric: Shared,
   pub override_value: RwLock<Option<f32>>,
-  pub volume: Shared,
   pub effective_volume: Shared,
 }
 
@@ -45,11 +44,10 @@ impl PreviewState {
 
     let heartbeats: Vec<HeartbeatState> = heartbeat_configs
       .iter()
-      .map(|cfg| HeartbeatState {
+      .map(|_cfg| HeartbeatState {
         metric: shared(0.0),
         override_value: RwLock::new(None),
-        volume: shared(cfg.volume as f32),
-        effective_volume: shared(cfg.volume as f32),
+        effective_volume: shared(1.0),
       })
       .collect();
 
@@ -69,7 +67,8 @@ impl PreviewState {
   }
 
   /// Update effective volume for a heartbeat, accounting for
-  /// mute and master volume.
+  /// mute and master volume.  Volume is now master * mute only;
+  /// per-note volume is baked into the audio graph.
   pub fn update_effective_volume(&self, index: usize) {
     if let Some(hb) = self.heartbeats.get(index) {
       let mute_factor = if self.muted.load(Ordering::Relaxed) {
@@ -77,7 +76,7 @@ impl PreviewState {
       } else {
         1.0
       };
-      let vol = hb.volume.value() * self.master_volume.value() * mute_factor;
+      let vol = self.master_volume.value() * mute_factor;
       hb.effective_volume.set_value(vol);
     }
   }
@@ -95,11 +94,8 @@ impl PreviewState {
     *self.library.write().unwrap() = self.original_library.clone();
     *self.heartbeat_configs.write().unwrap() =
       self.original_heartbeat_configs.clone();
-    for (i, cfg) in self.original_heartbeat_configs.iter().enumerate() {
-      if let Some(hb) = self.heartbeats.get(i) {
-        hb.volume.set_value(cfg.volume as f32);
-        *hb.override_value.write().unwrap() = None;
-      }
+    for hb in &self.heartbeats {
+      *hb.override_value.write().unwrap() = None;
     }
     self.master_volume.set_value(1.0);
     self.update_all_effective_volumes();
@@ -135,14 +131,24 @@ impl PreviewState {
       .map(|(i, cfg)| {
         let hb = &self.heartbeats[i];
         let overridden = hb.override_value.read().unwrap().is_some();
+        let notes_json: Vec<_> = cfg
+          .notes
+          .iter()
+          .map(|nc| {
+            json!({
+              "volume": nc.volume,
+              "offset": nc.offset,
+              "transition": serde_json::to_value(&nc.transition).unwrap_or_default(),
+            })
+          })
+          .collect();
         json!({
           "name": cfg.name,
           "continuous": cfg.continuous,
           "metric": hb.metric.value(),
           "overridden": overridden,
-          "volume": hb.volume.value(),
           "cycle_offset_secs": cfg.cycle_offset_secs,
-          "transition": serde_json::to_value(&cfg.transition).unwrap_or_default(),
+          "notes": notes_json,
         })
       })
       .collect();

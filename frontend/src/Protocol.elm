@@ -1,23 +1,27 @@
 module Protocol exposing
     ( HeartbeatInfo
+    , NoteInfo
     , PatchParamMeta
     , ProbeLogEntry
     , ServerMsg(..)
     , TransitionInfo(..)
     , decodeServerMsg
+    , encodeAddNote
     , encodeClearOverride
     , encodeExportConfig
     , encodeGetState
     , encodeImportConfig
     , encodeOverrideHeartbeat
+    , encodeRemoveNote
     , encodeRevertAll
     , encodeSetCycleOffset
     , encodeSetHeartbeatLoop
-    , encodeSetHeartbeatVolume
     , encodeSetMasterVolume
     , encodeSetMuted
+    , encodeSetNoteOffset
+    , encodeSetNoteTransition
+    , encodeSetNoteVolume
     , encodeSetPatchParam
-    , encodeSetTransition
     , encodeTriggerHeartbeat
     )
 
@@ -35,14 +39,20 @@ type alias PatchParamMeta =
     }
 
 
+type alias NoteInfo =
+    { volume : Float
+    , offset : Float
+    , transition : TransitionInfo
+    }
+
+
 type alias HeartbeatInfo =
     { name : String
     , continuous : Bool
     , metric : Float
     , overridden : Bool
-    , volume : Float
     , cycleOffsetSecs : Float
-    , transition : TransitionInfo
+    , notes : List NoteInfo
     }
 
 
@@ -80,7 +90,10 @@ type ServerMsg
     | HeartbeatLoopChanged Bool
     | LibraryChanged (Dict String (Dict String Float))
     | CycleOffsetChanged Int Float
-    | TransitionChanged Int TransitionInfo
+    | NoteVolumeChanged Int Int Float
+    | NoteOffsetChanged Int Int Float
+    | NoteTransitionChanged Int Int TransitionInfo
+    | NotesChanged Int (List NoteInfo)
     | ProbeLog ProbeLogEntry
     | ConfigExport (Dict String (Dict String Float))
     | ImportError String
@@ -127,8 +140,17 @@ serverMsgDecoder =
                     "cycle_offset_changed" ->
                         cycleOffsetChangedDecoder
 
-                    "transition_changed" ->
-                        transitionChangedDecoder
+                    "note_volume_changed" ->
+                        noteVolumeChangedDecoder
+
+                    "note_offset_changed" ->
+                        noteOffsetChangedDecoder
+
+                    "note_transition_changed" ->
+                        noteTransitionChangedDecoder
+
+                    "notes_changed" ->
+                        notesChangedDecoder
 
                     "probe_log" ->
                         probeLogDecoder
@@ -198,16 +220,23 @@ libraryDecoder =
     D.dict (D.dict D.float)
 
 
+noteInfoDecoder : D.Decoder NoteInfo
+noteInfoDecoder =
+    D.map3 NoteInfo
+        (D.field "volume" D.float)
+        (D.field "offset" D.float)
+        (D.field "transition" transitionDecoder)
+
+
 heartbeatInfoDecoder : D.Decoder HeartbeatInfo
 heartbeatInfoDecoder =
-    D.map7 HeartbeatInfo
+    D.map6 HeartbeatInfo
         (D.field "name" D.string)
         (D.field "continuous" D.bool)
         (D.field "metric" D.float)
         (D.field "overridden" D.bool)
-        (D.field "volume" D.float)
         (D.field "cycle_offset_secs" D.float)
-        (D.field "transition" transitionDecoder)
+        (D.field "notes" (D.list noteInfoDecoder))
 
 
 transitionDecoder : D.Decoder TransitionInfo
@@ -290,11 +319,35 @@ cycleOffsetChangedDecoder =
         (D.field "value" D.float)
 
 
-transitionChangedDecoder : D.Decoder ServerMsg
-transitionChangedDecoder =
-    D.map2 TransitionChanged
+noteVolumeChangedDecoder : D.Decoder ServerMsg
+noteVolumeChangedDecoder =
+    D.map3 NoteVolumeChanged
         (D.field "index" D.int)
+        (D.field "note" D.int)
+        (D.field "volume" D.float)
+
+
+noteOffsetChangedDecoder : D.Decoder ServerMsg
+noteOffsetChangedDecoder =
+    D.map3 NoteOffsetChanged
+        (D.field "index" D.int)
+        (D.field "note" D.int)
+        (D.field "offset" D.float)
+
+
+noteTransitionChangedDecoder : D.Decoder ServerMsg
+noteTransitionChangedDecoder =
+    D.map3 NoteTransitionChanged
+        (D.field "index" D.int)
+        (D.field "note" D.int)
         (D.field "transition" transitionDecoder)
+
+
+notesChangedDecoder : D.Decoder ServerMsg
+notesChangedDecoder =
+    D.map2 NotesChanged
+        (D.field "index" D.int)
+        (D.field "notes" (D.list noteInfoDecoder))
 
 
 probeLogDecoder : D.Decoder ServerMsg
@@ -345,12 +398,54 @@ encodeSetPatchParam patchName param value =
         |> E.encode 0
 
 
-encodeSetHeartbeatVolume : Int -> Float -> String
-encodeSetHeartbeatVolume index volume =
+encodeSetNoteVolume : Int -> Int -> Float -> String
+encodeSetNoteVolume index note volume =
     E.object
-        [ ( "type", E.string "set_heartbeat_volume" )
+        [ ( "type", E.string "set_note_volume" )
         , ( "index", E.int index )
+        , ( "note", E.int note )
         , ( "volume", E.float volume )
+        ]
+        |> E.encode 0
+
+
+encodeSetNoteOffset : Int -> Int -> Float -> String
+encodeSetNoteOffset index note offset =
+    E.object
+        [ ( "type", E.string "set_note_offset" )
+        , ( "index", E.int index )
+        , ( "note", E.int note )
+        , ( "offset", E.float offset )
+        ]
+        |> E.encode 0
+
+
+encodeSetNoteTransition : Int -> Int -> TransitionInfo -> String
+encodeSetNoteTransition index note trans =
+    E.object
+        [ ( "type", E.string "set_note_transition" )
+        , ( "index", E.int index )
+        , ( "note", E.int note )
+        , ( "transition", encodeTransition trans )
+        ]
+        |> E.encode 0
+
+
+encodeAddNote : Int -> String
+encodeAddNote index =
+    E.object
+        [ ( "type", E.string "add_note" )
+        , ( "index", E.int index )
+        ]
+        |> E.encode 0
+
+
+encodeRemoveNote : Int -> Int -> String
+encodeRemoveNote index note =
+    E.object
+        [ ( "type", E.string "remove_note" )
+        , ( "index", E.int index )
+        , ( "note", E.int note )
         ]
         |> E.encode 0
 
@@ -434,16 +529,6 @@ encodeSetCycleOffset index value =
         [ ( "type", E.string "set_cycle_offset" )
         , ( "index", E.int index )
         , ( "value", E.float value )
-        ]
-        |> E.encode 0
-
-
-encodeSetTransition : Int -> TransitionInfo -> String
-encodeSetTransition index trans =
-    E.object
-        [ ( "type", E.string "set_transition" )
-        , ( "index", E.int index )
-        , ( "transition", encodeTransition trans )
         ]
         |> E.encode 0
 

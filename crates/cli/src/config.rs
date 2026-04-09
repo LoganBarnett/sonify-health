@@ -300,14 +300,18 @@ mod tests {
       command = "ping -c 1 8.8.8.8"
       result_mode = "exit-code-severity"
 
-      [heartbeats.transition]
+      [[heartbeats.notes]]
+      volume = 0.3
+      offset = 0.0
+
+      [heartbeats.notes.transition]
       type = "discrete"
 
-      [[heartbeats.transition.states]]
+      [[heartbeats.notes.transition.states]]
       threshold = 0.5
       patch = "sine"
 
-      [[heartbeats.transition.states]]
+      [[heartbeats.notes.transition.states]]
       threshold = 1.01
       patch = "alarm"
 
@@ -316,9 +320,11 @@ mod tests {
       command = "echo 0.5"
       result_mode = "stdout"
       continuous = true
+
+      [[heartbeats.notes]]
       volume = 0.2
 
-      [heartbeats.transition]
+      [heartbeats.notes.transition]
       type = "gradient"
       patches = ["warm", "sharp"]
     "#;
@@ -328,10 +334,11 @@ mod tests {
     assert_eq!(raw.heartbeats[0].name, "gateway");
     assert_eq!(raw.heartbeats[0].result_mode, ResultMode::ExitCodeSeverity);
     assert!(!raw.heartbeats[0].continuous);
+    assert_eq!(raw.heartbeats[0].notes.len(), 1);
     assert_eq!(raw.heartbeats[1].name, "cpu");
     assert_eq!(raw.heartbeats[1].result_mode, ResultMode::Stdout);
     assert!(raw.heartbeats[1].continuous);
-    assert!((raw.heartbeats[1].volume - 0.2).abs() < f64::EPSILON);
+    assert!((raw.heartbeats[1].notes[0].volume - 0.2).abs() < f64::EPSILON);
   }
 
   #[test]

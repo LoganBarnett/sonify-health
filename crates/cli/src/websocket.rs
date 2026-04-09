@@ -8,7 +8,8 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::{Patch, Transition};
+use sonify_health_lib::heartbeat_config::default_volume;
+use sonify_health_lib::{NoteConfig, Patch, Transition};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
 
@@ -118,18 +119,129 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_heartbeat_volume" => {
+    "set_note_volume" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let vol = msg.get("volume").and_then(|v| v.as_f64())? as f32;
+      let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
+      let vol = msg.get("volume").and_then(|v| v.as_f64())?;
       let clamped = vol.clamp(0.0, 1.0);
-      preview.heartbeats.get(index)?.volume.set_value(clamped);
-      preview.update_effective_volume(index);
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.notes.get_mut(note)?.volume = clamped;
+      }
       let _ = preview.broadcast_tx.send(
         json!({
-          "type": "volume_changed",
-          "layer": "heartbeat",
+          "type": "note_volume_changed",
           "index": index,
+          "note": note,
           "volume": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_note_offset" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
+      let offset = msg.get("offset").and_then(|v| v.as_f64())?;
+      let clamped = offset.max(0.0);
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.notes.get_mut(note)?.offset = clamped;
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "note_offset_changed",
+          "index": index,
+          "note": note,
+          "offset": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_note_transition" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
+      let raw = msg.get("transition")?;
+      let transition: Transition = serde_json::from_value(raw.clone()).ok()?;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.notes.get_mut(note)?.transition =
+          transition.clone();
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "note_transition_changed",
+          "index": index,
+          "note": note,
+          "transition": serde_json::to_value(&transition).unwrap_or_default(),
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "add_note" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let first_patch = {
+        let lib = preview.library.read().unwrap();
+        lib
+          .keys()
+          .next()
+          .cloned()
+          .unwrap_or_else(|| "sine".to_string())
+      };
+      let new_note = NoteConfig {
+        transition: Transition::Discrete {
+          states: vec![sonify_health_lib::transition::DiscreteState {
+            threshold: 1.01,
+            patch: first_patch,
+          }],
+        },
+        volume: default_volume(),
+        offset: 0.0,
+      };
+      let notes_json;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        let cfg = configs.get_mut(index)?;
+        cfg.notes.push(new_note);
+        notes_json = notes_to_json(&cfg.notes);
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "notes_changed",
+          "index": index,
+          "notes": notes_json,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "remove_note" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
+      let notes_json;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        let cfg = configs.get_mut(index)?;
+        if cfg.notes.len() <= 1 {
+          return None;
+        }
+        if note >= cfg.notes.len() {
+          return None;
+        }
+        cfg.notes.remove(note);
+        notes_json = notes_to_json(&cfg.notes);
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "notes_changed",
+          "index": index,
+          "notes": notes_json,
         })
         .to_string(),
       );
@@ -233,25 +345,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_transition" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let raw = msg.get("transition")?;
-      let transition: Transition = serde_json::from_value(raw.clone()).ok()?;
-      {
-        let mut configs = preview.heartbeat_configs.write().unwrap();
-        configs.get_mut(index)?.transition = transition.clone();
-      }
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "transition_changed",
-          "index": index,
-          "transition": serde_json::to_value(&transition).unwrap_or_default(),
-        })
-        .to_string(),
-      );
-      None
-    }
-
     "revert_all" => {
       preview.revert();
       let snapshot = preview.state_snapshot();
@@ -297,6 +390,20 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     _ => None,
   }
+}
+
+/// Serialize a notes list to JSON values.
+fn notes_to_json(notes: &[NoteConfig]) -> Vec<serde_json::Value> {
+  notes
+    .iter()
+    .map(|nc| {
+      json!({
+        "volume": nc.volume,
+        "offset": nc.offset,
+        "transition": serde_json::to_value(&nc.transition).unwrap_or_default(),
+      })
+    })
+    .collect()
 }
 
 /// Broadcast the full library to all connected clients.

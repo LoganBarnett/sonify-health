@@ -13,13 +13,17 @@
 #         name = "gateway";
 #         command = "/path/to/check-lan";
 #         resultMode = "exit-code-severity";
-#         transition = {
-#           type = "discrete";
-#           states = [
-#             { threshold = 0.5; patch = "sine"; }
-#             { threshold = 1.01; patch = "alarm"; }
-#           ];
-#         };
+#         notes = [
+#           {
+#             transition = {
+#               type = "discrete";
+#               states = [
+#                 { threshold = 0.5; patch = "sine"; }
+#                 { threshold = 1.01; patch = "alarm"; }
+#               ];
+#             };
+#           }
+#         ];
 #       }
 #     ];
 #   };
@@ -76,13 +80,20 @@
           name = hb.name;
           command = hb.command;
           result_mode = hb.resultMode;
-          transition = hb.transition;
+          notes = map (n:
+            {
+              transition = n.transition;
+            }
+            // lib.optionalAttrs (n.volume != 0.3) {
+              volume = n.volume;
+            }
+            // lib.optionalAttrs (n.offset != 0.0) {
+              offset = n.offset;
+            })
+          hb.notes;
         }
         // lib.optionalAttrs hb.continuous {
           continuous = true;
-        }
-        // lib.optionalAttrs (hb.volume != 0.3) {
-          volume = hb.volume;
         }
         // lib.optionalAttrs (hb.phraseGap != 0.0) {
           phrase_gap = hb.phraseGap;
@@ -98,6 +109,32 @@
         })
       cfg.heartbeats;
     });
+
+  noteSubmodule = lib.types.submodule {
+    options = {
+      transition = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        description = ''
+          Transition mapping from probe metric to patches.  Either:
+            { type = "discrete"; states = [{ threshold = 0.5; patch = "sine"; } ...]; }
+          or:
+            { type = "gradient"; patches = ["warm" "sharp" "alarm"]; curve = 2.0; }
+        '';
+      };
+
+      volume = lib.mkOption {
+        type = lib.types.number;
+        default = 0.3;
+        description = "Output volume for this note (0.0-1.0).";
+      };
+
+      offset = lib.mkOption {
+        type = lib.types.number;
+        default = 0.0;
+        description = "Seconds from heartbeat start when this note plays.";
+      };
+    };
+  };
 
   heartbeatSubmodule = lib.types.submodule {
     options = {
@@ -121,13 +158,11 @@
         '';
       };
 
-      transition = lib.mkOption {
-        type = lib.types.attrsOf lib.types.anything;
+      notes = lib.mkOption {
+        type = lib.types.listOf noteSubmodule;
         description = ''
-          Transition mapping from probe metric to patches.  Either:
-            { type = "discrete"; states = [{ threshold = 0.5; patch = "sine"; } ...]; }
-          or:
-            { type = "gradient"; patches = ["warm" "sharp" "alarm"]; curve = 2.0; }
+          Notes for this heartbeat.  Each note has its own transition,
+          volume, and offset from the heartbeat start.
         '';
       };
 
@@ -135,12 +170,6 @@
         type = lib.types.bool;
         default = false;
         description = "Whether this heartbeat plays continuously (drone-style).";
-      };
-
-      volume = lib.mkOption {
-        type = lib.types.number;
-        default = 0.3;
-        description = "Output volume for this heartbeat (0.0-1.0).";
       };
 
       phraseGap = lib.mkOption {
@@ -257,20 +286,24 @@ in {
             name = "lan";
             command = "''${pkgs.fping}/bin/fping -q -t 4000 -r 1 10.0.0.1 10.0.0.2";
             resultMode = "exit-code-severity";
-            transition = {
-              type = "discrete";
-              states = [
-                { threshold = 0.5; patch = "sine"; }
-                { threshold = 1.01; patch = "alarm"; }
-              ];
-            };
+            notes = [
+              {
+                transition = {
+                  type = "discrete";
+                  states = [
+                    { threshold = 0.5; patch = "sine"; }
+                    { threshold = 1.01; patch = "alarm"; }
+                  ];
+                };
+              }
+            ];
           }
         ]
       '';
       description = ''
         Heartbeat definitions.  Each heartbeat joins a probe command
-        with a transition that maps the probe metric (0.0-1.0) to
-        patches from the library.
+        with one or more notes, each mapping the probe metric (0.0-1.0)
+        to patches from the library.
       '';
     };
 
