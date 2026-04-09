@@ -3,7 +3,7 @@ use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{
-  check::{DroneMetricConfig, HeartbeatCheckConfig},
+  check::CheckConfig,
   state::{DroneState, HeartbeatState},
   NoteSpec, Patch, PatchOverrides, Severity,
 };
@@ -19,16 +19,6 @@ use tokio::sync::broadcast;
 pub struct DroneMetricInfo {
   pub name: String,
   pub boops: usize,
-}
-
-/// Per-drone startup defaults, read from config.
-#[derive(Clone)]
-struct DronePlaybackDefaults {
-  volume: f32,
-  repeat_rate: f32,
-  repeat_curve: f32,
-  phrase_gap: f32,
-  interp_curve: f32,
 }
 
 /// Identifies which sound-producing entity owns a patch.
@@ -62,15 +52,6 @@ pub struct PreviewState {
   original_patches: HashMap<PatchOwner, Patch>,
   pub patches: RwLock<HashMap<PatchOwner, Patch>>,
   pub muted: Arc<AtomicBool>,
-  /// Per-metric raw volume set by the UI (0.0..=1.0).
-  pub drone_volumes: Vec<Shared>,
-  /// Direct speed multiplier on phrase repetition (0.1..=10.0).
-  pub drone_repeat_rates: Vec<Shared>,
-  /// Power-curve exponent controlling how the metric reshapes the
-  /// gap range (0.1..=5.0).
-  pub drone_repeat_curves: Vec<Shared>,
-  /// Base gap in seconds between drone phrases (0.0..=16.0).
-  pub drone_phrase_gaps: Vec<Shared>,
   /// Power-curve exponent controlling how the metric reshapes the
   /// lo/hi patch interpolation (0.1..=5.0).
   pub drone_interp_curves: Vec<Shared>,
@@ -99,7 +80,6 @@ pub struct PreviewState {
   pub drone_boop_specs: RwLock<Vec<Vec<NoteSpec>>>,
   pub drone_boop_pins: RwLock<Vec<Vec<bool>>>,
   original_drone_boop_specs: Vec<Vec<NoteSpec>>,
-  drone_defaults: Vec<DronePlaybackDefaults>,
   pub slot_secs: f64,
 }
 
@@ -107,8 +87,8 @@ impl PreviewState {
   pub fn new(
     voice: Patch,
     muted: Arc<AtomicBool>,
-    heartbeat_checks: &[HeartbeatCheckConfig],
-    drone_metrics: &[DroneMetricConfig],
+    heartbeat_checks: &[CheckConfig],
+    drone_metrics: &[CheckConfig],
     drone_profile_overrides: &HashMap<String, (PatchOverrides, PatchOverrides)>,
     slot_secs: f64,
     initial_notes: &[NoteSpec],
@@ -117,37 +97,14 @@ impl PreviewState {
     let drone_count = drone_metrics.len();
     let check_count = heartbeat_checks.len();
 
-    let drone_defaults: Vec<DronePlaybackDefaults> = drone_metrics
+    let drone_interp_curves: Vec<Shared> = drone_metrics
       .iter()
-      .map(|m| DronePlaybackDefaults {
-        volume: m.volume.unwrap_or(1.0) as f32,
-        repeat_rate: m.repeat_rate.unwrap_or(1.0) as f32,
-        repeat_curve: m.repeat_curve.unwrap_or(1.0) as f32,
-        phrase_gap: m.phrase_gap.unwrap_or(4.0) as f32,
-        interp_curve: m.interp_curve.unwrap_or(1.0) as f32,
-      })
+      .map(|m| shared(m.interp_curve.unwrap_or(1.0) as f32))
       .collect();
-
-    let drone_volumes: Vec<Shared> =
-      drone_defaults.iter().map(|d| shared(d.volume)).collect();
-    let drone_repeat_rates: Vec<Shared> = drone_defaults
-      .iter()
-      .map(|d| shared(d.repeat_rate))
-      .collect();
-    let drone_repeat_curves: Vec<Shared> = drone_defaults
-      .iter()
-      .map(|d| shared(d.repeat_curve))
-      .collect();
-    let drone_phrase_gaps: Vec<Shared> = drone_defaults
-      .iter()
-      .map(|d| shared(d.phrase_gap))
-      .collect();
-    let drone_interp_curves: Vec<Shared> = drone_defaults
-      .iter()
-      .map(|d| shared(d.interp_curve))
-      .collect();
+    // Volume is now a Patch parameter; initialize combined volumes
+    // to 1.0 and let the play loop update from the interpolated patch.
     let combined_volumes: Vec<Shared> =
-      drone_defaults.iter().map(|d| shared(d.volume)).collect();
+      (0..drone_count).map(|_| shared(1.0)).collect();
 
     let (broadcast_tx, _) = broadcast::channel(256);
     let (check_log_tx, _) = broadcast::channel(256);
@@ -224,10 +181,6 @@ impl PreviewState {
       original_patches: patches.clone(),
       patches: RwLock::new(patches),
       muted,
-      drone_volumes,
-      drone_repeat_rates,
-      drone_repeat_curves,
-      drone_phrase_gaps,
       drone_interp_curves,
       combined_volumes,
       master_volume: shared(1.0),
@@ -253,31 +206,41 @@ impl PreviewState {
       original_drone_boop_specs: drone_specs_init.clone(),
       drone_boop_specs: RwLock::new(drone_specs_init),
       drone_boop_pins: RwLock::new(drone_pins_init),
-      drone_defaults,
       slot_secs,
     }
   }
 
   /// Recompute `combined_volumes[index]` from mute flag, master
-  /// volume, and per-metric volume.
-  pub fn update_combined_volume(&self, index: usize) {
+  /// volume, and the given raw per-check volume.
+  pub fn update_combined_volume_with(&self, index: usize, raw: f32) {
     let mute_factor = if self.muted.load(Ordering::Relaxed) {
       0.0
     } else {
       1.0
     };
     let master = self.master_volume.value();
-    if let (Some(dv), Some(cv)) =
-      (self.drone_volumes.get(index), self.combined_volumes.get(index))
-    {
-      cv.set_value(mute_factor * master * dv.value());
+    if let Some(cv) = self.combined_volumes.get(index) {
+      cv.set_value(mute_factor * master * raw);
     }
+  }
+
+  /// Alias used by the daemon mute-toggle path: re-derive volume
+  /// from the current lo-profile patch.
+  pub fn update_combined_volume(&self, index: usize) {
+    let raw = {
+      let patches = self.patches.read().unwrap();
+      patches
+        .get(&PatchOwner::DroneLo(index))
+        .map(|p| p.volume as f32)
+        .unwrap_or(1.0)
+    };
+    self.update_combined_volume_with(index, raw);
   }
 
   /// Update every combined volume (after mute toggle or master
   /// volume change).
   pub fn update_all_combined_volumes(&self) {
-    for i in 0..self.drone_volumes.len() {
+    for i in 0..self.combined_volumes.len() {
       self.update_combined_volume(i);
     }
   }
@@ -493,10 +456,6 @@ impl PreviewState {
         json!({
           "name": info.name,
           "value": self.drone_state.metrics[i].value(),
-          "volume": self.drone_volumes[i].value(),
-          "repeat_rate": self.drone_repeat_rates[i].value(),
-          "repeat_curve": self.drone_repeat_curves[i].value(),
-          "phrase_gap": self.drone_phrase_gaps[i].value(),
           "interp_curve": self.drone_interp_curves[i].value(),
           "boops": info.boops,
           "overridden": drone_overrides[i].is_some(),
@@ -676,30 +635,14 @@ impl PreviewState {
 
     // Snapshot locked drone settings before resetting.
     let locked_drone_indices = self.locked_drones.read().unwrap().clone();
-    let locked_drone_snapshots: Vec<(
-      usize,
-      DroneMetricInfo,
-      f32,
-      f32,
-      f32,
-      f32,
-      f32,
-    )> = {
+    let locked_drone_snapshots: Vec<(usize, DroneMetricInfo, f32)> = {
       let infos = self.drone_infos.read().unwrap();
       locked_drone_indices
         .iter()
         .filter_map(|&i| {
-          infos.get(i).map(|info| {
-            (
-              i,
-              info.clone(),
-              self.drone_volumes[i].value(),
-              self.drone_repeat_rates[i].value(),
-              self.drone_repeat_curves[i].value(),
-              self.drone_phrase_gaps[i].value(),
-              self.drone_interp_curves[i].value(),
-            )
-          })
+          infos
+            .get(i)
+            .map(|info| (i, info.clone(), self.drone_interp_curves[i].value()))
         })
         .collect()
     };
@@ -720,35 +663,18 @@ impl PreviewState {
 
     *self.drone_infos.write().unwrap() = self.original_drone_infos.clone();
 
-    for (i, d) in self.drone_defaults.iter().enumerate() {
-      if let Some(dv) = self.drone_volumes.get(i) {
-        dv.set_value(d.volume);
-      }
-      if let Some(rr) = self.drone_repeat_rates.get(i) {
-        rr.set_value(d.repeat_rate);
-      }
-      if let Some(rc) = self.drone_repeat_curves.get(i) {
-        rc.set_value(d.repeat_curve);
-      }
-      if let Some(pg) = self.drone_phrase_gaps.get(i) {
-        pg.set_value(d.phrase_gap);
-      }
-      if let Some(ic) = self.drone_interp_curves.get(i) {
-        ic.set_value(d.interp_curve);
-      }
+    // Reset interp curves to 1.0 (default).
+    for ic in &self.drone_interp_curves {
+      ic.set_value(1.0);
     }
 
     // Restore locked drone settings.
     {
       let mut infos = self.drone_infos.write().unwrap();
-      for (i, info, vol, rate, curve, gap, interp) in &locked_drone_snapshots {
+      for (i, info, interp) in &locked_drone_snapshots {
         if let Some(entry) = infos.get_mut(*i) {
           *entry = info.clone();
         }
-        self.drone_volumes[*i].set_value(*vol);
-        self.drone_repeat_rates[*i].set_value(*rate);
-        self.drone_repeat_curves[*i].set_value(*curve);
-        self.drone_phrase_gaps[*i].set_value(*gap);
         self.drone_interp_curves[*i].set_value(*interp);
       }
     }
@@ -817,7 +743,7 @@ mod tests {
   use super::*;
   use serde::Deserialize;
   use sonify_health_lib::{
-    check::{DroneMetricConfig, HeartbeatCheckConfig, ResultMode},
+    check::{CheckConfig, ResultMode},
     Patch,
   };
 
@@ -868,10 +794,6 @@ mod tests {
   struct DroneContract {
     name: String,
     value: f64,
-    volume: f64,
-    repeat_rate: f64,
-    repeat_curve: f64,
-    phrase_gap: f64,
     interp_curve: f64,
     boops: u64,
     overridden: bool,
@@ -911,21 +833,19 @@ mod tests {
 
   fn test_preview() -> PreviewState {
     let voice = Patch::from_hostname("test");
-    let checks = vec![HeartbeatCheckConfig {
+    let checks = vec![CheckConfig {
       name: "cpu".to_string(),
       command: "echo healthy".to_string(),
-      result_mode: ResultMode::ExitCode,
+      result_mode: ResultMode::ExitCodeSeverity,
+      boops: None,
+      interp_curve: None,
     }];
-    let drones = vec![DroneMetricConfig {
+    let drones = vec![CheckConfig {
       name: "load".to_string(),
       command: "echo 0.5".to_string(),
       result_mode: ResultMode::Stdout,
       boops: Some(2),
-      phrase_gap: None,
-      repeat_rate: None,
-      repeat_curve: None,
       interp_curve: None,
-      volume: None,
     }];
     PreviewState::new(
       voice,
@@ -1108,20 +1028,64 @@ mod tests {
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 
         let base_voice = Patch::from_hostname("test");
-        let voice = match &config.daemon.heartbeat_patch_overrides {
-          Some(ovr) => base_voice.with_overrides(ovr),
-          None => base_voice,
-        };
+        let voice = base_voice.with_overrides(config.patch_overrides_ref());
+
+        let heartbeat_checks: Vec<_> = config
+          .daemon
+          .checks
+          .iter()
+          .filter(|c| {
+            c.result_mode
+              == sonify_health_lib::check::ResultMode::ExitCodeSeverity
+          })
+          .cloned()
+          .collect();
+        let drone_checks: Vec<_> = config
+          .daemon
+          .checks
+          .iter()
+          .filter(|c| {
+            c.result_mode
+              != sonify_health_lib::check::ResultMode::ExitCodeSeverity
+          })
+          .cloned()
+          .collect();
+
+        let heartbeat_notes: Vec<sonify_health_lib::NoteSpec> =
+          heartbeat_checks
+            .iter()
+            .flat_map(|c| {
+              config
+                .daemon
+                .check_notes
+                .get(&c.name)
+                .cloned()
+                .unwrap_or_default()
+            })
+            .collect();
+        let drone_notes: std::collections::HashMap<
+          String,
+          Vec<sonify_health_lib::NoteSpec>,
+        > = drone_checks
+          .iter()
+          .filter_map(|c| {
+            config
+              .daemon
+              .check_notes
+              .get(&c.name)
+              .map(|n| (c.name.clone(), n.clone()))
+          })
+          .collect();
 
         let preview = PreviewState::new(
           voice,
           Arc::new(AtomicBool::new(false)),
-          &config.daemon.heartbeat_checks,
-          &config.daemon.drone_metrics,
-          &config.daemon.drone_profile_overrides,
+          &heartbeat_checks,
+          &drone_checks,
+          &config.daemon.profile_overrides,
           config.daemon.timing.slot_duration_secs,
-          &config.daemon.heartbeat_notes,
-          &config.daemon.drone_notes,
+          &heartbeat_notes,
+          &drone_notes,
         );
 
         let json = preview.state_snapshot();
@@ -1135,20 +1099,20 @@ mod tests {
 
         assert_eq!(
           state.checks.len(),
-          config.daemon.heartbeat_checks.len(),
+          heartbeat_checks.len(),
           "{}: check count mismatch",
           path.display()
         );
         assert_eq!(
           state.drones.len(),
-          config.daemon.drone_metrics.len(),
+          drone_checks.len(),
           "{}: drone count mismatch",
           path.display()
         );
         for (i, drone) in state.drones.iter().enumerate() {
           assert_eq!(
             drone.name,
-            config.daemon.drone_metrics[i].name,
+            drone_checks[i].name,
             "{}: drone[{i}] name mismatch",
             path.display()
           );

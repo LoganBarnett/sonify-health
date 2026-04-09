@@ -4,7 +4,8 @@ use crate::preview_state::{severity_from_shared, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  check, drone, heartbeat, Patch, Severity,
+  check::{self, ResultMode},
+  heartbeat, Patch, Severity,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -51,6 +52,20 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     log_patch_derivation(patch);
   }
 
+  // Split checks by result mode.
+  let heartbeat_checks: Vec<_> = config
+    .checks
+    .iter()
+    .filter(|c| c.result_mode == ResultMode::ExitCodeSeverity)
+    .cloned()
+    .collect();
+  let drone_checks: Vec<_> = config
+    .checks
+    .iter()
+    .filter(|c| c.result_mode != ResultMode::ExitCodeSeverity)
+    .cloned()
+    .collect();
+
   // Log initial boop specs from materialized state.
   {
     let boops_per_check = preview.boop_count.load(Ordering::Relaxed);
@@ -61,8 +76,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       } else {
         0
       };
-      let check_name = config
-        .heartbeat_checks
+      let check_name = heartbeat_checks
         .get(check_idx)
         .map(|c| c.name.as_str())
         .unwrap_or("?");
@@ -82,8 +96,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
   // -- Heartbeat check threads ------------------------------------------------
 
-  let check_handles: Vec<_> = config
-    .heartbeat_checks
+  let check_handles: Vec<_> = heartbeat_checks
     .iter()
     .enumerate()
     .map(|(i, check_cfg)| {
@@ -114,8 +127,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
               true,
             );
           } else {
-            match check::run_heartbeat_check(&cfg) {
-              Ok(severity) => {
+            match check::run_check(&cfg) {
+              Ok(metric) => {
+                let severity = metric_to_severity(metric);
                 info!(
                   check = cfg.name,
                   severity = %severity,
@@ -159,8 +173,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
   // -- Drone poll threads -----------------------------------------------------
 
-  let drone_handles: Vec<_> = config
-    .drone_metrics
+  let drone_handles: Vec<_> = drone_checks
     .iter()
     .enumerate()
     .map(|(i, drone_cfg)| {
@@ -169,7 +182,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       let run = Arc::clone(&running);
       let m = metrics.clone();
       let prev = Arc::clone(&preview);
-      let interval = Duration::from_secs_f64(config.drone_poll_interval_secs);
+      let interval = Duration::from_secs_f64(config.poll_interval_secs);
       thread::spawn(move || {
         while run.load(Ordering::Relaxed) {
           // If an override is active, skip the shell poll.
@@ -191,7 +204,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
               true,
             );
           } else {
-            match check::run_drone_poll(&cfg) {
+            match check::run_check(&cfg) {
               Ok(value) => {
                 info!(metric = cfg.name, value, "Drone poll completed");
                 st.set(i, value);
@@ -228,7 +241,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   // phrase from current voice + drone config, play it, then sleep
   // for a metric-driven gap before repeating.
 
-  let drone_play_handles: Vec<_> = (0..config.drone_metrics.len())
+  let drone_play_handles: Vec<_> = (0..drone_checks.len())
     .map(|i| {
       let run = Arc::clone(&running);
       let prev = Arc::clone(&preview);
@@ -245,6 +258,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           // Interpolate between lo and hi profiles based on metric.
           let base_patch = prev.effective_drone_patch(i, metric);
 
+          // Update the combined volume from the interpolated patch.
+          prev.update_combined_volume_with(i, base_patch.volume as f32);
+
           let note_specs = prev.drone_boop_specs.read().unwrap()[i].clone();
           let patches: Vec<Patch> = note_specs
             .iter()
@@ -259,12 +275,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             Some(&prev.combined_volumes[i]),
           );
 
-          // Compute the gap before sleeping so we know whether
-          // to use content-only or full duration.
-          let base_gap = prev.drone_phrase_gaps[i].value() as f64;
-          let curve = prev.drone_repeat_curves[i].value();
-          let rate = prev.drone_repeat_rates[i].value();
-          let gap = drone::phrase_gap_secs(base_gap, metric, curve, rate);
+          // Compute gap from the interpolated patch fields.
+          let gap = base_patch.phrase_gap / (base_patch.repeat_rate.max(0.1));
 
           // When gap=0 the drone loops seamlessly: sleep only for
           // the note content so replace() fires while the last
@@ -309,7 +321,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   info!(
     slot = config.timing.slot,
     cycle_secs = config.timing.cycle_duration_secs,
-    drone_metrics = config.drone_metrics.len(),
+    drone_checks = drone_checks.len(),
     "Daemon started"
   );
 
@@ -475,6 +487,17 @@ fn play_heartbeat_preview(
 }
 
 // -- Helpers -----------------------------------------------------------------
+
+/// Convert a normalized metric (0.0–1.0) from an
+/// `ExitCodeSeverity` check back to a `Severity` enum value.
+fn metric_to_severity(metric: f32) -> Severity {
+  let sev_val = (metric * 2.0).round() as u8;
+  match sev_val {
+    0 => Severity::Healthy,
+    1 => Severity::Degraded,
+    _ => Severity::Down,
+  }
+}
 
 /// Sleep for `dur` in ~100 ms increments, checking `running` flag.
 fn sleep_checking(running: &AtomicBool, dur: Duration) {

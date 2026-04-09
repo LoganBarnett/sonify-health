@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use sonify_health_lib::{
-  check::HeartbeatCheckConfig, timing::TimingConfig, DroneMetricConfig,
-  LogFormat, LogLevel, NoteSpec, Patch, PatchOverrides,
+  check::CheckConfig, timing::TimingConfig, LogFormat, LogLevel, NoteSpec,
+  Patch, PatchOverrides,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,16 +51,25 @@ pub struct OidcConfig {
   pub client_secret: String,
 }
 
-/// A drone profile as it appears in the config file under
-/// `[drone_profiles.<name>]`, containing `lo` and `hi` patch
-/// overrides for metric-driven interpolation.
+/// A check profile as it appears in the config file under
+/// `[profiles.<name>]`, containing `lo` and `hi` patch overrides
+/// for metric-driven interpolation.
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DroneProfileRaw {
+pub(crate) struct ProfileRaw {
   #[serde(default)]
   pub lo: PatchOverrides,
   #[serde(default)]
   pub hi: PatchOverrides,
+}
+
+/// A note specification as it appears in the config file under
+/// `[[check_notes.<name>]]`.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct RawNoteSpec {
+  freq: f64,
+  duration: f64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -72,11 +81,21 @@ pub(crate) struct ConfigFileRaw {
   audio_device: Option<String>,
   frontend_path: Option<PathBuf>,
   patch: Option<PatchOverrides>,
-  heartbeat: Option<HeartbeatSectionRaw>,
-  drone: Option<DroneSectionRaw>,
-  drone_profiles: Option<HashMap<String, DroneProfileRaw>>,
-  drone_notes: Option<HashMap<String, Vec<RawNoteSpec>>>,
+  timing: Option<TimingSectionRaw>,
+  #[serde(default)]
+  checks: Vec<CheckConfig>,
+  profiles: Option<HashMap<String, ProfileRaw>>,
+  check_notes: Option<HashMap<String, Vec<RawNoteSpec>>>,
   oidc: Option<OidcSectionRaw>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TimingSectionRaw {
+  cycle_duration_secs: Option<f64>,
+  slot_duration_secs: Option<f64>,
+  slot: Option<u8>,
+  poll_interval_secs: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -86,36 +105,6 @@ struct OidcSectionRaw {
   issuer: Option<String>,
   client_id: Option<String>,
   client_secret_file: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct HeartbeatSectionRaw {
-  cycle_duration_secs: Option<f64>,
-  slot_duration_secs: Option<f64>,
-  slot: Option<u8>,
-  #[serde(default)]
-  checks: Vec<HeartbeatCheckConfig>,
-  #[serde(default)]
-  notes: Vec<RawNoteSpec>,
-  patch: Option<PatchOverrides>,
-}
-
-/// A note specification as it appears in the config file under
-/// `[[heartbeat.notes]]` or `[[drone_notes.<name>]]`.
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-struct RawNoteSpec {
-  freq: f64,
-  duration: f64,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct DroneSectionRaw {
-  poll_interval_secs: Option<f64>,
-  #[serde(default)]
-  metrics: Vec<DroneMetricConfig>,
 }
 
 impl ConfigFileRaw {
@@ -150,35 +139,26 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
   pub timing: TimingConfig,
-  pub heartbeat_checks: Vec<HeartbeatCheckConfig>,
-  pub heartbeat_notes: Vec<NoteSpec>,
-  pub drone_poll_interval_secs: f64,
-  pub drone_metrics: Vec<DroneMetricConfig>,
-  /// Patch overrides from `[heartbeat.patch]`, applied on top of the
-  /// base patch (hostname + `[patch]`).
-  pub heartbeat_patch_overrides: Option<PatchOverrides>,
-  /// Per-drone profile overrides from `[drone_profiles.<name>]`,
-  /// keyed by metric name.  Each entry holds (lo, hi) patch
-  /// overrides for metric-driven interpolation.
-  pub drone_profile_overrides:
-    HashMap<String, (PatchOverrides, PatchOverrides)>,
-  /// Per-drone note specs from `[[drone_notes.<name>]]`, keyed by
-  /// metric name.  When present, these override algorithmic
-  /// generation and start pinned.
-  pub drone_notes: HashMap<String, Vec<NoteSpec>>,
+  pub checks: Vec<CheckConfig>,
+  pub poll_interval_secs: f64,
+  /// Per-check profile overrides from `[profiles.<name>]`, keyed by
+  /// check name.  Each entry holds (lo, hi) patch overrides for
+  /// metric-driven interpolation.
+  pub profile_overrides: HashMap<String, (PatchOverrides, PatchOverrides)>,
+  /// Per-check note specs from `[[check_notes.<name>]]`, keyed by
+  /// check name.  When present, these override algorithmic generation
+  /// and start pinned.
+  pub check_notes: HashMap<String, Vec<NoteSpec>>,
 }
 
 impl Default for DaemonConfig {
   fn default() -> Self {
     Self {
       timing: TimingConfig::default(),
-      heartbeat_checks: Vec::new(),
-      heartbeat_notes: Vec::new(),
-      drone_poll_interval_secs: 5.0,
-      drone_metrics: Vec::new(),
-      heartbeat_patch_overrides: None,
-      drone_profile_overrides: HashMap::new(),
-      drone_notes: HashMap::new(),
+      checks: Vec::new(),
+      poll_interval_secs: 5.0,
+      profile_overrides: HashMap::new(),
+      check_notes: HashMap::new(),
     }
   }
 }
@@ -233,70 +213,43 @@ impl Config {
       .or(file.frontend_path)
       .unwrap_or_else(|| PathBuf::from("frontend/public"));
 
-    let (drone_poll_interval_secs, drone_metrics) = file
-      .drone
-      .map(|d| (d.poll_interval_secs.unwrap_or(5.0), d.metrics))
-      .unwrap_or((5.0, Vec::new()));
+    let timing_raw = file.timing.unwrap_or_default();
 
-    let drone_profile_overrides: HashMap<
-      String,
-      (PatchOverrides, PatchOverrides),
-    > = file
-      .drone_profiles
-      .unwrap_or_default()
-      .into_iter()
-      .map(|(name, p)| (name, (p.lo, p.hi)))
-      .collect();
+    let profile_overrides: HashMap<String, (PatchOverrides, PatchOverrides)> =
+      file
+        .profiles
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, p)| (name, (p.lo, p.hi)))
+        .collect();
 
-    let drone_notes: HashMap<String, Vec<NoteSpec>> = file
-      .drone_notes
+    let check_notes: HashMap<String, Vec<NoteSpec>> = file
+      .check_notes
       .unwrap_or_default()
       .into_iter()
       .map(|(name, specs)| {
-        let boops = specs
+        let notes = specs
           .iter()
           .map(|n| NoteSpec {
             freq: n.freq,
             duration: n.duration,
           })
           .collect();
-        (name, boops)
+        (name, notes)
       })
       .collect();
 
-    let daemon = file
-      .heartbeat
-      .map(|hb| {
-        let heartbeat_notes = hb
-          .notes
-          .iter()
-          .map(|n| NoteSpec {
-            freq: n.freq,
-            duration: n.duration,
-          })
-          .collect();
-        DaemonConfig {
-          timing: TimingConfig {
-            cycle_duration_secs: hb.cycle_duration_secs.unwrap_or(16.0),
-            slot_duration_secs: hb.slot_duration_secs.unwrap_or(4.0),
-            slot: hb.slot.unwrap_or(0),
-          },
-          heartbeat_checks: hb.checks,
-          heartbeat_notes,
-          drone_poll_interval_secs,
-          drone_metrics: drone_metrics.clone(),
-          heartbeat_patch_overrides: hb.patch,
-          drone_profile_overrides: drone_profile_overrides.clone(),
-          drone_notes: drone_notes.clone(),
-        }
-      })
-      .unwrap_or(DaemonConfig {
-        drone_poll_interval_secs,
-        drone_metrics,
-        drone_profile_overrides,
-        drone_notes,
-        ..DaemonConfig::default()
-      });
+    let daemon = DaemonConfig {
+      timing: TimingConfig {
+        cycle_duration_secs: timing_raw.cycle_duration_secs.unwrap_or(16.0),
+        slot_duration_secs: timing_raw.slot_duration_secs.unwrap_or(4.0),
+        slot: timing_raw.slot.unwrap_or(0),
+      },
+      checks: file.checks,
+      poll_interval_secs: timing_raw.poll_interval_secs.unwrap_or(5.0),
+      profile_overrides,
+      check_notes,
+    };
 
     let oidc_file = file.oidc.unwrap_or_default();
     let oidc_base = base_url.map(String::from).or(oidc_file.base_url);
@@ -396,147 +349,109 @@ fn credential_secret_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use sonify_health_lib::check::ResultMode;
 
   #[test]
-  fn drone_section_parses() {
+  fn checks_section_parses() {
     let toml = r#"
-      [drone]
+      [timing]
       poll_interval_secs = 10
 
-      [[drone.metrics]]
+      [[checks]]
       name = "gpu"
       command = "echo 0.5"
       result_mode = "stdout"
 
-      [[drone.metrics]]
-      name = "mem"
-      command = "echo 0.3"
-      result_mode = "exit-code"
+      [[checks]]
+      name = "gateway"
+      command = "ping -c 1 8.8.8.8"
+      result_mode = "exit-code-severity"
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let drone = raw.drone.unwrap();
-    assert_eq!(drone.poll_interval_secs, Some(10.0));
-    assert_eq!(drone.metrics.len(), 2);
-    assert_eq!(drone.metrics[0].name, "gpu");
-    assert_eq!(drone.metrics[1].name, "mem");
-    assert_eq!(drone.metrics[0].boops, None);
+    let timing = raw.timing.unwrap();
+    assert_eq!(timing.poll_interval_secs, Some(10.0));
+    assert_eq!(raw.checks.len(), 2);
+    assert_eq!(raw.checks[0].name, "gpu");
+    assert_eq!(raw.checks[0].result_mode, ResultMode::Stdout);
+    assert_eq!(raw.checks[1].name, "gateway");
+    assert_eq!(raw.checks[1].result_mode, ResultMode::ExitCodeSeverity);
   }
 
   #[test]
-  fn drone_playback_defaults_parse() {
+  fn check_optional_fields_parse() {
     let toml = r#"
-      [drone]
-      [[drone.metrics]]
+      [[checks]]
       name = "cpu"
       command = "echo 0.5"
       result_mode = "stdout"
-      phrase_gap = 0.0
-      repeat_rate = 2.0
-      repeat_curve = 0.5
       interp_curve = 2.0
-      volume = 0.8
-    "#;
-
-    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let drone = raw.drone.unwrap();
-    let m = &drone.metrics[0];
-    assert_eq!(m.phrase_gap, Some(0.0));
-    assert_eq!(m.repeat_rate, Some(2.0));
-    assert_eq!(m.repeat_curve, Some(0.5));
-    assert_eq!(m.interp_curve, Some(2.0));
-    assert_eq!(m.volume, Some(0.8));
-  }
-
-  #[test]
-  fn drone_boops_parse() {
-    let toml = r#"
-      [drone]
-      [[drone.metrics]]
-      name = "cpu"
-      command = "echo 0.5"
-      result_mode = "stdout"
       boops = 3
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let drone = raw.drone.unwrap();
-    assert_eq!(drone.metrics[0].boops, Some(3));
+    let c = &raw.checks[0];
+    assert_eq!(c.interp_curve, Some(2.0));
+    assert_eq!(c.boops, Some(3));
   }
 
   #[test]
-  fn missing_drone_section_defaults() {
+  fn missing_checks_defaults() {
     let config =
       Config::from_args(None, None, None, None, None, None, None, None, None)
         .unwrap();
-    assert!(config.daemon.drone_metrics.is_empty());
-    assert!(
-      (config.daemon.drone_poll_interval_secs - 5.0).abs() < f64::EPSILON
-    );
+    assert!(config.daemon.checks.is_empty());
+    assert!((config.daemon.poll_interval_secs - 5.0).abs() < f64::EPSILON);
   }
 
   #[test]
-  fn heartbeat_notes_parse() {
+  fn check_notes_parse() {
     let toml = r#"
-      [heartbeat]
-      slot = 0
-      cycle_duration_secs = 10
-      slot_duration_secs = 2
+      [[checks]]
+      name = "cpu"
+      command = "echo 0.5"
+      result_mode = "stdout"
 
-      [[heartbeat.notes]]
-      freq = 440.0
+      [[check_notes.cpu]]
+      freq = 460.0
+      duration = 0.5
+
+      [[check_notes.cpu]]
+      freq = 920.0
       duration = 0.25
-
-      [[heartbeat.notes]]
-      freq = 880.0
-      duration = 0.15
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let hb = raw.heartbeat.unwrap();
-    assert_eq!(hb.notes.len(), 2);
-    assert!((hb.notes[0].freq - 440.0).abs() < f64::EPSILON);
-    assert!((hb.notes[0].duration - 0.25).abs() < f64::EPSILON);
-    assert!((hb.notes[1].freq - 880.0).abs() < f64::EPSILON);
-    assert!((hb.notes[1].duration - 0.15).abs() < f64::EPSILON);
+    let notes = raw.check_notes.unwrap();
+    assert_eq!(notes.len(), 1);
+    let cpu_notes = &notes["cpu"];
+    assert_eq!(cpu_notes.len(), 2);
+    assert!((cpu_notes[0].freq - 460.0).abs() < f64::EPSILON);
+    assert!((cpu_notes[0].duration - 0.5).abs() < f64::EPSILON);
+    assert!((cpu_notes[1].freq - 920.0).abs() < f64::EPSILON);
+    assert!((cpu_notes[1].duration - 0.25).abs() < f64::EPSILON);
   }
 
   #[test]
-  fn heartbeat_patch_section_parses() {
+  fn profiles_section_parses() {
     let toml = r#"
-      [heartbeat.patch]
-      base_freq = 440.0
-      sine_ratio = 1.5
-      amplitude = 0.3
-    "#;
-
-    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let patch = raw.heartbeat.unwrap().patch.unwrap();
-    assert_eq!(patch.base_freq, Some(440.0));
-    assert_eq!(patch.sine_ratio, Some(1.5));
-    assert_eq!(patch.amplitude, Some(0.3));
-  }
-
-  #[test]
-  fn drone_profiles_section_parses() {
-    let toml = r#"
-      [drone_profiles.cpu.lo]
+      [profiles.cpu.lo]
       base_freq = 220.0
       sine_ratio = 0.5
 
-      [drone_profiles.cpu.hi]
+      [profiles.cpu.hi]
       base_freq = 440.0
       sine_ratio = 1.0
 
-      [drone_profiles.mem.lo]
+      [profiles.mem.lo]
       base_freq = 330.0
 
-      [drone_profiles.mem.hi]
+      [profiles.mem.hi]
       base_freq = 660.0
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let dp = raw.drone_profiles.unwrap();
+    let dp = raw.profiles.unwrap();
     assert_eq!(dp.len(), 2);
     assert_eq!(dp["cpu"].lo.base_freq, Some(220.0));
     assert_eq!(dp["cpu"].lo.sine_ratio, Some(0.5));
@@ -547,50 +462,20 @@ mod tests {
     assert_eq!(dp["mem"].lo.sine_ratio, None);
   }
 
-  #[test]
-  fn drone_notes_parse() {
-    let toml = r#"
-      [drone]
-      [[drone.metrics]]
-      name = "cpu"
-      command = "echo 0.5"
-      result_mode = "stdout"
-
-      [[drone_notes.cpu]]
-      freq = 460.0
-      duration = 0.5
-
-      [[drone_notes.cpu]]
-      freq = 920.0
-      duration = 0.25
-    "#;
-
-    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let notes = raw.drone_notes.unwrap();
-    assert_eq!(notes.len(), 1);
-    let cpu_notes = &notes["cpu"];
-    assert_eq!(cpu_notes.len(), 2);
-    assert!((cpu_notes[0].freq - 460.0).abs() < f64::EPSILON);
-    assert!((cpu_notes[0].duration - 0.5).abs() < f64::EPSILON);
-    assert!((cpu_notes[1].freq - 920.0).abs() < f64::EPSILON);
-    assert!((cpu_notes[1].duration - 0.25).abs() < f64::EPSILON);
-  }
-
   /// The exported TOML format must round-trip through config loading.
-  /// `format_toml` produces `[heartbeat.patch]` and
-  /// `[drone_profiles.<name>.lo/hi]` sections; these must be parsed
-  /// by `ConfigFileRaw` so users can paste an export into a config
-  /// file.
+  /// `format_toml` produces `[patch]` and `[profiles.<name>.lo/hi]`
+  /// sections; these must be parsed by `ConfigFileRaw` so users can
+  /// paste an export into a config file.
   #[test]
   fn export_toml_round_trips_through_config_parser() {
     let patch = Patch::from_hostname("test");
     let drone_lo = Patch::from_hostname("drone-lo");
     let drone_hi = Patch::from_hostname("drone-hi");
 
-    // Simulate what format_toml produces: heartbeat patch, notes,
-    // and drone profiles.
+    // Simulate what format_toml produces: base patch, notes, and
+    // check profiles.
     let exported = format!(
-      r#"[heartbeat.patch]
+      r#"[patch]
 base_freq = {hb_base}
 sine_ratio = {hb_sine}
 tri_ratio = {hb_tri}
@@ -612,28 +497,28 @@ tremolo_rate = {hb_trem_rate}
 tremolo_depth = {hb_trem_depth}
 amplitude = {hb_amp}
 
-[[heartbeat.notes]]
+[[check_notes.gateway]]
 freq = 440.0
 duration = 0.25
 
-[[heartbeat.notes]]
+[[check_notes.gateway]]
 freq = 880.0
 duration = 0.15
 
-[[drone_notes.cpu]]
+[[check_notes.cpu]]
 freq = 460.0
 duration = 0.5
 
-[[drone_notes.cpu]]
+[[check_notes.cpu]]
 freq = 920.0
 duration = 0.25
 
-[drone_profiles.cpu.lo]
+[profiles.cpu.lo]
 base_freq = {lo_base}
 sine_ratio = {lo_sine}
 amplitude = {lo_amp}
 
-[drone_profiles.cpu.hi]
+[profiles.cpu.hi]
 base_freq = {hi_base}
 sine_ratio = {hi_sine}
 amplitude = {hi_amp}
@@ -669,61 +554,57 @@ amplitude = {hi_amp}
     let raw: ConfigFileRaw = toml::from_str(&exported)
       .expect("Exported TOML must parse as ConfigFileRaw");
 
-    // Heartbeat patch params should survive.
-    let hb_patch = raw
-      .heartbeat
-      .as_ref()
-      .expect("Export should produce a [heartbeat] section")
+    // Patch params should survive.
+    let patch_ovr = raw
       .patch
       .as_ref()
-      .expect("Export should produce a [heartbeat.patch] section");
+      .expect("Export should produce a [patch] section");
     assert!(
-      (hb_patch.base_freq.unwrap() - patch.base_freq).abs() < f64::EPSILON,
-      "Heartbeat base_freq did not round-trip",
+      (patch_ovr.base_freq.unwrap() - patch.base_freq).abs() < f64::EPSILON,
+      "base_freq did not round-trip",
     );
     assert!(
-      (hb_patch.amplitude.unwrap() - patch.amplitude).abs() < f64::EPSILON,
-      "Heartbeat amplitude did not round-trip",
+      (patch_ovr.amplitude.unwrap() - patch.amplitude).abs() < f64::EPSILON,
+      "amplitude did not round-trip",
     );
 
-    // Drone profile params should survive.
+    // Profile params should survive.
     let dp = raw
-      .drone_profiles
+      .profiles
       .as_ref()
-      .expect("Export should produce a [drone_profiles] section");
-    let cpu_profile = dp.get("cpu").expect("Export should include cpu drone");
+      .expect("Export should produce a [profiles] section");
+    let cpu_profile = dp.get("cpu").expect("Export should include cpu profile");
     assert!(
       (cpu_profile.lo.base_freq.unwrap() - drone_lo.base_freq).abs()
         < f64::EPSILON,
-      "Drone lo base_freq did not round-trip",
+      "Profile lo base_freq did not round-trip",
     );
     assert!(
       (cpu_profile.hi.base_freq.unwrap() - drone_hi.base_freq).abs()
         < f64::EPSILON,
-      "Drone hi base_freq did not round-trip",
+      "Profile hi base_freq did not round-trip",
     );
 
-    // Heartbeat notes should survive.
-    let hb_notes = &raw.heartbeat.unwrap().notes;
-    assert_eq!(hb_notes.len(), 2);
-    assert!((hb_notes[0].freq - 440.0).abs() < f64::EPSILON);
-    assert!((hb_notes[0].duration - 0.25).abs() < f64::EPSILON);
-
-    // Drone notes should survive.
-    let dn = raw
-      .drone_notes
+    // Check notes should survive.
+    let cn = raw
+      .check_notes
       .as_ref()
-      .expect("Export should produce a [drone_notes] section");
-    let cpu_notes = dn
-      .get("cpu")
-      .expect("Export should include cpu drone notes");
+      .expect("Export should produce a [check_notes] section");
+    let gw_notes = cn
+      .get("gateway")
+      .expect("Export should include gateway notes");
+    assert_eq!(gw_notes.len(), 2);
+    assert!((gw_notes[0].freq - 440.0).abs() < f64::EPSILON);
+    assert!((gw_notes[0].duration - 0.25).abs() < f64::EPSILON);
+
+    let cpu_notes = cn.get("cpu").expect("Export should include cpu notes");
     assert_eq!(cpu_notes.len(), 2);
     assert!((cpu_notes[0].freq - 460.0).abs() < f64::EPSILON);
     assert!((cpu_notes[0].duration - 0.5).abs() < f64::EPSILON);
   }
 
   /// The example config files must parse without error, including
-  /// their `[heartbeat.patch]` and `[drone_profiles.*]` sections.
+  /// their `[patch]` and `[profiles.*]` sections.
   #[test]
   fn example_configs_parse() {
     let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -741,41 +622,37 @@ amplitude = {hi_amp}
         let raw: ConfigFileRaw = toml::from_str(&contents)
           .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 
-        // If the example has [heartbeat.patch], it must parse.
-        if contents.contains("[heartbeat.patch]") {
+        // If the example has [patch], it must parse.
+        if contents.contains("[patch]") {
           assert!(
-            raw
-              .heartbeat
-              .as_ref()
-              .and_then(|hb| hb.patch.as_ref())
-              .is_some(),
-            "{}: [heartbeat.patch] should parse",
+            raw.patch.is_some(),
+            "{}: [patch] should parse",
             path.display()
           );
         }
 
-        // If the example has [drone_profiles.…], it must parse.
-        if contents.contains("[drone_profiles.") {
+        // If the example has [profiles.…], it must parse.
+        if contents.contains("[profiles.") {
           assert!(
             raw
-              .drone_profiles
+              .profiles
               .as_ref()
               .map(|dp| !dp.is_empty())
               .unwrap_or(false),
-            "{}: [drone_profiles] should parse",
+            "{}: [profiles] should parse",
             path.display()
           );
         }
 
-        // If the example has [[drone_notes.…]], it must parse.
-        if contents.contains("[[drone_notes.") {
+        // If the example has [[check_notes.…]], it must parse.
+        if contents.contains("[[check_notes.") {
           assert!(
             raw
-              .drone_notes
+              .check_notes
               .as_ref()
               .map(|dn| !dn.is_empty())
               .unwrap_or(false),
-            "{}: [drone_notes] should parse",
+            "{}: [check_notes] should parse",
             path.display()
           );
         }

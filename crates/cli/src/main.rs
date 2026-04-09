@@ -18,7 +18,8 @@ use logging::init_logging;
 use patch_args::CliPatchOverrides;
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, Patch, Severity,
+  check::ResultMode,
+  heartbeat, NoteSpec, Patch, Severity,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -252,20 +253,59 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
-  let mut patch = config.patch();
-  if let Some(hb_overrides) = &config.daemon.heartbeat_patch_overrides {
-    patch = patch.with_overrides(hb_overrides);
-  }
+  let patch = config.patch();
+
+  // Split checks by result mode for the transition period.
+  let heartbeat_checks: Vec<_> = config
+    .daemon
+    .checks
+    .iter()
+    .filter(|c| c.result_mode == ResultMode::ExitCodeSeverity)
+    .cloned()
+    .collect();
+  let drone_checks: Vec<_> = config
+    .daemon
+    .checks
+    .iter()
+    .filter(|c| c.result_mode != ResultMode::ExitCodeSeverity)
+    .cloned()
+    .collect();
+
+  // Derive heartbeat notes by concatenating per-check notes.
+  let heartbeat_notes: Vec<NoteSpec> = heartbeat_checks
+    .iter()
+    .flat_map(|c| {
+      config
+        .daemon
+        .check_notes
+        .get(&c.name)
+        .cloned()
+        .unwrap_or_default()
+    })
+    .collect();
+
+  // Drone notes: per-check map for drone checks.
+  let drone_notes: std::collections::HashMap<String, Vec<NoteSpec>> =
+    drone_checks
+      .iter()
+      .filter_map(|c| {
+        config
+          .daemon
+          .check_notes
+          .get(&c.name)
+          .map(|n| (c.name.clone(), n.clone()))
+      })
+      .collect();
 
   let preview = Arc::new(preview_state::PreviewState::new(
     patch.clone(),
     Arc::clone(&muted),
-    &config.daemon.heartbeat_checks,
-    &config.daemon.drone_metrics,
-    &config.daemon.drone_profile_overrides,
+    &heartbeat_checks,
+    &drone_checks,
+    &config.daemon.profile_overrides,
     config.daemon.timing.slot_duration_secs,
-    &config.daemon.heartbeat_notes,
-    &config.daemon.drone_notes,
+    &heartbeat_notes,
+    &drone_notes,
   ));
 
   // Perform OIDC provider discovery when configured.
@@ -537,13 +577,6 @@ fn run_drone_preview(
 
   let patch = patch_args.resolve_patch(config);
   let slot_secs = config.daemon.timing.slot_duration_secs;
-  // Pull playback defaults from the first drone metric, if any.
-  let first_drone = config.daemon.drone_metrics.first();
-  let base_phrase_gap = first_drone.and_then(|m| m.phrase_gap).unwrap_or(4.0);
-  let base_repeat_rate =
-    first_drone.and_then(|m| m.repeat_rate).unwrap_or(1.0) as f32;
-  let base_repeat_curve =
-    first_drone.and_then(|m| m.repeat_curve).unwrap_or(1.0) as f32;
 
   debug!(?patch, "Resolved patch");
   info!(
@@ -579,12 +612,7 @@ fn run_drone_preview(
           break;
         }
 
-        let gap = drone::phrase_gap_secs(
-          base_phrase_gap,
-          metric as f32,
-          base_repeat_rate,
-          base_repeat_curve,
-        );
+        let gap = patch.phrase_gap / patch.repeat_rate.max(0.1);
         let deadline = std::time::Instant::now() + Duration::from_secs_f64(gap);
         while std::time::Instant::now() < deadline
           && play_run.load(Ordering::Relaxed)
@@ -614,12 +642,7 @@ fn run_drone_preview(
         break;
       }
 
-      let gap = drone::phrase_gap_secs(
-        base_phrase_gap,
-        metric as f32,
-        base_repeat_rate,
-        base_repeat_curve,
-      );
+      let gap = patch.phrase_gap / patch.repeat_rate.max(0.1);
       let gap_deadline =
         std::time::Instant::now() + Duration::from_secs_f64(gap);
       while std::time::Instant::now() < gap_deadline

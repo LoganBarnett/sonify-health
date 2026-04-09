@@ -1,4 +1,3 @@
-use crate::severity::Severity;
 use serde::Deserialize;
 use std::process::Command;
 use thiserror::Error;
@@ -7,110 +6,46 @@ use thiserror::Error;
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResultMode {
-  /// Process exit code maps directly to the value.
+  /// Process exit code maps directly to 0.0–1.0 (code / 255).
   ExitCode,
-  /// Command prints the value to stdout.
+  /// Command prints a float (0.0–1.0) to stdout.
   Stdout,
+  /// Exit code maps to severity: 0→0.0, 1→0.5, 2→1.0.
+  ExitCodeSeverity,
 }
 
-/// Configuration for a single heartbeat check (one boop).
+/// Configuration for a single check.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HeartbeatCheckConfig {
+pub struct CheckConfig {
   pub name: String,
   pub command: String,
   pub result_mode: ResultMode,
-}
-
-/// Configuration for a single drone metric poll.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DroneMetricConfig {
-  pub name: String,
-  pub command: String,
-  pub result_mode: ResultMode,
-  /// Number of boops per drone phrase.
+  /// Number of boops per phrase.
   pub boops: Option<usize>,
-  /// Base gap in seconds between drone phrases.
-  pub phrase_gap: Option<f64>,
-  /// Speed multiplier on phrase repetition.
-  pub repeat_rate: Option<f64>,
-  /// Power-curve exponent for gap range reshaping.
-  pub repeat_curve: Option<f64>,
   /// Power-curve exponent for lo/hi patch interpolation.
   pub interp_curve: Option<f64>,
-  /// Per-metric volume (0.0–1.0).
-  pub volume: Option<f64>,
 }
 
 #[derive(Debug, Error)]
 pub enum CheckError {
-  #[error("Heartbeat check '{name}' failed to execute: {source}")]
-  HeartbeatCheckExecution {
+  #[error("Check '{name}' failed to execute: {source}")]
+  CheckExecution {
     name: String,
     #[source]
     source: std::io::Error,
   },
 
-  #[error("Drone poll '{name}' failed to execute: {source}")]
-  DronePollExecution {
-    name: String,
-    #[source]
-    source: std::io::Error,
-  },
-
-  #[error("Drone poll '{name}' produced invalid stdout: {output}")]
-  DronePollInvalidStdout { name: String, output: String },
-
-  #[error(
-    "Heartbeat check '{name}' produced invalid stdout \
-     severity: {output}"
-  )]
-  HeartbeatCheckInvalidStdout { name: String, output: String },
+  #[error("Check '{name}' produced invalid stdout: {output}")]
+  CheckInvalidStdout { name: String, output: String },
 }
 
-/// Run a heartbeat check command and interpret the result as a
-/// severity.
-pub fn run_heartbeat_check(
-  config: &HeartbeatCheckConfig,
-) -> Result<Severity, CheckError> {
+/// Run a check command and return a normalized metric (0.0..=1.0).
+pub fn run_check(config: &CheckConfig) -> Result<f32, CheckError> {
   let output = Command::new("sh")
     .args(["-c", &config.command])
     .output()
-    .map_err(|source| CheckError::HeartbeatCheckExecution {
-      name: config.name.clone(),
-      source,
-    })?;
-
-  match config.result_mode {
-    ResultMode::ExitCode => {
-      let code = output.status.code().unwrap_or(2) as u8;
-      Severity::try_from(code.min(2)).map_err(|e| {
-        CheckError::HeartbeatCheckInvalidStdout {
-          name: config.name.clone(),
-          output: e.to_string(),
-        }
-      })
-    }
-    ResultMode::Stdout => {
-      let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-      text.parse::<Severity>().map_err(|_| {
-        CheckError::HeartbeatCheckInvalidStdout {
-          name: config.name.clone(),
-          output: text,
-        }
-      })
-    }
-  }
-}
-
-/// Run a drone poll command and interpret the result as a
-/// normalized float (0.0..=1.0).
-pub fn run_drone_poll(config: &DroneMetricConfig) -> Result<f32, CheckError> {
-  let output = Command::new("sh")
-    .args(["-c", &config.command])
-    .output()
-    .map_err(|source| CheckError::DronePollExecution {
+    .map_err(|source| CheckError::CheckExecution {
       name: config.name.clone(),
       source,
     })?;
@@ -120,11 +55,19 @@ pub fn run_drone_poll(config: &DroneMetricConfig) -> Result<f32, CheckError> {
       let code = output.status.code().unwrap_or(0) as f32 / 255.0;
       Ok(code.clamp(0.0, 1.0))
     }
+    ResultMode::ExitCodeSeverity => {
+      let code = output.status.code().unwrap_or(2).min(2) as u8;
+      Ok(match code {
+        0 => 0.0,
+        1 => 0.5,
+        _ => 1.0,
+      })
+    }
     ResultMode::Stdout => {
       let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
       text
         .parse::<f32>()
-        .map_err(|_| CheckError::DronePollInvalidStdout {
+        .map_err(|_| CheckError::CheckInvalidStdout {
           name: config.name.clone(),
           output: text,
         })
@@ -137,80 +80,67 @@ pub fn run_drone_poll(config: &DroneMetricConfig) -> Result<f32, CheckError> {
 mod tests {
   use super::*;
 
-  #[test]
-  fn exit_code_zero_is_healthy() {
-    let cfg = HeartbeatCheckConfig {
+  fn check(command: &str, mode: ResultMode) -> CheckConfig {
+    CheckConfig {
       name: "test".into(),
-      command: "true".into(),
-      result_mode: ResultMode::ExitCode,
-    };
-    assert_eq!(run_heartbeat_check(&cfg).unwrap(), Severity::Healthy);
-  }
-
-  #[test]
-  fn exit_code_one_is_degraded() {
-    let cfg = HeartbeatCheckConfig {
-      name: "test".into(),
-      command: "exit 1".into(),
-      result_mode: ResultMode::ExitCode,
-    };
-    assert_eq!(run_heartbeat_check(&cfg).unwrap(), Severity::Degraded);
-  }
-
-  #[test]
-  fn stdout_severity_parsing() {
-    let cfg = HeartbeatCheckConfig {
-      name: "test".into(),
-      command: "echo 2".into(),
-      result_mode: ResultMode::Stdout,
-    };
-    assert_eq!(run_heartbeat_check(&cfg).unwrap(), Severity::Down);
-  }
-
-  #[test]
-  fn stdout_drone_poll() {
-    let cfg = DroneMetricConfig {
-      name: "test".into(),
-      command: "echo 0.75".into(),
-      result_mode: ResultMode::Stdout,
+      command: command.into(),
+      result_mode: mode,
       boops: None,
-      phrase_gap: None,
-      repeat_rate: None,
-      repeat_curve: None,
       interp_curve: None,
-      volume: None,
-    };
-    let val = run_drone_poll(&cfg).unwrap();
+    }
+  }
+
+  #[test]
+  fn exit_code_severity_zero_is_healthy() {
+    let val = run_check(&check("true", ResultMode::ExitCodeSeverity)).unwrap();
+    assert!((val - 0.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn exit_code_severity_one_is_degraded() {
+    let val =
+      run_check(&check("exit 1", ResultMode::ExitCodeSeverity)).unwrap();
+    assert!((val - 0.5).abs() < 0.001);
+  }
+
+  #[test]
+  fn exit_code_severity_two_is_down() {
+    let val =
+      run_check(&check("exit 2", ResultMode::ExitCodeSeverity)).unwrap();
+    assert!((val - 1.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn exit_code_severity_high_clamps_to_down() {
+    let val =
+      run_check(&check("exit 127", ResultMode::ExitCodeSeverity)).unwrap();
+    assert!((val - 1.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn exit_code_maps_to_unit_range() {
+    let val = run_check(&check("true", ResultMode::ExitCode)).unwrap();
+    assert!((val - 0.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn stdout_float_parsing() {
+    let val = run_check(&check("echo 0.75", ResultMode::Stdout)).unwrap();
     assert!((val - 0.75).abs() < 0.001);
   }
 
   #[test]
-  fn invalid_command_returns_error() {
-    let cfg = HeartbeatCheckConfig {
-      name: "bad".into(),
-      command: "/nonexistent/binary".into(),
-      result_mode: ResultMode::ExitCode,
-    };
-    // The shell itself will run, returning a non-zero exit
-    // code for a missing binary.  This should map to Down.
-    let result = run_heartbeat_check(&cfg).unwrap();
-    assert_eq!(result, Severity::Down);
+  fn stdout_clamps_to_unit_range() {
+    let val = run_check(&check("echo 5.0", ResultMode::Stdout)).unwrap();
+    assert!(val <= 1.0);
   }
 
   #[test]
-  fn drone_clamps_to_unit_range() {
-    let cfg = DroneMetricConfig {
-      name: "test".into(),
-      command: "echo 5.0".into(),
-      result_mode: ResultMode::Stdout,
-      boops: None,
-      phrase_gap: None,
-      repeat_rate: None,
-      repeat_curve: None,
-      interp_curve: None,
-      volume: None,
-    };
-    let val = run_drone_poll(&cfg).unwrap();
-    assert!(val <= 1.0);
+  fn missing_binary_returns_down_for_severity_mode() {
+    // The shell runs but the binary doesn't exist → non-zero exit.
+    let val =
+      run_check(&check("/nonexistent/binary", ResultMode::ExitCodeSeverity))
+        .unwrap();
+    assert!((val - 1.0).abs() < 0.001);
   }
 }

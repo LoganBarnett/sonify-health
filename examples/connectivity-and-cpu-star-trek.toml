@@ -2,45 +2,20 @@
 # Drone: CPU load as a continuous tone.
 #
 # Run with:
-#   sonify-health --config examples/connectivity-and-cpu.toml daemon
+#   sonify-health --config examples/connectivity-and-cpu-star-trek.toml daemon
 #
 # Requires only ping and uptime, both available on macOS and Linux.
 
 log_level = "info"
 log_format = "text"
 
-[heartbeat]
+[timing]
 slot = 0
 cycle_duration_secs = 14
 slot_duration_secs = 2
-
-# Gateway reachability.  Replace 192.168.1.1 with your actual gateway
-# address (`ip route | awk '/default/ {print $3}'` on Linux,
-# `netstat -nr | awk '/default/ {print $2; exit}'` on macOS).
-[[heartbeat.checks]]
-name = "gateway"
-command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
-result_mode = "exit-code"
-
-# Internet connectivity via a well-known public DNS resolver.
-[[heartbeat.checks]]
-name = "internet"
-command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
-result_mode = "exit-code"
-
-[drone]
 poll_interval_secs = 5
 
-# CPU load as a 0.0–1.0 value: 1-minute load average divided by
-# CPU count, clamped to 1.0.  Works unprivileged on both macOS and
-# Linux.
-[[drone.metrics]]
-name = "cpu"
-command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \\"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\\$1/\\$2; print (v>1?1:v)}"'"""
-result_mode = "stdout"
-register = "mid"
-
-[heartbeat.patch]
+[patch]
 base_freq = 1165.4094037952248
 sine_ratio = 2.37
 tri_ratio = 1.22
@@ -69,27 +44,42 @@ fm_ratio = 0.0
 fm_depth = 0.0
 downsample = 0.0
 
-[[heartbeat.notes]]
+[[checks]]
+name = "gateway"
+command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
+result_mode = "exit-code-severity"
+
+[[checks]]
+name = "internet"
+command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
+result_mode = "exit-code-severity"
+
+[[checks]]
+name = "cpu"
+command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \\"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\\$1/\\$2; print (v>1?1:v)}"'"""
+result_mode = "stdout"
+
+[[check_notes.gateway]]
 freq = 3668.0
 duration = 0.21
 
-[[heartbeat.notes]]
+[[check_notes.gateway]]
 freq = 4307.0
 duration = 0.22
 
-[[heartbeat.notes]]
+[[check_notes.internet]]
 freq = 3668.0
 duration = 0.2
 
-[[heartbeat.notes]]
+[[check_notes.internet]]
 freq = 4307.0
 duration = 0.22
 
-[[drone_notes.cpu]]
+[[check_notes.cpu]]
 freq = 460.0
 duration = 0.5
 
-[drone_profiles.cpu.lo]
+[profiles.cpu.lo]
 base_freq = 460.0
 sine_ratio = 1.0
 tri_ratio = 0.0
@@ -118,7 +108,7 @@ fm_ratio = 0.0435
 fm_depth = 1.0
 downsample = 0.0
 
-[drone_profiles.cpu.hi]
+[profiles.cpu.hi]
 base_freq = 460.0
 sine_ratio = 1.0
 tri_ratio = 0.0
@@ -146,31 +136,3 @@ crush = 0.0
 fm_ratio = 0.0435
 fm_depth = 1.0
 downsample = 0.0
-
-# base_freq = 460.0
-# sine_ratio = 2.62
-# tri_ratio = 0.16
-# saw_ratio = 0.06
-# square_ratio = 2.9
-# attack_ms = 362.0
-# release_ms = 911.0
-# chirp_ratio = 0.98
-# stereo_pan = -0.08
-# reverb_mix = 0.65
-# note_seed = 0.16436162216471262
-# echo_delay = 0.28
-# echo_mix = 0.62
-# brightness = 0.39
-# resonance = 4.63
-# sub_octave = 0.1
-# vibrato_rate = 40.0
-# vibrato_depth = 1.5
-# tremolo_rate = 4.0
-# tremolo_depth = 0.42
-# amplitude = 0.43
-# drive = 0.21
-# noise_mix = 0.15
-# crush = 0.0
-# fm_ratio = 6.5
-# fm_depth = 0.9
-# downsample = 0.12
