@@ -1,6 +1,6 @@
 use crate::probe::ResultMode;
 use crate::transition::Transition;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 fn default_volume() -> f64 {
   0.3
@@ -20,7 +20,7 @@ fn default_cycle_secs() -> f64 {
 
 /// A heartbeat joins a probe command with a transition that maps
 /// the probe's metric to patches from the library.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatConfig {
   pub name: String,

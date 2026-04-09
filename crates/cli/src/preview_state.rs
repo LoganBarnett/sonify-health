@@ -23,7 +23,8 @@ pub struct HeartbeatState {
 pub struct PreviewState {
   pub library: RwLock<PatchLibrary>,
   original_library: PatchLibrary,
-  pub heartbeat_configs: Vec<HeartbeatConfig>,
+  pub heartbeat_configs: RwLock<Vec<HeartbeatConfig>>,
+  original_heartbeat_configs: Vec<HeartbeatConfig>,
   pub heartbeats: Vec<HeartbeatState>,
   pub muted: Arc<AtomicBool>,
   pub master_volume: Shared,
@@ -55,7 +56,8 @@ impl PreviewState {
     Self {
       original_library: library.clone(),
       library: RwLock::new(library),
-      heartbeat_configs,
+      original_heartbeat_configs: heartbeat_configs.clone(),
+      heartbeat_configs: RwLock::new(heartbeat_configs),
       heartbeats,
       muted,
       master_volume: shared(1.0),
@@ -87,10 +89,13 @@ impl PreviewState {
     }
   }
 
-  /// Revert all library patches and volumes to their original state.
+  /// Revert all library patches, transitions, and volumes to their
+  /// original state.
   pub fn revert(&self) {
     *self.library.write().unwrap() = self.original_library.clone();
-    for (i, cfg) in self.heartbeat_configs.iter().enumerate() {
+    *self.heartbeat_configs.write().unwrap() =
+      self.original_heartbeat_configs.clone();
+    for (i, cfg) in self.original_heartbeat_configs.iter().enumerate() {
       if let Some(hb) = self.heartbeats.get(i) {
         hb.volume.set_value(cfg.volume as f32);
         *hb.override_value.write().unwrap() = None;
@@ -123,8 +128,8 @@ impl PreviewState {
       })
       .collect();
 
-    let heartbeats_json: Vec<_> = self
-      .heartbeat_configs
+    let hb_configs = self.heartbeat_configs.read().unwrap();
+    let heartbeats_json: Vec<_> = hb_configs
       .iter()
       .enumerate()
       .map(|(i, cfg)| {

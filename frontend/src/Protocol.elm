@@ -16,6 +16,7 @@ module Protocol exposing
     , encodeSetMasterVolume
     , encodeSetMuted
     , encodeSetPatchParam
+    , encodeSetTransition
     , encodeTriggerHeartbeat
     )
 
@@ -76,6 +77,7 @@ type ServerMsg
     | OverrideChanged Int (Maybe Float) Bool
     | HeartbeatLoopChanged Bool
     | LibraryChanged (Dict String (Dict String Float))
+    | TransitionChanged Int TransitionInfo
     | ProbeLog ProbeLogEntry
     | ConfigExport (Dict String (Dict String Float))
     | ImportError String
@@ -118,6 +120,9 @@ serverMsgDecoder =
 
                     "library_changed" ->
                         libraryChangedDecoder
+
+                    "transition_changed" ->
+                        transitionChangedDecoder
 
                     "probe_log" ->
                         probeLogDecoder
@@ -271,6 +276,13 @@ libraryChangedDecoder =
     D.map LibraryChanged (D.field "library" libraryDecoder)
 
 
+transitionChangedDecoder : D.Decoder ServerMsg
+transitionChangedDecoder =
+    D.map2 TransitionChanged
+        (D.field "index" D.int)
+        (D.field "transition" transitionDecoder)
+
+
 probeLogDecoder : D.Decoder ServerMsg
 probeLogDecoder =
     D.map4
@@ -400,3 +412,39 @@ encodeImportConfig text =
         , ( "text", E.string text )
         ]
         |> E.encode 0
+
+
+encodeSetTransition : Int -> TransitionInfo -> String
+encodeSetTransition index trans =
+    E.object
+        [ ( "type", E.string "set_transition" )
+        , ( "index", E.int index )
+        , ( "transition", encodeTransition trans )
+        ]
+        |> E.encode 0
+
+
+encodeTransition : TransitionInfo -> E.Value
+encodeTransition trans =
+    case trans of
+        Discrete states ->
+            E.object
+                [ ( "type", E.string "discrete" )
+                , ( "states"
+                  , E.list
+                        (\s ->
+                            E.object
+                                [ ( "threshold", E.float s.threshold )
+                                , ( "patch", E.string s.patch )
+                                ]
+                        )
+                        states
+                  )
+                ]
+
+        Gradient info ->
+            E.object
+                [ ( "type", E.string "gradient" )
+                , ( "patches", E.list E.string info.patches )
+                , ( "curve", E.float info.curve )
+                ]

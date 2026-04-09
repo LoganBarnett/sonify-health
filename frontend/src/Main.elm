@@ -93,6 +93,13 @@ type Msg
     | DismissExport
     | SetImportText String
     | SubmitImport
+    | SetTransitionPatch Int Int String
+    | SetTransitionThreshold Int Int String
+    | AddTransitionState Int
+    | RemoveTransitionState Int Int
+    | SetTransitionCurve Int String
+    | AddGradientPatch Int
+    | RemoveGradientPatch Int Int
     | DismissProtocolError
     | NoOp
 
@@ -356,6 +363,164 @@ update msg model =
                 , Ports.websocketSend (encodeImportConfig model.importText)
                 )
 
+        SetTransitionPatch hbIdx stateIdx patchName ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb
+                                | transition =
+                                    updateTransitionPatch stateIdx patchName hb.transition
+                            }
+                        )
+                        model.heartbeats
+
+                newTrans =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .transition
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , newTrans
+                |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                |> Maybe.withDefault Cmd.none
+            )
+
+        SetTransitionThreshold hbIdx stateIdx rawVal ->
+            case String.toFloat rawVal of
+                Just val ->
+                    let
+                        newHeartbeats =
+                            updateAt hbIdx
+                                (\hb ->
+                                    { hb
+                                        | transition =
+                                            updateTransitionThreshold stateIdx val hb.transition
+                                    }
+                                )
+                                model.heartbeats
+
+                        newTrans =
+                            getAt hbIdx newHeartbeats
+                                |> Maybe.map .transition
+                    in
+                    ( { model | heartbeats = newHeartbeats }
+                    , newTrans
+                        |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                        |> Maybe.withDefault Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        AddTransitionState hbIdx ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb | transition = addDiscreteState hb.transition }
+                        )
+                        model.heartbeats
+
+                newTrans =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .transition
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , newTrans
+                |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                |> Maybe.withDefault Cmd.none
+            )
+
+        RemoveTransitionState hbIdx stateIdx ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb
+                                | transition =
+                                    removeDiscreteState stateIdx hb.transition
+                            }
+                        )
+                        model.heartbeats
+
+                newTrans =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .transition
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , newTrans
+                |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                |> Maybe.withDefault Cmd.none
+            )
+
+        SetTransitionCurve hbIdx rawVal ->
+            case String.toFloat rawVal of
+                Just val ->
+                    let
+                        newHeartbeats =
+                            updateAt hbIdx
+                                (\hb ->
+                                    { hb
+                                        | transition =
+                                            setGradientCurve val hb.transition
+                                    }
+                                )
+                                model.heartbeats
+
+                        newTrans =
+                            getAt hbIdx newHeartbeats
+                                |> Maybe.map .transition
+                    in
+                    ( { model | heartbeats = newHeartbeats }
+                    , newTrans
+                        |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                        |> Maybe.withDefault Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        AddGradientPatch hbIdx ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb | transition = addGradientPatch model hb.transition }
+                        )
+                        model.heartbeats
+
+                newTrans =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .transition
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , newTrans
+                |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                |> Maybe.withDefault Cmd.none
+            )
+
+        RemoveGradientPatch hbIdx patchIdx ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb
+                                | transition =
+                                    removeGradientPatch patchIdx hb.transition
+                            }
+                        )
+                        model.heartbeats
+
+                newTrans =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .transition
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , newTrans
+                |> Maybe.map (\t -> Ports.websocketSend (encodeSetTransition hbIdx t))
+                |> Maybe.withDefault Cmd.none
+            )
+
         DismissProtocolError ->
             ( { model | protocolError = Nothing }, Cmd.none )
 
@@ -446,6 +611,16 @@ handleServerMsg msg model =
         LibraryChanged lib ->
             ( { model | library = lib }, Cmd.none )
 
+        TransitionChanged index trans ->
+            ( { model
+                | heartbeats =
+                    updateAt index
+                        (\hb -> { hb | transition = trans })
+                        model.heartbeats
+              }
+            , Cmd.none
+            )
+
         ProbeLog entry ->
             ( { model | probeLog = entry :: List.take 99 model.probeLog }
             , Cmd.none
@@ -492,6 +667,153 @@ unique list =
         ( [], [] )
         list
         |> Tuple.second
+
+
+
+-- Transition editing helpers
+
+
+getAt : Int -> List a -> Maybe a
+getAt index list =
+    List.drop index list |> List.head
+
+
+updateTransitionPatch : Int -> String -> TransitionInfo -> TransitionInfo
+updateTransitionPatch stateIdx patchName trans =
+    case trans of
+        Discrete states ->
+            Discrete
+                (List.indexedMap
+                    (\i s ->
+                        if i == stateIdx then
+                            { s | patch = patchName }
+
+                        else
+                            s
+                    )
+                    states
+                )
+
+        Gradient info ->
+            Gradient
+                { info
+                    | patches =
+                        List.indexedMap
+                            (\i p ->
+                                if i == stateIdx then
+                                    patchName
+
+                                else
+                                    p
+                            )
+                            info.patches
+                }
+
+
+updateTransitionThreshold : Int -> Float -> TransitionInfo -> TransitionInfo
+updateTransitionThreshold stateIdx val trans =
+    case trans of
+        Discrete states ->
+            Discrete
+                (List.indexedMap
+                    (\i s ->
+                        if i == stateIdx then
+                            { s | threshold = val }
+
+                        else
+                            s
+                    )
+                    states
+                )
+
+        Gradient info ->
+            Gradient info
+
+
+addDiscreteState : TransitionInfo -> TransitionInfo
+addDiscreteState trans =
+    case trans of
+        Discrete states ->
+            Discrete (states ++ [ { threshold = 1.0, patch = "sine" } ])
+
+        Gradient info ->
+            Gradient info
+
+
+removeDiscreteState : Int -> TransitionInfo -> TransitionInfo
+removeDiscreteState stateIdx trans =
+    case trans of
+        Discrete states ->
+            if List.length states > 1 then
+                Discrete
+                    (List.indexedMap Tuple.pair states
+                        |> List.filterMap
+                            (\( i, s ) ->
+                                if i == stateIdx then
+                                    Nothing
+
+                                else
+                                    Just s
+                            )
+                    )
+
+            else
+                Discrete states
+
+        Gradient info ->
+            Gradient info
+
+
+setGradientCurve : Float -> TransitionInfo -> TransitionInfo
+setGradientCurve val trans =
+    case trans of
+        Gradient info ->
+            Gradient { info | curve = val }
+
+        Discrete states ->
+            Discrete states
+
+
+addGradientPatch : Model -> TransitionInfo -> TransitionInfo
+addGradientPatch model trans =
+    case trans of
+        Gradient info ->
+            let
+                defaultPatch =
+                    Dict.keys model.library
+                        |> List.head
+                        |> Maybe.withDefault "sine"
+            in
+            Gradient { info | patches = info.patches ++ [ defaultPatch ] }
+
+        Discrete states ->
+            Discrete states
+
+
+removeGradientPatch : Int -> TransitionInfo -> TransitionInfo
+removeGradientPatch patchIdx trans =
+    case trans of
+        Gradient info ->
+            if List.length info.patches > 1 then
+                Gradient
+                    { info
+                        | patches =
+                            List.indexedMap Tuple.pair info.patches
+                                |> List.filterMap
+                                    (\( i, p ) ->
+                                        if i == patchIdx then
+                                            Nothing
+
+                                        else
+                                            Just p
+                                    )
+                    }
+
+            else
+                Gradient info
+
+        Discrete states ->
+            Discrete states
 
 
 
@@ -649,7 +971,7 @@ viewHeartbeats model =
 
 
 viewHeartbeatCard : Model -> Int -> HeartbeatInfo -> Html Msg
-viewHeartbeatCard _ index hb =
+viewHeartbeatCard model index hb =
     div [ class "card" ]
         [ div [ class "card-header" ]
             [ span [ class "card-name" ] [ text hb.name ]
@@ -702,7 +1024,7 @@ viewHeartbeatCard _ index hb =
                   else
                     text ""
                 ]
-            , viewTransition hb.transition
+            , viewTransitionEdit model index hb.transition
             ]
         ]
 
@@ -731,50 +1053,116 @@ metricLabel m =
         "down"
 
 
-viewTransition : TransitionInfo -> Html Msg
-viewTransition trans =
+viewTransitionEdit : Model -> Int -> TransitionInfo -> Html Msg
+viewTransitionEdit model hbIdx trans =
+    let
+        patchNames =
+            Dict.keys model.library |> List.sort
+    in
     case trans of
         Discrete states ->
-            div [ class "transition-info" ]
-                [ text "Discrete: "
-                , span []
-                    (List.map
-                        (\s ->
-                            span [ class "transition-state" ]
-                                [ a
-                                    [ href "#"
-                                    , onClick (SelectPatch s.patch)
-                                    ]
-                                    [ text s.patch ]
-                                , text
-                                    (" (<"
-                                        ++ String.left 4 (String.fromFloat s.threshold)
-                                        ++ ")"
-                                    )
-                                ]
-                        )
+            div [ class "transition-edit" ]
+                [ div [ class "transition-label" ] [ text "Discrete" ]
+                , div []
+                    (List.indexedMap
+                        (viewDiscreteRow patchNames hbIdx)
                         states
                     )
+                , button
+                    [ class "btn btn-sm"
+                    , onClick (AddTransitionState hbIdx)
+                    ]
+                    [ text "+" ]
                 ]
 
         Gradient info ->
-            div [ class "transition-info" ]
-                [ text "Gradient: "
-                , span []
-                    (List.intersperse (text " -> ")
-                        (List.map
-                            (\p ->
-                                a
-                                    [ href "#"
-                                    , onClick (SelectPatch p)
-                                    ]
-                                    [ text p ]
-                            )
-                            info.patches
-                        )
+            div [ class "transition-edit" ]
+                [ div [ class "transition-label" ] [ text "Gradient" ]
+                , div []
+                    (List.indexedMap
+                        (viewGradientRow patchNames hbIdx)
+                        info.patches
                     )
-                , text (" (curve " ++ String.fromFloat info.curve ++ ")")
+                , button
+                    [ class "btn btn-sm"
+                    , onClick (AddGradientPatch hbIdx)
+                    ]
+                    [ text "+" ]
+                , label [ class "transition-row" ]
+                    [ text "curve "
+                    , input
+                        [ type_ "number"
+                        , class "transition-input"
+                        , Html.Attributes.min "0.1"
+                        , Html.Attributes.max "10"
+                        , step "0.1"
+                        , value (String.fromFloat info.curve)
+                        , onInput (SetTransitionCurve hbIdx)
+                        ]
+                        []
+                    ]
                 ]
+
+
+viewDiscreteRow : List String -> Int -> Int -> { threshold : Float, patch : String } -> Html Msg
+viewDiscreteRow patchNames hbIdx stateIdx state =
+    div [ class "transition-row" ]
+        [ select
+            [ class "transition-select"
+            , onInput (SetTransitionPatch hbIdx stateIdx)
+            ]
+            (List.map
+                (\name ->
+                    option
+                        [ value name
+                        , selected (name == state.patch)
+                        ]
+                        [ text name ]
+                )
+                patchNames
+            )
+        , text " < "
+        , input
+            [ type_ "number"
+            , class "transition-input"
+            , Html.Attributes.min "0"
+            , Html.Attributes.max "1"
+            , step "0.01"
+            , value (String.fromFloat state.threshold)
+            , onInput (SetTransitionThreshold hbIdx stateIdx)
+            ]
+            []
+        , button
+            [ class "btn btn-sm transition-remove"
+            , onClick (RemoveTransitionState hbIdx stateIdx)
+            ]
+            [ text "×" ]
+        ]
+
+
+viewGradientRow : List String -> Int -> Int -> String -> Html Msg
+viewGradientRow patchNames hbIdx patchIdx patchName =
+    div [ class "transition-row" ]
+        [ select
+            [ class "transition-select"
+            , onInput (SetTransitionPatch hbIdx patchIdx)
+            ]
+            (List.map
+                (\name ->
+                    option
+                        [ value name
+                        , selected (name == patchName)
+                        ]
+                        [ text name ]
+                )
+                patchNames
+            )
+        , button
+            [ class "btn btn-sm transition-remove"
+            , onClick (RemoveGradientPatch hbIdx patchIdx)
+            ]
+            [ text "×" ]
+        ]
 
 
 

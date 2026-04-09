@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 use thiserror::Error;
 
 /// How the daemon reads a probe command's result.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResultMode {
   /// Process exit code maps directly to 0.0–1.0 (code / 255).

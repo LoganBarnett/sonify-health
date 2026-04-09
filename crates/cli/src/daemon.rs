@@ -42,8 +42,10 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
   let mut handles = Vec::new();
 
-  // Spawn per-heartbeat poll + play threads.
-  for (i, cfg) in preview.heartbeat_configs.iter().enumerate() {
+  // Snapshot heartbeat configs for thread setup; transitions are
+  // re-read at runtime so live edits take effect.
+  let hb_configs = preview.heartbeat_configs.read().unwrap().clone();
+  for (i, cfg) in hb_configs.iter().enumerate() {
     // -- Poll thread: runs probe command, updates metric.
     let poll_cfg_name = cfg.name.clone();
     let poll_command = cfg.command.clone();
@@ -116,12 +118,14 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     handles.push(thread::spawn(move || {
       let mut slot_id: Option<usize> = None;
       while play_running.load(Ordering::Relaxed) {
-        // Resolve transition → patch.
+        // Resolve transition → patch.  Clone the transition under a
+        // brief read lock so live edits take effect immediately.
         let metric = play_preview.heartbeats[i].metric.value() as f64;
-        let lib = play_preview.library.read().unwrap();
-        let patch = play_preview.heartbeat_configs[i]
+        let transition = play_preview.heartbeat_configs.read().unwrap()[i]
           .transition
-          .resolve(metric, &lib);
+          .clone();
+        let lib = play_preview.library.read().unwrap();
+        let patch = transition.resolve(metric, &lib);
         drop(lib);
 
         let patch = match patch {
@@ -204,7 +208,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     }));
   }
 
-  info!(heartbeats = preview.heartbeat_configs.len(), "Daemon started");
+  info!(heartbeats = hb_configs.len(), "Daemon started");
 
   // Main loop: handle mute transitions and global triggers.
   let mut was_muted = muted.load(Ordering::Relaxed);

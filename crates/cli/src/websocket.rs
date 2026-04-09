@@ -8,7 +8,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::Patch;
+use sonify_health_lib::{Patch, Transition};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
 
@@ -208,6 +208,25 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           "type": "volume_changed",
           "layer": "master",
           "volume": vol,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_transition" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let raw = msg.get("transition")?;
+      let transition: Transition = serde_json::from_value(raw.clone()).ok()?;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.transition = transition.clone();
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "transition_changed",
+          "index": index,
+          "transition": serde_json::to_value(&transition).unwrap_or_default(),
         })
         .to_string(),
       );

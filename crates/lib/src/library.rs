@@ -24,6 +24,7 @@ pub fn builtin_library() -> PatchLibrary {
       reverb_mix: 0.4,
       fm_ratio: 2.0,
       fm_depth: 1.5,
+      chirp_ratio: 2.0,
       ..Default::default()
     },
   );
@@ -53,6 +54,7 @@ pub fn builtin_library() -> PatchLibrary {
       brightness: 1.5,
       resonance: 2.0,
       drive: 1.5,
+      chirp_ratio: 0.7,
       ..Default::default()
     },
   );
@@ -94,6 +96,7 @@ pub fn builtin_library() -> PatchLibrary {
       release_ms: 300.0,
       duration: 0.3,
       brightness: 1.2,
+      chirp_ratio: 1.5,
       ..Default::default()
     },
   );
@@ -131,6 +134,23 @@ pub fn builtin_library() -> PatchLibrary {
   );
 
   lib.insert(
+    "chirp".to_string(),
+    Patch {
+      freq: 1100.0,
+      sine_ratio: 0.7,
+      tri_ratio: 0.3,
+      attack_ms: 5.0,
+      release_ms: 25.0,
+      duration: 0.15,
+      chirp_ratio: 1.8,
+      reverb_mix: 0.7,
+      echo_mix: 0.3,
+      echo_delay: 0.12,
+      ..Default::default()
+    },
+  );
+
+  lib.insert(
     "alarm".to_string(),
     Patch {
       freq: 880.0,
@@ -159,11 +179,11 @@ mod tests {
     let lib = builtin_library();
     for name in [
       "sine", "bell", "warm", "sharp", "hollow", "breath", "pluck", "pad",
-      "crunch", "alarm",
+      "crunch", "chirp", "alarm",
     ] {
       assert!(lib.contains_key(name), "missing preset: {name}");
     }
-    assert_eq!(lib.len(), 10);
+    assert_eq!(lib.len(), 11);
   }
 
   #[test]
