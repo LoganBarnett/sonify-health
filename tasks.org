@@ -68,6 +68,13 @@ Added six new voice parameters for gritty/textured sound:
 Also: rich sub-oscillator (weighted waveform mix instead of pure sine),
 moog ladder filter replacing lowpass.
 
+* TODO Connect Prometheus metrics to daemon heartbeat threads
+Wire up the =Metrics= struct to the daemon's per-heartbeat poll and play
+threads.  Currently only =muted= is updated; the =heartbeats_played=
+counter is registered but never incremented.  Add per-heartbeat probe
+metric gauges and poll counters, and increment =heartbeats_played= each
+time a heartbeat sound is played.
+
 * TODO Voice-level detune
 User-facing detune offset (cents) applied to all boops, independent of
 severity.  Creates chorus-like thickness on healthy tones.

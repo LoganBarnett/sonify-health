@@ -61,19 +61,21 @@ fn version_flag() {
 }
 
 #[test]
-fn patch_subcommand() {
-  let output = Command::new(binary_path()).arg("patch").output();
+fn print_toml_shows_library() {
+  let output = Command::new(binary_path())
+    .args(["print", "--format", "toml"])
+    .output();
   match output {
     Ok(output) => {
       assert!(
         output.status.success(),
-        "patch subcommand failed: {}",
+        "print subcommand failed: {}",
         String::from_utf8_lossy(&output.stderr)
       );
       let stdout = String::from_utf8_lossy(&output.stdout);
       assert!(
-        stdout.contains("freq:"),
-        "Expected patch output, got: {}",
+        stdout.contains("patches."),
+        "Expected TOML patch output, got: {}",
         stdout
       );
     }
@@ -84,49 +86,15 @@ fn patch_subcommand() {
 }
 
 #[test]
-fn patch_with_hostname_flag() {
+fn preview_unknown_patch_fails() {
   let output = Command::new(binary_path())
-    .args(["patch", "--hostname", "silicon"])
-    .output();
-  match output {
-    Ok(output) => {
-      assert!(
-        output.status.success(),
-        "patch --hostname failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-      );
-      let stdout = String::from_utf8_lossy(&output.stdout);
-      assert!(stdout.contains("silicon"));
-    }
-    Err(e) => {
-      panic!("Failed to execute binary: {}", e);
-    }
-  }
-}
-
-#[test]
-fn preview_requires_at_least_one_severity() {
-  let output = Command::new(binary_path()).args(["preview"]).output();
-  match output {
-    Ok(output) => {
-      assert!(!output.status.success(), "preview with 0 args should fail");
-    }
-    Err(e) => {
-      panic!("Failed to execute binary: {}", e);
-    }
-  }
-}
-
-#[test]
-fn preview_drone_requires_one_metric() {
-  let output = Command::new(binary_path())
-    .args(["preview", "--drone", "0.5", "0.8"])
+    .args(["preview", "--patch-name", "nonexistent-patch-xyz"])
     .output();
   match output {
     Ok(output) => {
       assert!(
         !output.status.success(),
-        "drone preview with 2 values should fail"
+        "preview with unknown patch should fail"
       );
     }
     Err(e) => {

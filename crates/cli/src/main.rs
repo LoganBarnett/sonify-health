@@ -17,15 +17,13 @@ use daemon::DaemonError;
 use logging::init_logging;
 use patch_args::CliPatchOverrides;
 use sonify_health_lib::{
-  audio::{AudioError, AudioOutput},
-  check::ResultMode,
-  heartbeat, NoteSpec, Patch,
+  audio::{AudioError, AudioMixer, AudioOutput},
+  heartbeat,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
   Arc,
 };
-use std::time::Duration;
 use thiserror::Error;
 use tokio::signal;
 use tower_http::trace::TraceLayer;
@@ -38,11 +36,8 @@ enum ApplicationError {
   #[error("Failed to load configuration: {0}")]
   ConfigurationLoad(#[from] ConfigError),
 
-  #[error("Invalid metric input: {0}")]
-  InvalidMetric(String),
-
-  #[error("Invalid drone metric: {0}")]
-  InvalidDroneMetric(String),
+  #[error("Unknown patch name: {0}")]
+  UnknownPatch(String),
 
   #[error("Audio playback failed: {0}")]
   AudioPlayback(#[from] AudioError),
@@ -92,8 +87,12 @@ struct Cli {
   #[arg(short, long, env = "CONFIG_FILE")]
   config: Option<std::path::PathBuf>,
 
-  /// Base URL of this service (e.g. https://sonify.example.com), used
-  /// to construct the OIDC redirect URI.
+  /// Path to an additional TOML file of patch definitions.
+  #[arg(long, env = "EXTRA_PATCHES_FILE")]
+  extra_patches_file: Option<std::path::PathBuf>,
+
+  /// Base URL of this service (e.g. https://sonify.example.com),
+  /// used to construct the OIDC redirect URI.
   #[arg(long, env = "BASE_URL")]
   base_url: Option<String>,
 
@@ -114,12 +113,6 @@ struct Cli {
 }
 
 #[derive(Clone, Debug, ValueEnum)]
-enum SoundType {
-  Heartbeat,
-  Drone,
-}
-
-#[derive(Clone, Debug, ValueEnum)]
 enum PrintFormat {
   Toml,
   Nix,
@@ -128,43 +121,18 @@ enum PrintFormat {
 
 #[derive(Subcommand)]
 enum Command {
-  /// Preview a sound layer (heartbeat or drone).
+  /// Preview a named patch from the library.
   Preview {
-    /// Sound type to preview.
-    #[arg(long, value_enum, default_value_t = SoundType::Heartbeat)]
-    sound_type: SoundType,
-
-    /// Sugar: equivalent to --sound-type heartbeat.
-    #[arg(long, conflicts_with_all = ["sound_type", "drone"])]
-    heartbeat: bool,
-
-    /// Sugar: equivalent to --sound-type drone.
-    #[arg(long, conflicts_with_all = ["sound_type", "heartbeat"])]
-    drone: bool,
-
-    /// Number of boops per drone phrase.
-    #[arg(long, default_value_t = 1)]
-    boops: usize,
-
-    /// Playback duration in seconds for drone preview.
-    #[arg(long, default_value_t = 5.0)]
-    duration: f64,
-
-    /// Play continuously until interrupted (Ctrl-C).  Overrides
-    /// --duration for drone previews.
+    /// Play continuously until interrupted (Ctrl-C).
     #[arg(long)]
     continuous: bool,
 
     #[command(flatten)]
     patch: CliPatchOverrides,
-
-    /// Positional values: 1 or more severities for heartbeat,
-    /// 1 metric for drone.
-    values: Vec<String>,
   },
 
-  /// Print the fully-resolved patch configuration in a paste-ready
-  /// format (TOML, Nix, or CLI flags).
+  /// Print the patch library in a paste-ready format (TOML, Nix, or
+  /// CLI flags).
   Print {
     /// Output format.
     #[arg(long, value_enum, default_value_t = PrintFormat::Toml)]
@@ -172,13 +140,6 @@ enum Command {
 
     #[command(flatten)]
     patch: CliPatchOverrides,
-  },
-
-  /// Display the machine's patch parameters.
-  Patch {
-    /// Preview another machine's patch by hostname.
-    #[arg(long)]
-    hostname: Option<String>,
   },
 
   /// Run as a long-lived daemon producing heartbeat audio.
@@ -194,6 +155,7 @@ async fn main() -> Result<(), ApplicationError> {
     cli.listen.as_deref(),
     cli.frontend_path.as_deref(),
     cli.config.as_deref(),
+    cli.extra_patches_file.as_deref(),
     cli.base_url.as_deref(),
     cli.oidc_issuer.as_deref(),
     cli.oidc_client_id.as_deref(),
@@ -212,100 +174,107 @@ async fn main() -> Result<(), ApplicationError> {
   );
 
   match cli.command {
-    Command::Preview {
-      sound_type,
-      heartbeat,
-      drone,
-      boops,
-      duration,
-      continuous,
-      patch,
-      values,
-    } => {
-      let effective = if drone {
-        SoundType::Drone
-      } else if heartbeat {
-        SoundType::Heartbeat
-      } else {
-        sound_type
-      };
-      match effective {
-        SoundType::Heartbeat => run_heartbeat_preview(&config, &patch, &values),
-        SoundType::Drone => run_drone_preview(
-          &config, &patch, boops, duration, continuous, &values,
-        ),
-      }
+    Command::Preview { continuous, patch } => {
+      run_preview(&config, &patch, continuous)
     }
     Command::Print { format, patch } => {
       run_print(&config, &patch, format);
-      Ok(())
-    }
-    Command::Patch { hostname } => {
-      run_patch(hostname.as_deref());
       Ok(())
     }
     Command::Daemon => run_daemon(&config).await,
   }
 }
 
+// -- Preview -----------------------------------------------------------------
+
+fn run_preview(
+  config: &Config,
+  patch_args: &CliPatchOverrides,
+  continuous: bool,
+) -> Result<(), ApplicationError> {
+  if !config.library.contains_key(&patch_args.patch_name) {
+    return Err(ApplicationError::UnknownPatch(patch_args.patch_name.clone()));
+  }
+
+  let patch = patch_args.resolve_patch(&config.library);
+  debug!(?patch, "Resolved patch");
+  info!(
+    patch_name = %patch_args.patch_name,
+    freq = patch.freq,
+    "Playing preview"
+  );
+
+  if continuous {
+    run_continuous_preview(patch, config.audio_device.as_deref())
+  } else {
+    let patches = [patch];
+    let graph = heartbeat::heartbeat_graph(&patches);
+    let dur = heartbeat::heartbeat_duration(&patches);
+    AudioOutput::play_for(graph, dur, config.audio_device.as_deref())
+      .map_err(ApplicationError::AudioPlayback)
+  }
+}
+
+fn run_continuous_preview(
+  patch: sonify_health_lib::Patch,
+  audio_device: Option<&str>,
+) -> Result<(), ApplicationError> {
+  let mixer = AudioMixer::new(audio_device)?;
+  let run = Arc::new(AtomicBool::new(true));
+  let (tx, rx) = std::sync::mpsc::channel();
+  ctrlc::set_handler(move || {
+    let _ = tx.send(());
+  })
+  .expect("Failed to install Ctrl-C handler");
+
+  info!("Playing continuously, press Ctrl-C to stop");
+  let play_run = Arc::clone(&run);
+  let handle = mixer.handle();
+  let play_handle = std::thread::spawn(move || {
+    while play_run.load(Ordering::Relaxed) {
+      let patches = [patch.clone()];
+      let graph = heartbeat::heartbeat_graph(&patches);
+      let dur = heartbeat::heartbeat_duration(&patches);
+      let slot = handle.add(graph);
+      std::thread::sleep(dur);
+      handle.remove(slot);
+    }
+  });
+
+  rx.recv().ok();
+  run.store(false, Ordering::Relaxed);
+  let _ = play_handle.join();
+  Ok(())
+}
+
+// -- Print -------------------------------------------------------------------
+
+fn run_print(
+  config: &Config,
+  patch_args: &CliPatchOverrides,
+  format: PrintFormat,
+) {
+  let output = match format {
+    PrintFormat::Toml => print::format_toml(&config.library),
+    PrintFormat::Nix => print::format_nix(&config.library),
+    PrintFormat::Cli => {
+      print::format_cli(&patch_args.resolve_patch(&config.library))
+    }
+  };
+  println!("{output}");
+}
+
+// -- Daemon ------------------------------------------------------------------
+
 async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let muted = Arc::new(AtomicBool::new(false));
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
-  let patch = config.patch();
-
-  // Split checks by result mode for the transition period.
-  let heartbeat_checks: Vec<_> = config
-    .daemon
-    .checks
-    .iter()
-    .filter(|c| c.result_mode == ResultMode::ExitCodeSeverity)
-    .cloned()
-    .collect();
-  let drone_checks: Vec<_> = config
-    .daemon
-    .checks
-    .iter()
-    .filter(|c| c.result_mode != ResultMode::ExitCodeSeverity)
-    .cloned()
-    .collect();
-
-  // Derive heartbeat notes by concatenating per-check notes.
-  let heartbeat_notes: Vec<NoteSpec> = heartbeat_checks
-    .iter()
-    .flat_map(|c| {
-      config
-        .daemon
-        .check_notes
-        .get(&c.name)
-        .cloned()
-        .unwrap_or_default()
-    })
-    .collect();
-
-  // Drone notes: per-check map for drone checks.
-  let drone_notes: std::collections::HashMap<String, Vec<NoteSpec>> =
-    drone_checks
-      .iter()
-      .filter_map(|c| {
-        config
-          .daemon
-          .check_notes
-          .get(&c.name)
-          .map(|n| (c.name.clone(), n.clone()))
-      })
-      .collect();
-
   let preview = Arc::new(preview_state::PreviewState::new(
-    patch.clone(),
+    config.library.clone(),
+    config.heartbeats.clone(),
     Arc::clone(&muted),
-    &heartbeat_checks,
-    &drone_checks,
-    &config.daemon.profile_overrides,
-    config.daemon.timing.slot_duration_secs,
-    &heartbeat_notes,
-    &drone_notes,
   ));
 
   // Perform OIDC provider discovery when configured.
@@ -330,8 +299,8 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
       .map_err(|e| ApplicationError::OidcInvalidRedirectUri(e.to_string()))?;
 
       // RequestBody sends client credentials in the POST body
-      // (client_secret_post).  Some providers (e.g. Authelia) require
-      // this instead of the HTTP Basic Auth default.
+      // (client_secret_post).  Some providers (e.g. Authelia)
+      // require this instead of the HTTP Basic Auth default.
       let client = openidconnect::core::CoreClient::from_provider_metadata(
         provider,
         openidconnect::ClientId::new(oidc.client_id.clone()),
@@ -385,18 +354,15 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   systemd::spawn_watchdog();
 
   // Spawn the blocking daemon loop in a separate thread.
-  let daemon_config = config.daemon.clone();
   let audio_device = config.audio_device.clone();
   let daemon_muted = Arc::clone(&muted);
   let daemon_running = Arc::clone(&running);
   let daemon_preview = Arc::clone(&preview);
   let daemon_handle = tokio::task::spawn_blocking(move || {
     daemon::run_daemon(daemon::DaemonContext {
-      config: &daemon_config,
       audio_device: audio_device.as_deref(),
       muted: daemon_muted,
       running: daemon_running,
-      metrics,
       preview: daemon_preview,
     })
   });
@@ -466,8 +432,8 @@ fn create_app(state: AppState, config: &Config) -> Router {
     .oidc
     .as_ref()
     .is_some_and(|o| o.base_url.starts_with("https://"));
-  // SameSite::Lax is required: Strict suppresses the session cookie on
-  // the cross-site redirect back from the OIDC provider.
+  // SameSite::Lax is required: Strict suppresses the session cookie
+  // on the cross-site redirect back from the OIDC provider.
   let session_layer = SessionManagerLayer::new(session_store)
     .with_secure(secure)
     .with_same_site(SameSite::Lax);
@@ -491,173 +457,4 @@ fn create_app(state: AppState, config: &Config) -> Router {
   }
 
   app.layer(session_layer).layer(TraceLayer::new_for_http())
-}
-
-fn run_heartbeat_preview(
-  config: &Config,
-  patch_args: &CliPatchOverrides,
-  values: &[String],
-) -> Result<(), ApplicationError> {
-  if values.is_empty() {
-    return Err(ApplicationError::InvalidMetric(
-      "expected 1 or more metric values, got 0".to_string(),
-    ));
-  }
-
-  let count = values.len();
-  let patch = patch_args.resolve_patch(config);
-  debug!(?patch, "Resolved patch");
-  let slot_secs = config.daemon.timing.slot_duration_secs;
-  let patches = patch.heartbeat_notes(count, 1, slot_secs);
-  for (i, p) in patches.iter().enumerate() {
-    debug!(
-      boop = i,
-      freq = format_args!("{:.1} Hz", p.freq),
-      duration = format_args!("{:.3}s", p.duration),
-      value = %values[i],
-      "Note spec"
-    );
-  }
-  info!(freq = patch.freq, boops = count, "Playing heartbeat preview");
-
-  let graph = heartbeat::heartbeat_graph(&patches);
-  AudioOutput::play_for(
-    graph,
-    heartbeat::heartbeat_duration(&patches),
-    config.audio_device.as_deref(),
-  )
-  .map_err(ApplicationError::AudioPlayback)
-}
-
-fn run_drone_preview(
-  config: &Config,
-  patch_args: &CliPatchOverrides,
-  boops: usize,
-  duration: f64,
-  continuous: bool,
-  values: &[String],
-) -> Result<(), ApplicationError> {
-  use sonify_health_lib::audio::AudioMixer;
-
-  if values.len() != 1 {
-    return Err(ApplicationError::InvalidDroneMetric(format!(
-      "expected exactly 1 metric value, got {}",
-      values.len()
-    )));
-  }
-
-  let metric: f64 =
-    values[0].parse().map_err(|e: std::num::ParseFloatError| {
-      ApplicationError::InvalidDroneMetric(e.to_string())
-    })?;
-
-  if !(0.0..=1.0).contains(&metric) {
-    return Err(ApplicationError::InvalidDroneMetric(format!(
-      "metric must be between 0.0 and 1.0, got {}",
-      metric
-    )));
-  }
-
-  let patch = patch_args.resolve_patch(config);
-  let slot_secs = config.daemon.timing.slot_duration_secs;
-
-  debug!(?patch, "Resolved patch");
-  info!(freq = patch.freq, boops, metric, duration, "Playing drone preview");
-
-  let mixer = AudioMixer::new(config.audio_device.as_deref())?;
-
-  if continuous {
-    let run = Arc::new(AtomicBool::new(true));
-    let (tx, rx) = std::sync::mpsc::channel();
-    ctrlc::set_handler(move || {
-      let _ = tx.send(());
-    })
-    .expect("Failed to install Ctrl-C handler");
-
-    info!("Playing continuously, press Ctrl-C to stop");
-    let play_run = Arc::clone(&run);
-    let handle = mixer.handle();
-    let play_handle = std::thread::spawn(move || {
-      while play_run.load(Ordering::Relaxed) {
-        let patches = patch.drone_notes(0, boops, slot_secs);
-        let graph = heartbeat::heartbeat_graph(&patches);
-        let phrase_dur = heartbeat::heartbeat_duration(&patches);
-        let slot = handle.add(graph);
-        std::thread::sleep(phrase_dur);
-        handle.remove(slot);
-
-        if !play_run.load(Ordering::Relaxed) {
-          break;
-        }
-
-        let gap = patch.phrase_gap / patch.repeat_rate.max(0.1);
-        let deadline = std::time::Instant::now() + Duration::from_secs_f64(gap);
-        while std::time::Instant::now() < deadline
-          && play_run.load(Ordering::Relaxed)
-        {
-          std::thread::sleep(Duration::from_millis(100));
-        }
-      }
-    });
-
-    rx.recv().ok();
-    run.store(false, Ordering::Relaxed);
-    let _ = play_handle.join();
-  } else {
-    let deadline =
-      std::time::Instant::now() + Duration::from_secs_f64(duration);
-    while std::time::Instant::now() < deadline {
-      let patches = patch.drone_notes(0, boops, slot_secs);
-      let graph = heartbeat::heartbeat_graph(&patches);
-      let phrase_dur = heartbeat::heartbeat_duration(&patches);
-      let slot = mixer.add(graph);
-      std::thread::sleep(phrase_dur);
-      mixer.remove(slot);
-
-      if std::time::Instant::now() >= deadline {
-        break;
-      }
-
-      let gap = patch.phrase_gap / patch.repeat_rate.max(0.1);
-      let gap_deadline =
-        std::time::Instant::now() + Duration::from_secs_f64(gap);
-      while std::time::Instant::now() < gap_deadline
-        && std::time::Instant::now() < deadline
-      {
-        std::thread::sleep(Duration::from_millis(100));
-      }
-    }
-  }
-
-  Ok(())
-}
-
-fn run_print(
-  config: &Config,
-  patch_args: &CliPatchOverrides,
-  format: PrintFormat,
-) {
-  let patch = patch_args.resolve_patch(config);
-  let output = match format {
-    PrintFormat::Toml => print::format_toml(&patch, &[], &[], &[]),
-    PrintFormat::Nix => print::format_nix(&patch, &[], &[], &[]),
-    PrintFormat::Cli => print::format_cli(&patch),
-  };
-  println!("{output}");
-}
-
-fn run_patch(hostname: Option<&str>) {
-  let hn = hostname.map(String::from).unwrap_or_else(|| {
-    gethostname::gethostname().to_string_lossy().to_string()
-  });
-  let patch = Patch::from_hostname(&hn);
-
-  debug!(
-    hostname = %hn,
-    note_seed = patch.note_seed,
-    "Patch seed derivation"
-  );
-
-  let label = hostname.unwrap_or("(current host)");
-  println!("Patch for {}:\n{}", label, patch);
 }

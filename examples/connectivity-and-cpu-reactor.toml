@@ -1,5 +1,5 @@
-# Heartbeat: internet connectivity + gateway reachability.
-# Drone: CPU load as a continuous tone.
+# Heartbeats: internet connectivity, gateway reachability, and CPU
+# load with a reactor-inspired sound palette.
 #
 # Run with:
 #   sonify-health --config examples/connectivity-and-cpu-reactor.toml daemon
@@ -9,130 +9,86 @@
 log_level = "info"
 log_format = "text"
 
-[timing]
-slot = 0
-cycle_duration_secs = 14
-slot_duration_secs = 2
-poll_interval_secs = 5
-
-[patch]
-freq = 1165.4094037952248
+# Custom patches for the reactor theme.
+[patches.reactor-ok]
+freq = 1165.4
 sine_ratio = 2.37
 tri_ratio = 1.22
 saw_ratio = 0.02
-square_ratio = 0.0
 attack_ms = 6.0
 release_ms = 22.0
 chirp_ratio = 1.01
 stereo_pan = -0.42
 reverb_mix = 0.89
-note_seed = 0.16436162216471262
 echo_delay = 0.32
 echo_mix = 0.33
 brightness = 1.82
 resonance = 3.72
 sub_octave = 0.03
-vibrato_rate = 0.0
-vibrato_depth = 0.48924022677787815
-tremolo_rate = 0.0
-tremolo_depth = 0.11162006351727571
-amplitude = 0.3271526204901677
+amplitude = 0.327
 drive = 0.5
-noise_mix = 0.0
-crush = 0.0
-fm_ratio = 0.0
-fm_depth = 0.0
-downsample = 0.0
 
-[[checks]]
+[patches.reactor-cpu]
+freq = 659.0
+square_ratio = 1.0
+echo_delay = 0.01
+echo_mix = 0.18
+brightness = 1.47
+resonance = 3.78
+sub_octave = 0.26
+tremolo_rate = 5.0
+tremolo_depth = 0.55
+drive = 2.01
+noise_mix = 1.0
+crush = 0.08
+fm_ratio = 0.04
+fm_depth = 0.7
+downsample = 0.03
+
+# Gateway reachability.
+[[heartbeats]]
 name = "gateway"
 command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
 result_mode = "exit-code-severity"
 
-[[checks]]
+[heartbeats.transition]
+type = "discrete"
+
+[[heartbeats.transition.states]]
+threshold = 0.5
+patch = "reactor-ok"
+
+[[heartbeats.transition.states]]
+threshold = 1.01
+patch = "alarm"
+
+# Internet connectivity.
+[[heartbeats]]
 name = "internet"
 command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
 result_mode = "exit-code-severity"
 
-[[checks]]
+[heartbeats.transition]
+type = "discrete"
+
+[[heartbeats.transition.states]]
+threshold = 0.5
+patch = "reactor-ok"
+
+[[heartbeats.transition.states]]
+threshold = 1.01
+patch = "alarm"
+
+# CPU load.
+[[heartbeats]]
 name = "cpu"
 command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \\"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\\$1/\\$2; print (v>1?1:v)}"'"""
 result_mode = "stdout"
+continuous = true
+volume = 0.2
+poll_interval_secs = 5
 
-[[check_notes.gateway]]
-freq = 3668.0
-duration = 0.21
-
-[[check_notes.gateway]]
-freq = 4307.0
-duration = 0.22
-
-[[check_notes.internet]]
-freq = 3668.0
-duration = 0.2
-
-[[check_notes.internet]]
-freq = 4307.0
-duration = 0.22
-
-[[check_notes.cpu]]
-freq = 15.0
-duration = 1.95
-
-[profiles.cpu.lo]
-freq = 659.0
-sine_ratio = 0.0
-tri_ratio = 0.0
-saw_ratio = 0.0
-square_ratio = 1.0
-attack_ms = 0.0
-release_ms = 0.0
-chirp_ratio = 1.0
-stereo_pan = 0.0
-reverb_mix = 0.0
-note_seed = 0.1
-echo_delay = 0.01
-echo_mix = 0.18
-brightness = 1.47
-resonance = 3.78
-sub_octave = 0.26
-vibrato_rate = 0.0
-vibrato_depth = 0.0
-tremolo_rate = 5.0
-tremolo_depth = 0.55
-amplitude = 0.3
-drive = 2.01
-noise_mix = 1.0
-crush = 0.08
-fm_ratio = 0.04
-fm_depth = 0.7
-downsample = 0.03
-
-[profiles.cpu.hi]
-freq = 659.0
-sine_ratio = 0.0
-tri_ratio = 0.0
-saw_ratio = 0.0
-square_ratio = 1.0
-attack_ms = 0.0
-release_ms = 0.0
-chirp_ratio = 1.0
-stereo_pan = 0.0
-reverb_mix = 0.0
-note_seed = 0.1
-echo_delay = 0.01
-echo_mix = 0.18
-brightness = 1.47
-resonance = 3.78
-sub_octave = 0.26
-vibrato_rate = 0.0
-vibrato_depth = 0.0
-tremolo_rate = 5.0
-tremolo_depth = 0.55
-amplitude = 0.3
-drive = 2.01
-noise_mix = 1.0
-crush = 0.08
-fm_ratio = 0.04
-fm_depth = 0.7
-downsample = 0.03
+[heartbeats.transition]
+type = "gradient"
+patches = ["reactor-cpu", "alarm"]
+curve = 2.0

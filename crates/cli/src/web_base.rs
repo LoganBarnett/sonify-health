@@ -125,7 +125,7 @@ async fn get_mute(State(state): State<AppState>) -> Json<MuteResponse> {
 async fn put_mute(State(state): State<AppState>) -> Json<MuteResponse> {
   state.muted.store(true, Ordering::Relaxed);
   state.metrics.muted.set(1);
-  state.preview.update_all_combined_volumes();
+  state.preview.update_all_effective_volumes();
   let _ = state
     .preview
     .broadcast_tx
@@ -136,7 +136,7 @@ async fn put_mute(State(state): State<AppState>) -> Json<MuteResponse> {
 async fn delete_mute(State(state): State<AppState>) -> Json<MuteResponse> {
   state.muted.store(false, Ordering::Relaxed);
   state.metrics.muted.set(0);
-  state.preview.update_all_combined_volumes();
+  state.preview.update_all_effective_volumes();
   let _ = state
     .preview
     .broadcast_tx

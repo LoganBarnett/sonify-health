@@ -3,15 +3,6 @@ use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 use std::time::Duration;
 
-/// Beats in one bar (4/4 time).
-pub const BEATS_PER_BAR: f64 = 4.0;
-
-/// Candidate note values in beats, longest first.
-pub const NOTE_VALUES: [f64; 4] = [4.0, 2.0, 1.0, 0.5];
-
-/// Shortest allowed note value (an eighth note).
-pub const MIN_NOTE_VALUE: f64 = 0.5;
-
 /// Maximum lowpass cutoff to avoid filter instability near Nyquist.
 const MAX_CUTOFF: f32 = 18000.0;
 
@@ -112,7 +103,7 @@ pub fn heartbeat_graph(patches: &[Patch]) -> Box<dyn AudioUnit> {
 
 /// Build a heartbeat audio graph with optional external volume
 /// multiplier (used for preview volume control).  Each boop plays
-/// its own pentatonic note with a resonant lowpass filter.
+/// its own note with a resonant lowpass filter.
 ///
 /// Shared synthesis params (waveform weights, reverb, pan, echo)
 /// are read from `patches[0]`; per-note params (`freq`,
@@ -197,8 +188,7 @@ pub fn heartbeat_graph_with_volume(
 
   // Frequency LFO: switches between boop frequencies with chirp
   // onset sweep, holds frequency through the release tail,
-  // outputs near-zero between boops.  Reverse iteration so the
-  // latest note's attack wins over a dying note's release tail.
+  // outputs near-zero between boops.
   let freq_timings = timings.clone();
   let freq_env = lfo(move |t: f32| {
     for p in freq_timings.iter().rev() {
@@ -221,25 +211,19 @@ pub fn heartbeat_graph_with_volume(
     0.01
   });
 
-  // Amplitude envelope: attack fills the slot body, release
-  // tail bleeds past the slot boundary so short notes decay
-  // naturally rather than being truncated.  Reverse iteration
-  // so a fresh note's attack crushes the previous release.
+  // Amplitude envelope.
   let amp_timings = timings.clone();
   let amp_env = envelope(move |t: f32| {
     for p in amp_timings.iter().rev() {
       if t >= p.start && t < p.tail_end {
         let local_t = t - p.start;
         let level = if p.attack > 0.0 && local_t < p.attack {
-          // Attack: ramp 0→1.
           local_t / p.attack
         } else {
           let body_end = p.attack + p.dur;
           if local_t <= body_end {
-            // Body: hold at sustain level.
             p.sustain
           } else if p.release > 0.0 {
-            // Release: ramp sustain→0.
             (p.sustain * (body_end + p.release - local_t) / p.release).max(0.0)
           } else {
             0.0
@@ -255,8 +239,7 @@ pub fn heartbeat_graph_with_volume(
     0.0
   });
 
-  // Sine weight envelope: reduces with harshness so the tone
-  // loses its pure-voice warmth as severity increases.
+  // Sine weight envelope.
   let sine_timings = timings.clone();
   let sine_w_env = envelope(move |t: f32| {
     for p in sine_timings.iter().rev() {
@@ -267,8 +250,7 @@ pub fn heartbeat_graph_with_volume(
     sine_w
   });
 
-  // Saw weight envelope: increases with harshness, adding buzzy
-  // harmonics that make degraded/down boops sound shrill.
+  // Saw weight envelope.
   let saw_timings = timings.clone();
   let saw_w_env = envelope(move |t: f32| {
     for p in saw_timings.iter().rev() {
@@ -279,7 +261,7 @@ pub fn heartbeat_graph_with_volume(
     saw_w
   });
 
-  // Lowpass cutoff: healthy is open/bright, down is narrow/nasal.
+  // Lowpass cutoff envelope.
   let cutoff_timings = timings.clone();
   let cutoff_env = lfo(move |t: f32| {
     for p in cutoff_timings.iter().rev() {
@@ -290,8 +272,7 @@ pub fn heartbeat_graph_with_volume(
     20000.0
   });
 
-  // Sub-octave oscillator: sine at half the boop frequency,
-  // mixed in before the lowpass to add low-end body.
+  // Sub-octave oscillator.
   let sub_freq_timings = timings.clone();
   let sub_freq_env = lfo(move |t: f32| {
     for p in sub_freq_timings.iter().rev() {
@@ -319,8 +300,7 @@ pub fn heartbeat_graph_with_volume(
     & (square() * square_w);
   let sub_osc = sub_freq_env >> sub_waveform;
 
-  // Lowpass Q: higher resonance at worse severity creates a
-  // honky, nasal peak — shrill without just being high-pitched.
+  // Lowpass Q envelope.
   let q_timings = timings;
   let q_env = lfo(move |t: f32| {
     for p in q_timings.iter().rev() {
@@ -361,9 +341,7 @@ pub fn heartbeat_graph_with_volume(
 }
 
 /// Build an audio graph for a single boop.  Duration and
-/// frequency come from the patch itself.  Applies the same timbre
-/// model as the heartbeat graph: resonant lowpass filter with
-/// waveform crossfade.
+/// frequency come from the patch itself.
 pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let freq = patch.freq as f32;
   let amp = patch.amplitude as f32;
@@ -427,15 +405,12 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let sustain_level = patch.sustain as f32;
   let env = envelope(move |t: f32| {
     let level = if attack > 0.0 && t < attack {
-      // Attack: ramp 0→1.
       t / attack
     } else {
       let body_end = attack + dur;
       if t <= body_end {
-        // Body: hold at sustain level.
         sustain_level
       } else if release > 0.0 {
-        // Release: ramp sustain→0.
         (sustain_level * (body_end + release - t) / release).max(0.0)
       } else {
         0.0
@@ -460,11 +435,13 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::PatchOverrides;
 
-  /// Helper: create a patch with the given freq and duration.
   fn test_patch(freq: f64, duration: f64) -> Patch {
-    Patch::from_hostname("test").with_note(freq, duration)
+    Patch {
+      freq,
+      duration,
+      ..Default::default()
+    }
   }
 
   #[test]
@@ -488,18 +465,21 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_sums_correctly() {
-    let base = Patch::from_hostname("test").with_overrides(&PatchOverrides {
-      attack_ms: Some(0.0),
-      release_ms: Some(150.0),
-      echo_mix: Some(0.0),
+    let base = Patch {
+      attack_ms: 0.0,
+      release_ms: 150.0,
+      echo_mix: 0.0,
       ..Default::default()
-    });
+    };
     let patches: Vec<Patch> = [440.0, 550.0, 660.0]
       .iter()
-      .map(|&f| base.clone().with_note(f, 0.4))
+      .map(|&f| Patch {
+        freq: f,
+        duration: 0.4,
+        ..base.clone()
+      })
       .collect();
     let dur = heartbeat_duration(&patches);
-    // 3 × 0.4 = 1.2 boop time, plus gaps, release, and 0.05 tail.
     assert!(
       dur.as_secs_f64() > 1.2,
       "Duration should exceed boop sum, got {:.3}",
@@ -514,16 +494,15 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_single_boop() {
-    let patch = Patch::from_hostname("test")
-      .with_overrides(&PatchOverrides {
-        attack_ms: Some(0.0),
-        release_ms: Some(150.0),
-        echo_mix: Some(0.0),
-        ..Default::default()
-      })
-      .with_note(440.0, 1.2);
+    let patch = Patch {
+      freq: 440.0,
+      duration: 1.2,
+      attack_ms: 0.0,
+      release_ms: 150.0,
+      echo_mix: 0.0,
+      ..Default::default()
+    };
     let dur = heartbeat_duration(&[patch]);
-    // Single boop: 1.2 + 0.15 release + 0.05 tail, no gaps.
     assert!(
       (dur.as_secs_f64() - 1.4).abs() < 1e-10,
       "Single boop should be duration + release + tail, got {:.3}",
@@ -533,40 +512,40 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_includes_echo_tail() {
-    let base = Patch::from_hostname("test").with_overrides(&PatchOverrides {
-      attack_ms: Some(0.0),
-      release_ms: Some(150.0),
-      echo_delay: Some(0.3),
+    let base = Patch {
+      freq: 440.0,
+      duration: 1.0,
+      attack_ms: 0.0,
+      release_ms: 150.0,
+      echo_delay: 0.3,
       ..Default::default()
-    });
-    let without_echo = heartbeat_duration(&[base
-      .clone()
-      .with_overrides(&PatchOverrides {
-        echo_mix: Some(0.0),
-        ..Default::default()
-      })
-      .with_note(440.0, 1.0)]);
-    let with_echo = heartbeat_duration(&[base
-      .with_overrides(&PatchOverrides {
-        echo_mix: Some(0.5),
-        ..Default::default()
-      })
-      .with_note(440.0, 1.0)]);
-    // Echo adds 4 × echo_delay = 1.2 s.
+    };
+    let without_echo = heartbeat_duration(&[Patch {
+      echo_mix: 0.0,
+      ..base.clone()
+    }]);
+    let with_echo = heartbeat_duration(&[Patch {
+      echo_mix: 0.5,
+      ..base
+    }]);
     assert!(
       (with_echo.as_secs_f64() - without_echo.as_secs_f64() - 1.2).abs()
         < 1e-10,
-      "Echo tail should add 4 × delay, got delta {:.3}",
+      "Echo tail should add 4 x delay, got delta {:.3}",
       with_echo.as_secs_f64() - without_echo.as_secs_f64()
     );
   }
 
   #[test]
   fn heartbeat_graph_produces_sound() {
-    let base = Patch::from_hostname("test");
+    let base = Patch::default();
     let patches: Vec<Patch> = [440.0, 550.0, 660.0]
       .iter()
-      .map(|&f| base.clone().with_note(f, 0.4))
+      .map(|&f| Patch {
+        freq: f,
+        duration: 0.4,
+        ..base.clone()
+      })
       .collect();
     let mut graph = heartbeat_graph(&patches);
     graph.set_sample_rate(44100.0);
@@ -591,11 +570,15 @@ mod tests {
 
   #[test]
   fn heartbeat_graph_five_boops() {
-    let base = Patch::from_hostname("test");
+    let base = Patch::default();
     let freqs = [220.0, 330.0, 440.0, 550.0, 660.0];
     let patches: Vec<Patch> = freqs
       .iter()
-      .map(|&f| base.clone().with_note(f, 0.24))
+      .map(|&f| Patch {
+        freq: f,
+        duration: 0.24,
+        ..base.clone()
+      })
       .collect();
     let mut graph = heartbeat_graph(&patches);
     graph.set_sample_rate(44100.0);
@@ -620,18 +603,18 @@ mod tests {
 
   #[test]
   fn sustain_below_one_lowers_body_amplitude() {
-    let full = Patch::from_hostname("test")
-      .with_overrides(&PatchOverrides {
-        sustain: Some(1.0),
-        attack_ms: Some(10.0),
-        release_ms: Some(50.0),
-        ..Default::default()
-      })
-      .with_note(440.0, 0.3);
-    let half = full.clone().with_overrides(&PatchOverrides {
-      sustain: Some(0.5),
+    let full = Patch {
+      freq: 440.0,
+      duration: 0.3,
+      sustain: 1.0,
+      attack_ms: 10.0,
+      release_ms: 50.0,
       ..Default::default()
-    });
+    };
+    let half = Patch {
+      sustain: 0.5,
+      ..full.clone()
+    };
 
     let mut g_full = boop_graph(&full);
     g_full.set_sample_rate(44100.0);
@@ -641,11 +624,9 @@ mod tests {
     g_half.set_sample_rate(44100.0);
     g_half.allocate();
 
-    // Sample during the body phase (after attack, before release).
     let body_start = (0.015 * 44100.0) as usize;
     let body_end = (0.25 * 44100.0) as usize;
 
-    // Skip attack.
     for _ in 0..body_start {
       g_full.get_stereo();
       g_half.get_stereo();

@@ -1,12 +1,16 @@
 pub mod audio;
-pub mod check;
 pub mod heartbeat;
+pub mod heartbeat_config;
+pub mod library;
 pub mod logging;
 pub mod patch;
-pub mod state;
+pub mod probe;
 pub mod timing;
+pub mod transition;
 
-pub use check::CheckConfig;
+pub use heartbeat_config::HeartbeatConfig;
+pub use library::{builtin_library, PatchLibrary};
 pub use logging::{LogFormat, LogLevel};
-pub use patch::{NoteSpec, Patch, PatchOverrides, PatchParamMeta};
-pub use state::CheckState;
+pub use patch::{Patch, PatchOverrides, PatchParamMeta};
+pub use probe::ResultMode;
+pub use transition::Transition;

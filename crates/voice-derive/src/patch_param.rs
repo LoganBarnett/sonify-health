@@ -1,42 +1,19 @@
-use syn::{Expr, ExprLit, ExprRange, ExprUnary, Field, Lit, UnOp};
+use syn::{Field, Lit};
 
-/// A parsed `#[patch_param(order = N, range = LO..HI, ...)]` field.
+/// A parsed `#[patch_param(min = X, max = Y, step = Z, ...)]` field.
 pub struct PatchField {
   pub ident: syn::Ident,
-  pub order: u32,
-  pub range_lo: f64,
-  pub range_hi: f64,
-  /// UI slider minimum (falls back to range_lo when absent).
-  pub min: Option<f64>,
-  /// UI slider maximum (falls back to range_hi when absent).
-  pub max: Option<f64>,
+  /// UI slider minimum.
+  pub min: f64,
+  /// UI slider maximum.
+  pub max: f64,
   /// UI slider step size (defaults to 0.01 when absent).
-  pub step: Option<f64>,
+  pub step: f64,
   /// Human-readable description for the UI.
-  pub description: Option<String>,
+  pub description: String,
 }
 
 impl PatchField {
-  /// Effective UI minimum (min if set, otherwise range_lo).
-  pub fn effective_min(&self) -> f64 {
-    self.min.unwrap_or(self.range_lo)
-  }
-
-  /// Effective UI maximum (max if set, otherwise range_hi).
-  pub fn effective_max(&self) -> f64 {
-    self.max.unwrap_or(self.range_hi)
-  }
-
-  /// Effective UI step size.
-  pub fn effective_step(&self) -> f64 {
-    self.step.unwrap_or(0.01)
-  }
-
-  /// Effective description (empty string when absent).
-  pub fn effective_description(&self) -> String {
-    self.description.clone().unwrap_or_default()
-  }
-
   /// Parse a struct field's attributes.  Returns `None` if
   /// the field has no `patch_param` attribute.
   pub fn from_field(field: &Field) -> syn::Result<Option<Self>> {
@@ -62,32 +39,13 @@ impl PatchField {
       ));
     }
 
-    let mut order: Option<u32> = None;
-    let mut range_lo: Option<f64> = None;
-    let mut range_hi: Option<f64> = None;
     let mut min: Option<f64> = None;
     let mut max: Option<f64> = None;
     let mut step: Option<f64> = None;
     let mut description: Option<String> = None;
 
     attr.parse_nested_meta(|meta| {
-      if meta.path.is_ident("order") {
-        let value = meta.value()?;
-        let lit: Lit = value.parse()?;
-        match &lit {
-          Lit::Int(i) => {
-            order = Some(i.base10_parse()?);
-            Ok(())
-          }
-          _ => Err(meta.error("order must be an integer")),
-        }
-      } else if meta.path.is_ident("range") {
-        let value = meta.value()?;
-        let range: ExprRange = value.parse()?;
-        range_lo = extract_float(range.start.as_deref())?;
-        range_hi = extract_float(range.end.as_deref())?;
-        Ok(())
-      } else if meta.path.is_ident("min") {
+      if meta.path.is_ident("min") {
         let value = meta.value()?;
         let lit: Lit = value.parse()?;
         min = Some(parse_float_lit(&lit, &meta)?);
@@ -113,29 +71,21 @@ impl PatchField {
           _ => Err(meta.error("description must be a string")),
         }
       } else {
-        Err(meta.error(
-          "expected `order`, `range`, `min`, `max`, `step`, \
-           or `description`",
-        ))
+        Err(meta.error("expected `min`, `max`, `step`, or `description`"))
       }
     })?;
 
-    let order =
-      order.ok_or_else(|| syn::Error::new_spanned(attr, "missing `order`"))?;
-    let range_lo = range_lo
-      .ok_or_else(|| syn::Error::new_spanned(attr, "missing range start"))?;
-    let range_hi = range_hi
-      .ok_or_else(|| syn::Error::new_spanned(attr, "missing range end"))?;
+    let min =
+      min.ok_or_else(|| syn::Error::new_spanned(attr, "missing `min`"))?;
+    let max =
+      max.ok_or_else(|| syn::Error::new_spanned(attr, "missing `max`"))?;
 
     Ok(Some(PatchField {
       ident,
-      order,
-      range_lo,
-      range_hi,
       min,
       max,
-      step,
-      description,
+      step: step.unwrap_or(0.01),
+      description: description.unwrap_or_default(),
     }))
   }
 }
@@ -148,29 +98,6 @@ fn parse_float_lit(
     Lit::Float(f) => f.base10_parse(),
     Lit::Int(i) => i.base10_parse::<f64>(),
     _ => Err(meta.error("expected a numeric literal")),
-  }
-}
-
-fn extract_float(expr: Option<&Expr>) -> syn::Result<Option<f64>> {
-  match expr {
-    None => Ok(None),
-    Some(Expr::Lit(ExprLit {
-      lit: Lit::Float(f), ..
-    })) => Ok(Some(f.base10_parse()?)),
-    Some(Expr::Lit(ExprLit {
-      lit: Lit::Int(i), ..
-    })) => Ok(Some(i.base10_parse::<f64>()?)),
-    Some(Expr::Unary(ExprUnary {
-      op: UnOp::Neg(_),
-      expr: inner,
-      ..
-    })) => {
-      let positive = extract_float(Some(inner))?;
-      Ok(positive.map(|v| -v))
-    }
-    Some(other) => {
-      Err(syn::Error::new_spanned(other, "expected a float literal"))
-    }
   }
 }
 
