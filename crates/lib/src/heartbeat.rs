@@ -106,6 +106,7 @@ struct BoopTiming {
   dur: f32,
   attack: f32,
   release: f32,
+  sustain: f32,
   harshness: f32,
   filter_cutoff: f32,
   filter_q: f32,
@@ -183,6 +184,7 @@ pub fn heartbeat_graph_with_volume(
     let dur = specs[i].duration as f32;
     let attack = voice.attack_ms as f32 / 1000.0;
     let release = voice.release_ms as f32 / 1000.0;
+    let sustain_level = voice.sustain as f32;
     let start = t as f32;
 
     timings.push(BoopTiming {
@@ -193,6 +195,7 @@ pub fn heartbeat_graph_with_volume(
       dur,
       attack,
       release,
+      sustain: sustain_level,
       harshness: profile.harshness as f32,
       filter_cutoff: (freq * profile.filter_cutoff as f32 * brightness)
         .min(MAX_CUTOFF),
@@ -240,22 +243,26 @@ pub fn heartbeat_graph_with_volume(
     for p in amp_timings.iter().rev() {
       if t >= p.start && t < p.tail_end {
         let local_t = t - p.start;
-        let fade_in = if p.attack > 0.0 {
-          (local_t / p.attack).min(1.0)
+        let level = if p.attack > 0.0 && local_t < p.attack {
+          // Attack: ramp 0→1.
+          local_t / p.attack
         } else {
-          1.0
-        };
-        let body_end = p.attack + p.dur;
-        let fade_out = if local_t > body_end && p.release > 0.0 {
-          ((body_end + p.release - local_t) / p.release).max(0.0)
-        } else {
-          1.0
+          let body_end = p.attack + p.dur;
+          if local_t <= body_end {
+            // Body: hold at sustain level.
+            p.sustain
+          } else if p.release > 0.0 {
+            // Release: ramp sustain→0.
+            (p.sustain * (body_end + p.release - local_t) / p.release).max(0.0)
+          } else {
+            0.0
+          }
         };
         let trem = (1.0
           - tremolo_depth
             * (1.0 - (std::f64::consts::TAU * tremolo_rate * t as f64).sin())
             / 2.0) as f32;
-        return fade_in * fade_out * p.amp * trem;
+        return level * p.amp * trem;
       }
     }
     0.0
@@ -438,19 +445,24 @@ pub fn boop_graph(
   let q_val =
     dc((profile.filter_q as f32 * voice.resonance as f32 * 0.2).min(0.95));
 
+  let sustain_level = voice.sustain as f32;
   let env = envelope(move |t: f32| {
-    let fade_in = if attack > 0.0 {
-      (t / attack).min(1.0)
+    let level = if attack > 0.0 && t < attack {
+      // Attack: ramp 0→1.
+      t / attack
     } else {
-      1.0
+      let body_end = attack + dur;
+      if t <= body_end {
+        // Body: hold at sustain level.
+        sustain_level
+      } else if release > 0.0 {
+        // Release: ramp sustain→0.
+        (sustain_level * (body_end + release - t) / release).max(0.0)
+      } else {
+        0.0
+      }
     };
-    let body_end = attack + dur;
-    let fade_out = if t > body_end && release > 0.0 {
-      ((body_end + release - t) / release).max(0.0)
-    } else {
-      1.0
-    };
-    fade_in * fade_out * amp
+    level * amp
   });
 
   let echo_delay = voice.echo_delay as f32;
@@ -469,6 +481,7 @@ pub fn boop_graph(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::VoiceOverrides;
 
   #[test]
   fn boop_produces_sound() {
@@ -677,6 +690,66 @@ mod tests {
       "Five-boop heartbeat should produce audible samples, \
        got peak {}",
       peak
+    );
+  }
+
+  #[test]
+  fn sustain_below_one_lowers_body_amplitude() {
+    let full = Voice::from_hostname("test").with_overrides(&VoiceOverrides {
+      sustain: Some(1.0),
+      attack_ms: Some(10.0),
+      release_ms: Some(50.0),
+      ..Default::default()
+    });
+    let half = full.clone().with_overrides(&VoiceOverrides {
+      sustain: Some(0.5),
+      ..Default::default()
+    });
+
+    let spec = BoopSpec {
+      freq: 440.0,
+      duration: 0.3,
+    };
+    let sev = Severity::Healthy;
+
+    let mut g_full = boop_graph(&full, sev, spec.duration);
+    g_full.set_sample_rate(44100.0);
+    g_full.allocate();
+
+    let mut g_half = boop_graph(&half, sev, spec.duration);
+    g_half.set_sample_rate(44100.0);
+    g_half.allocate();
+
+    // Sample during the body phase (after attack, before release).
+    let body_start = (0.015 * 44100.0) as usize;
+    let body_end = (0.25 * 44100.0) as usize;
+
+    // Skip attack.
+    for _ in 0..body_start {
+      g_full.get_stereo();
+      g_half.get_stereo();
+    }
+
+    let full_rms: f32 = (body_start..body_end)
+      .map(|_| {
+        let (l, _) = g_full.get_stereo();
+        l * l
+      })
+      .sum::<f32>()
+      / (body_end - body_start) as f32;
+
+    let half_rms: f32 = (body_start..body_end)
+      .map(|_| {
+        let (l, _) = g_half.get_stereo();
+        l * l
+      })
+      .sum::<f32>()
+      / (body_end - body_start) as f32;
+
+    assert!(
+      half_rms < full_rms,
+      "sustain=0.5 body RMS ({half_rms:.6}) should be lower \
+       than sustain=1.0 ({full_rms:.6})"
     );
   }
 

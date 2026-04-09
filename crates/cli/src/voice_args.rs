@@ -117,6 +117,10 @@ pub(crate) struct CliVoiceOverrides {
   /// Override downsample (lo-fi sample rate reduction, 0.0–1.0).
   #[arg(long, help_heading = "Voice overrides")]
   downsample: Option<f64>,
+
+  /// Override sustain level (0.0–1.0). Body amplitude after attack.
+  #[arg(long, help_heading = "Voice overrides")]
+  sustain: Option<f64>,
 }
 
 impl CliVoiceOverrides {
@@ -157,6 +161,7 @@ impl CliVoiceOverrides {
       fm_ratio: self.fm_ratio,
       fm_depth: self.fm_depth,
       downsample: self.downsample,
+      sustain: self.sustain,
     }
   }
 

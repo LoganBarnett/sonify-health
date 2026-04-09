@@ -42,6 +42,7 @@ fn voice_toml_lines(lines: &mut Vec<String>, header: &str, voice: &Voice) {
   lines.push(format!("fm_ratio = {}", float_lit(voice.fm_ratio)));
   lines.push(format!("fm_depth = {}", float_lit(voice.fm_depth)));
   lines.push(format!("downsample = {}", float_lit(voice.downsample)));
+  lines.push(format!("sustain = {}", float_lit(voice.sustain)));
 }
 
 /// Format all voices as a TOML document suitable for pasting into
@@ -107,6 +108,7 @@ fn voice_nix_lines(lines: &mut Vec<String>, prefix: &str, voice: &Voice) {
   lines.push(format!("  fm_ratio = {};", float_lit(voice.fm_ratio)));
   lines.push(format!("  fm_depth = {};", float_lit(voice.fm_depth)));
   lines.push(format!("  downsample = {};", float_lit(voice.downsample)));
+  lines.push(format!("  sustain = {};", float_lit(voice.sustain)));
   lines.push("};".to_string());
 }
 
@@ -179,6 +181,7 @@ fn voice_to_json_value(voice: &Voice) -> serde_json::Value {
     "fm_ratio": voice.fm_ratio,
     "fm_depth": voice.fm_depth,
     "downsample": voice.downsample,
+    "sustain": voice.sustain,
   })
 }
 
@@ -252,6 +255,7 @@ pub(crate) fn format_cli(voice: &Voice) -> String {
     format!("--fm-ratio {}", voice.fm_ratio),
     format!("--fm-depth {}", voice.fm_depth),
     format!("--downsample {}", voice.downsample),
+    format!("--sustain {}", voice.sustain),
   ]
   .join(" ")
 }

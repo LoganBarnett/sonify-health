@@ -99,6 +99,9 @@ pub struct Voice {
 
   #[voice_param(order = 26, range = 0.0..0.01)]
   pub downsample: f64,
+
+  #[voice_param(order = 27, range = 0.0..1.0)]
+  pub sustain: f64,
 }
 
 /// Per-boop specification: frequency and duration.
@@ -149,6 +152,7 @@ impl Voice {
       fm_ratio: lo.fm_ratio + (hi.fm_ratio - lo.fm_ratio) * t,
       fm_depth: lo.fm_depth + (hi.fm_depth - lo.fm_depth) * t,
       downsample: lo.downsample + (hi.downsample - lo.downsample) * t,
+      sustain: lo.sustain + (hi.sustain - lo.sustain) * t,
     }
   }
 
@@ -234,6 +238,9 @@ impl Voice {
     }
     if let Some(v) = o.downsample {
       self.downsample = v;
+    }
+    if let Some(v) = o.sustain {
+      self.sustain = v;
     }
     self
   }
@@ -409,6 +416,7 @@ pub struct VoiceOverrides {
   pub fm_ratio: Option<f64>,
   pub fm_depth: Option<f64>,
   pub downsample: Option<f64>,
+  pub sustain: Option<f64>,
 }
 
 impl fmt::Display for Voice {
@@ -438,7 +446,8 @@ impl fmt::Display for Voice {
     writeln!(f, "crush:        {:.3}", self.crush)?;
     writeln!(f, "fm_ratio:     {:.3}", self.fm_ratio)?;
     writeln!(f, "fm_depth:     {:.3}", self.fm_depth)?;
-    write!(f, "downsample:   {:.3}", self.downsample)
+    writeln!(f, "downsample:   {:.3}", self.downsample)?;
+    write!(f, "sustain:      {:.3}", self.sustain)
   }
 }
 
@@ -499,6 +508,7 @@ mod tests {
       assert!((0.0..0.1).contains(&v.fm_ratio));
       assert!((0.0..0.1).contains(&v.fm_depth));
       assert!((0.0..0.01).contains(&v.downsample));
+      assert!((0.0..1.0).contains(&v.sustain));
     }
   }
 

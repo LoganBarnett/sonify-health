@@ -58,7 +58,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     name: "attack_ms",
     description:
       "Fade-in time in milliseconds. Low = snappy click, high = soft swell.",
-    min: 1.0,
+    min: 0.0,
     max: 500.0,
     step: 1.0,
   },
@@ -66,7 +66,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     name: "release_ms",
     description:
       "Fade-out time in milliseconds. Low = staccato, high = lingering tail.",
-    min: 10.0,
+    min: 0.0,
     max: 1000.0,
     step: 1.0,
   },
@@ -224,6 +224,14 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     name: "downsample",
     description:
       "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier.",
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+  },
+  VoiceParamMeta {
+    name: "sustain",
+    description:
+      "Body amplitude after attack. 1.0 = full level, lower = quieter sustain.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
@@ -1007,6 +1015,7 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
     "fm_ratio" => Some(voice.fm_ratio),
     "fm_depth" => Some(voice.fm_depth),
     "downsample" => Some(voice.downsample),
+    "sustain" => Some(voice.sustain),
     _ => None,
   }
 }
@@ -1040,6 +1049,7 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
     "fm_ratio" => voice.fm_ratio = value,
     "fm_depth" => voice.fm_depth = value,
     "downsample" => voice.downsample = value,
+    "sustain" => voice.sustain = value,
     _ => return false,
   }
   true
@@ -1074,6 +1084,7 @@ fn voice_to_json(voice: &Voice) -> serde_json::Value {
     "fm_ratio": voice.fm_ratio,
     "fm_depth": voice.fm_depth,
     "downsample": voice.downsample,
+    "sustain": voice.sustain,
   })
 }
 
