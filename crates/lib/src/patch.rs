@@ -34,9 +34,9 @@ pub struct Patch {
   #[patch_param(
     order = 0, range = 100.0..12000.0,
     min = 100.0, max = 12000.0, step = 1.0,
-    description = "Root pitch in Hz. All boop notes derive from this frequency."
+    description = "Pitch in Hz."
   )]
-  pub base_freq: f64,
+  pub freq: f64,
 
   #[patch_param(
     order = 1, range = 0.0..1.0,
@@ -286,14 +286,14 @@ impl Patch {
   /// Return a lightweight note spec for serialisation.
   pub fn to_note_spec(&self) -> NoteSpec {
     NoteSpec {
-      freq: self.base_freq,
+      freq: self.freq,
       duration: self.duration,
     }
   }
 
   /// Set per-note frequency and duration, returning the modified patch.
   pub fn with_note(mut self, freq: f64, duration: f64) -> Self {
-    self.base_freq = freq;
+    self.freq = freq;
     self.duration = duration;
     self
   }
@@ -304,8 +304,8 @@ impl Patch {
   /// from heartbeats and from each other.
   ///
   /// Each returned patch is a clone of `self` with per-note
-  /// `base_freq` and `duration` set.  The PRNG controls only
-  /// duration; all notes use `self.base_freq`.
+  /// `freq` and `duration` set.  The PRNG controls only
+  /// duration; all notes use `self.freq`.
   pub fn drone_notes(
     &self,
     drone_index: usize,
@@ -350,16 +350,14 @@ impl Patch {
 
     let patches: Vec<Patch> = raw
       .into_iter()
-      .map(|note_val| {
-        self.clone().with_note(self.base_freq, note_val * beat_secs)
-      })
+      .map(|note_val| self.clone().with_note(self.freq, note_val * beat_secs))
       .collect();
 
     debug!(
       note_seed = self.note_seed,
       drone_index,
-      base_freq = format_args!("{:.1} Hz", self.base_freq),
-      specs = ?patches.iter().map(|p| format!("{:.1}Hz/{:.3}s", p.base_freq, p.duration)).collect::<Vec<_>>(),
+      freq = format_args!("{:.1} Hz", self.freq),
+      specs = ?patches.iter().map(|p| format!("{:.1}Hz/{:.3}s", p.freq, p.duration)).collect::<Vec<_>>(),
       "Drone phrase notes generated"
     );
 
@@ -424,9 +422,7 @@ impl Patch {
 
     raw
       .into_iter()
-      .map(|note_val| {
-        self.clone().with_note(self.base_freq, note_val * beat_secs)
-      })
+      .map(|note_val| self.clone().with_note(self.freq, note_val * beat_secs))
       .collect()
   }
 }
@@ -452,7 +448,7 @@ mod tests {
   fn deterministic_patch() {
     let v1 = Patch::from_hostname("silicon");
     let v2 = Patch::from_hostname("silicon");
-    assert_eq!(v1.base_freq, v2.base_freq);
+    assert_eq!(v1.freq, v2.freq);
     assert_eq!(v1.sine_ratio, v2.sine_ratio);
     assert_eq!(v1.attack_ms, v2.attack_ms);
     assert_eq!(v1.note_seed, v2.note_seed);
@@ -463,7 +459,7 @@ mod tests {
     let v1 = Patch::from_hostname("silicon");
     let v2 = Patch::from_hostname("carbon");
     assert!(
-      v1.base_freq != v2.base_freq
+      v1.freq != v2.freq
         || v1.sine_ratio != v2.sine_ratio
         || v1.tri_ratio != v2.tri_ratio,
       "Different hostnames should produce different patches"
@@ -474,7 +470,7 @@ mod tests {
   fn parameters_within_range() {
     for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
       let v = Patch::from_hostname(name);
-      assert!((100.0..12000.0).contains(&v.base_freq));
+      assert!((100.0..12000.0).contains(&v.freq));
       assert!((0.0..1.0).contains(&v.sine_ratio));
       assert!((0.0..1.0).contains(&v.tri_ratio));
       assert!((0.0..1.0).contains(&v.saw_ratio));
@@ -513,10 +509,10 @@ mod tests {
     let v = Patch::from_hostname("test");
     let original_sine = v.sine_ratio;
     let overridden = v.with_overrides(&PatchOverrides {
-      base_freq: Some(440.0),
+      freq: Some(440.0),
       ..Default::default()
     });
-    assert_eq!(overridden.base_freq, 440.0);
+    assert_eq!(overridden.freq, 440.0);
     assert_eq!(overridden.sine_ratio, original_sine);
   }
 
@@ -527,7 +523,7 @@ mod tests {
     let s2 = v.drone_notes(0, 3, 4.0);
     assert_eq!(s1.len(), s2.len());
     for (a, b) in s1.iter().zip(s2.iter()) {
-      assert_eq!(a.base_freq, b.base_freq);
+      assert_eq!(a.freq, b.freq);
       assert_eq!(a.duration, b.duration);
     }
   }
@@ -555,8 +551,8 @@ mod tests {
     let patches_3 = v.heartbeat_notes(3, 3, 4.0);
     for check in 0..3 {
       assert_eq!(
-        patches_1[check].base_freq,
-        patches_3[check * 3].base_freq,
+        patches_1[check].freq,
+        patches_3[check * 3].freq,
         "Check {check}'s first note shifted when boops_per_check changed"
       );
     }
@@ -568,7 +564,7 @@ mod tests {
     // The fitting loop should halve both to half notes (2 beats
     // each = 4 beats total), which fits exactly.
     let v = Patch::from_hostname("test").with_overrides(&PatchOverrides {
-      base_freq: Some(440.0),
+      freq: Some(440.0),
       ..Default::default()
     });
     // With slot_secs = 4.0, beat_secs = 1.0.  Two boops gives
@@ -594,7 +590,7 @@ mod tests {
     let lo = Patch::from_hostname("lo");
     let hi = Patch::from_hostname("hi");
     let result = Patch::lerp(&lo, &hi, 0.0);
-    assert_eq!(result.base_freq, lo.base_freq);
+    assert_eq!(result.freq, lo.freq);
     assert_eq!(result.amplitude, lo.amplitude);
     assert_eq!(result.reverb_mix, lo.reverb_mix);
   }
@@ -604,7 +600,7 @@ mod tests {
     let lo = Patch::from_hostname("lo");
     let hi = Patch::from_hostname("hi");
     let result = Patch::lerp(&lo, &hi, 1.0);
-    assert_eq!(result.base_freq, hi.base_freq);
+    assert_eq!(result.freq, hi.freq);
     assert_eq!(result.amplitude, hi.amplitude);
     assert_eq!(result.reverb_mix, hi.reverb_mix);
   }
@@ -614,11 +610,11 @@ mod tests {
     let lo = Patch::from_hostname("lo");
     let hi = Patch::from_hostname("hi");
     let result = Patch::lerp(&lo, &hi, 0.5);
-    let expected_freq = (lo.base_freq + hi.base_freq) / 2.0;
+    let expected_freq = (lo.freq + hi.freq) / 2.0;
     assert!(
-      (result.base_freq - expected_freq).abs() < 1e-10,
-      "base_freq midpoint: got {} expected {}",
-      result.base_freq,
+      (result.freq - expected_freq).abs() < 1e-10,
+      "freq midpoint: got {} expected {}",
+      result.freq,
       expected_freq,
     );
     let expected_amp = (lo.amplitude + hi.amplitude) / 2.0;
@@ -635,9 +631,9 @@ mod tests {
     let lo = Patch::from_hostname("lo");
     let hi = Patch::from_hostname("hi");
     let below = Patch::lerp(&lo, &hi, -0.5);
-    assert_eq!(below.base_freq, lo.base_freq);
+    assert_eq!(below.freq, lo.freq);
     let above = Patch::lerp(&lo, &hi, 2.0);
-    assert_eq!(above.base_freq, hi.base_freq);
+    assert_eq!(above.freq, hi.freq);
   }
 
   /// Golden test: the derive macro must produce the same values
@@ -655,11 +651,11 @@ mod tests {
     seed.copy_from_slice(&hash);
     let mut rng = Xoshiro256StarStar::from_seed(seed);
 
-    let expected_base_freq: f64 = rng.gen_range(100.0..12000.0);
+    let expected_freq: f64 = rng.gen_range(100.0..12000.0);
     let expected_sine_ratio: f64 = rng.gen_range(0.0..1.0);
 
     let derived = Patch::from_hostname("silicon");
-    assert_eq!(derived.base_freq, expected_base_freq);
+    assert_eq!(derived.freq, expected_freq);
     assert_eq!(derived.sine_ratio, expected_sine_ratio);
   }
 
@@ -680,8 +676,8 @@ mod tests {
   #[test]
   fn set_param_round_trips() {
     let mut patch = Patch::from_hostname("test");
-    patch.set_param("base_freq", 999.0);
-    assert_eq!(patch.get_param("base_freq"), Some(999.0));
+    patch.set_param("freq", 999.0);
+    assert_eq!(patch.get_param("freq"), Some(999.0));
   }
 
   #[test]
@@ -689,18 +685,18 @@ mod tests {
     let patch = Patch::from_hostname("test");
     let json = serde_json::to_value(&patch).unwrap();
     assert!(json.get("duration").is_none());
-    assert!(json.get("base_freq").is_some());
+    assert!(json.get("freq").is_some());
   }
 
   #[test]
   fn patch_overrides_to_fields() {
     let o = PatchOverrides {
-      base_freq: Some(440.0),
+      freq: Some(440.0),
       amplitude: Some(0.5),
       ..Default::default()
     };
     let fields = o.to_fields();
-    assert!(fields.iter().any(|(n, v)| *n == "base_freq" && *v == 440.0));
+    assert!(fields.iter().any(|(n, v)| *n == "freq" && *v == 440.0));
     assert!(fields.iter().any(|(n, v)| *n == "amplitude" && *v == 0.5));
     assert_eq!(fields.len(), 2);
   }

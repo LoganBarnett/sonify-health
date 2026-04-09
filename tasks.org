@@ -44,7 +44,7 @@ running the language-specific formatters directly on the staged files.
 * DONE Add protocol contract test for state snapshot
   Write a Rust test that deserializes =state_snapshot()= JSON through
   structs mirroring the Elm frontend decoders.  Demonstrate it catches
-  the texture→base_freq/boops drift that broke the UI.
+  the texture→freq/boops drift that broke the UI.
 
 * DONE Filter slope (pole count)
 Replaced =lowpass()= with =moog()= 4-pole ladder filter.  Q scaled by 0.2
@@ -85,12 +85,12 @@ parsing, frontend, and all serialisation paths.
 
 * DONE Roll frequency into Voice / rename Voice
 With lo/hi profiles the frequency should interpolate like every other voice
-parameter.  Currently =base_freq= lives on =Voice= but actual note frequencies
+parameter.  Currently =freq= lives on =Voice= but actual note frequencies
 are generated separately in =BoopSpec= and overridden via
-=DroneMetricConfig.base_freq=.
+=DroneMetricConfig.freq=.
 
 Consolidate: =BoopSpec= keeps =duration= only; frequency comes from the
-interpolated voice's =base_freq= at play time.  Remove
-=DroneMetricConfig.base_freq= override (lo/hi profiles replace it).  Rename
+interpolated voice's =freq= at play time.  Remove
+=DroneMetricConfig.freq= override (lo/hi profiles replace it).  Rename
 =Voice= to something more accurate (=Patch=, =Tone=, =SoundGraph=, =Profile=,
 etc.) since it is really a synthesis recipe, not a vocal identity.

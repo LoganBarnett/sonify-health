@@ -10,9 +10,9 @@ pub(crate) struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   hostname: Option<String>,
 
-  /// Override base frequency (Hz).
+  /// Override frequency (Hz).
   #[arg(long, help_heading = "Patch overrides")]
-  base_freq: Option<f64>,
+  freq: Option<f64>,
 
   /// Override sine oscillator ratio.
   #[arg(long, help_heading = "Patch overrides")]
@@ -146,7 +146,7 @@ impl CliPatchOverrides {
   /// Convert CLI fields into `PatchOverrides`.
   fn patch_overrides(&self) -> PatchOverrides {
     PatchOverrides {
-      base_freq: self.base_freq,
+      freq: self.freq,
       sine_ratio: self.sine_ratio,
       tri_ratio: self.tri_ratio,
       saw_ratio: self.saw_ratio,

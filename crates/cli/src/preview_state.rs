@@ -398,14 +398,11 @@ impl PreviewState {
       })
       .collect();
 
-    let base_freq_meta = Patch::PARAMS
-      .iter()
-      .find(|p| p.name == "base_freq")
-      .unwrap();
+    let freq_meta = Patch::PARAMS.iter().find(|p| p.name == "freq").unwrap();
 
     let common_spec_ranges = json!({
-      "freq_min": base_freq_meta.min / 2.0,
-      "freq_max": base_freq_meta.max,
+      "freq_min": freq_meta.min / 2.0,
+      "freq_max": freq_meta.max,
       "freq_step": 1.0,
       "duration_min": 0.05,
       "duration_max": self.slot_secs,
@@ -859,6 +856,122 @@ mod tests {
     boops: u64,
   }
 
+  #[derive(Deserialize)]
+  struct ParamChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    layer: String,
+    param: String,
+    value: f64,
+    index: Option<u64>,
+  }
+
+  #[derive(Deserialize)]
+  struct MuteChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    muted: bool,
+  }
+
+  #[derive(Deserialize)]
+  struct VolumeChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    layer: String,
+    volume: f64,
+    index: Option<u64>,
+  }
+
+  #[derive(Deserialize)]
+  struct OverrideChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    layer: String,
+    index: u64,
+    value: Option<f64>,
+    overridden: bool,
+  }
+
+  #[derive(Deserialize)]
+  struct HeartbeatLoopChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    enabled: bool,
+  }
+
+  #[derive(Deserialize)]
+  struct BoopCountChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    count: u64,
+  }
+
+  #[derive(Deserialize)]
+  struct DroneInterpCurveChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    index: u64,
+    curve: f64,
+  }
+
+  #[derive(Deserialize)]
+  struct CheckLogContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    timestamp: f64,
+    layer: String,
+    name: String,
+    result: String,
+    overridden: bool,
+  }
+
+  #[derive(Deserialize)]
+  struct PatchExportContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    toml: String,
+    json: String,
+    nix: String,
+  }
+
+  #[derive(Deserialize)]
+  struct LockedParamsChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    layer: String,
+    params: Vec<String>,
+    index: Option<u64>,
+  }
+
+  #[derive(Deserialize)]
+  struct LockedDronesChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    indices: Vec<u64>,
+  }
+
+  #[derive(Deserialize)]
+  struct BoopSpecsChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    specs: Vec<NoteSpecContract>,
+  }
+
+  #[derive(Deserialize)]
+  struct DroneSpecsChangedContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    index: u64,
+    specs: Vec<NoteSpecContract>,
+  }
+
+  #[derive(Deserialize)]
+  struct ImportErrorContract {
+    #[serde(rename = "type")]
+    msg_type: String,
+    message: String,
+  }
+
   fn test_preview() -> PreviewState {
     let voice = Patch::from_hostname("test");
     let checks = vec![CheckConfig {
@@ -932,19 +1045,19 @@ mod tests {
     let preview = test_preview();
     let original_drone_freq = {
       let patches = preview.patches.read().unwrap();
-      patches[&PatchOwner::DroneLo(0)].base_freq
+      patches[&PatchOwner::DroneLo(0)].freq
     };
     {
       let mut patches = preview.patches.write().unwrap();
       let hb = patches.get_mut(&PatchOwner::Heartbeat).unwrap();
-      hb.set_param("base_freq", 999.0);
+      hb.set_param("freq", 999.0);
     }
     let patches = preview.patches.read().unwrap();
     assert!(
-      (patches[&PatchOwner::Heartbeat].base_freq - 999.0).abs() < f64::EPSILON,
+      (patches[&PatchOwner::Heartbeat].freq - 999.0).abs() < f64::EPSILON,
     );
     assert!(
-      (patches[&PatchOwner::DroneLo(0)].base_freq - original_drone_freq).abs()
+      (patches[&PatchOwner::DroneLo(0)].freq - original_drone_freq).abs()
         < f64::EPSILON,
     );
   }
@@ -954,19 +1067,19 @@ mod tests {
     let preview = test_preview();
     let original_hb_freq = {
       let patches = preview.patches.read().unwrap();
-      patches[&PatchOwner::Heartbeat].base_freq
+      patches[&PatchOwner::Heartbeat].freq
     };
     {
       let mut patches = preview.patches.write().unwrap();
       let drone = patches.get_mut(&PatchOwner::DroneLo(0)).unwrap();
-      drone.set_param("base_freq", 777.0);
+      drone.set_param("freq", 777.0);
     }
     let patches = preview.patches.read().unwrap();
     assert!(
-      (patches[&PatchOwner::DroneLo(0)].base_freq - 777.0).abs() < f64::EPSILON,
+      (patches[&PatchOwner::DroneLo(0)].freq - 777.0).abs() < f64::EPSILON,
     );
     assert!(
-      (patches[&PatchOwner::Heartbeat].base_freq - original_hb_freq).abs()
+      (patches[&PatchOwner::Heartbeat].freq - original_hb_freq).abs()
         < f64::EPSILON,
     );
   }
@@ -978,7 +1091,7 @@ mod tests {
     {
       let mut patches = preview.patches.write().unwrap();
       let hb = patches.get_mut(&PatchOwner::Heartbeat).unwrap();
-      hb.set_param("base_freq", 555.0);
+      hb.set_param("freq", 555.0);
     }
     preview
       .locked_params
@@ -986,14 +1099,14 @@ mod tests {
       .unwrap()
       .entry(PatchOwner::Heartbeat)
       .or_default()
-      .insert("base_freq".to_string());
+      .insert("freq".to_string());
 
     preview.revert();
 
     let patches = preview.patches.read().unwrap();
     assert!(
-      (patches[&PatchOwner::Heartbeat].base_freq - 555.0).abs() < f64::EPSILON,
-      "Locked heartbeat base_freq should survive revert",
+      (patches[&PatchOwner::Heartbeat].freq - 555.0).abs() < f64::EPSILON,
+      "Locked heartbeat freq should survive revert",
     );
   }
 
@@ -1006,24 +1119,24 @@ mod tests {
       patches
         .get_mut(&PatchOwner::Heartbeat)
         .unwrap()
-        .set_param("base_freq", 111.0);
+        .set_param("freq", 111.0);
       patches
         .get_mut(&PatchOwner::DroneLo(0))
         .unwrap()
-        .set_param("base_freq", 222.0);
+        .set_param("freq", 222.0);
       patches
         .get_mut(&PatchOwner::DroneHi(0))
         .unwrap()
-        .set_param("base_freq", 333.0);
+        .set_param("freq", 333.0);
     }
     let json = preview.state_snapshot();
     let state: StateContract =
       serde_json::from_str(&json).expect("state_snapshot should decode");
-    let hb_freq = state.patch["base_freq"].as_f64().unwrap();
+    let hb_freq = state.patch["freq"].as_f64().unwrap();
     // The drone is the second entry in the unified checks array
     // (index 1, after the heartbeat check at index 0).
-    let lo_freq = state.checks[1].patch_lo["base_freq"].as_f64().unwrap();
-    let hi_freq = state.checks[1].patch_hi["base_freq"].as_f64().unwrap();
+    let lo_freq = state.checks[1].patch_lo["freq"].as_f64().unwrap();
+    let hi_freq = state.checks[1].patch_hi["freq"].as_f64().unwrap();
     assert!((hb_freq - 111.0).abs() < f64::EPSILON);
     assert!((lo_freq - 222.0).abs() < f64::EPSILON);
     assert!((hi_freq - 333.0).abs() < f64::EPSILON);
@@ -1169,5 +1282,279 @@ mod tests {
       "No example configs found in {}",
       examples_dir.display()
     );
+  }
+
+  // -- Broadcast message contract tests ------------------------------------
+  //
+  // Each test builds JSON mirroring the production code in websocket.rs
+  // and daemon.rs, then deserializes through the contract struct.  If the
+  // backend shape drifts the test fails immediately.
+
+  #[test]
+  fn param_changed_with_index_matches_contract() {
+    let msg = json!({
+      "type": "param_changed",
+      "layer": "drone_lo",
+      "index": 0,
+      "param": "freq",
+      "value": 440.0,
+    })
+    .to_string();
+    let parsed: ParamChangedContract = serde_json::from_str(&msg)
+      .expect("param_changed (with index) does not match contract");
+    assert_eq!(parsed.msg_type, "param_changed");
+    assert_eq!(parsed.index, Some(0));
+  }
+
+  #[test]
+  fn param_changed_without_index_matches_contract() {
+    let msg = json!({
+      "type": "param_changed",
+      "layer": "heartbeat",
+      "param": "freq",
+      "value": 440.0,
+    })
+    .to_string();
+    let parsed: ParamChangedContract = serde_json::from_str(&msg)
+      .expect("param_changed (without index) does not match contract");
+    assert_eq!(parsed.msg_type, "param_changed");
+    assert_eq!(parsed.index, None);
+  }
+
+  #[test]
+  fn mute_changed_matches_contract() {
+    let msg = json!({
+      "type": "mute_changed",
+      "muted": true,
+    })
+    .to_string();
+    let parsed: MuteChangedContract =
+      serde_json::from_str(&msg).expect("mute_changed does not match contract");
+    assert_eq!(parsed.msg_type, "mute_changed");
+    assert!(parsed.muted);
+  }
+
+  #[test]
+  fn volume_changed_with_index_matches_contract() {
+    let msg = json!({
+      "type": "volume_changed",
+      "layer": "master",
+      "volume": 0.75,
+      "index": 2,
+    })
+    .to_string();
+    let parsed: VolumeChangedContract = serde_json::from_str(&msg)
+      .expect("volume_changed (with index) does not match contract");
+    assert_eq!(parsed.msg_type, "volume_changed");
+    assert_eq!(parsed.index, Some(2));
+  }
+
+  #[test]
+  fn volume_changed_without_index_matches_contract() {
+    let msg = json!({
+      "type": "volume_changed",
+      "layer": "heartbeat",
+      "volume": 0.5,
+    })
+    .to_string();
+    let parsed: VolumeChangedContract = serde_json::from_str(&msg)
+      .expect("volume_changed (without index) does not match contract");
+    assert_eq!(parsed.msg_type, "volume_changed");
+    assert_eq!(parsed.index, None);
+  }
+
+  #[test]
+  fn override_changed_set_matches_contract() {
+    let msg = json!({
+      "type": "override_changed",
+      "layer": "heartbeat",
+      "index": 0,
+      "value": 0.5,
+      "overridden": true,
+    })
+    .to_string();
+    let parsed: OverrideChangedContract = serde_json::from_str(&msg)
+      .expect("override_changed (set) does not match contract");
+    assert_eq!(parsed.msg_type, "override_changed");
+    assert!(parsed.overridden);
+    assert_eq!(parsed.value, Some(0.5));
+  }
+
+  #[test]
+  fn override_changed_clear_matches_contract() {
+    let msg = json!({
+      "type": "override_changed",
+      "layer": "drone",
+      "index": 1,
+      "value": null,
+      "overridden": false,
+    })
+    .to_string();
+    let parsed: OverrideChangedContract = serde_json::from_str(&msg)
+      .expect("override_changed (clear) does not match contract");
+    assert_eq!(parsed.msg_type, "override_changed");
+    assert!(!parsed.overridden);
+    assert_eq!(parsed.value, None);
+  }
+
+  #[test]
+  fn heartbeat_loop_changed_matches_contract() {
+    let msg = json!({
+      "type": "heartbeat_loop_changed",
+      "enabled": true,
+    })
+    .to_string();
+    let parsed: HeartbeatLoopChangedContract = serde_json::from_str(&msg)
+      .expect("heartbeat_loop_changed does not match contract");
+    assert_eq!(parsed.msg_type, "heartbeat_loop_changed");
+    assert!(parsed.enabled);
+  }
+
+  #[test]
+  fn boop_count_changed_matches_contract() {
+    let msg = json!({
+      "type": "boop_count_changed",
+      "count": 4,
+    })
+    .to_string();
+    let parsed: BoopCountChangedContract = serde_json::from_str(&msg)
+      .expect("boop_count_changed does not match contract");
+    assert_eq!(parsed.msg_type, "boop_count_changed");
+    assert_eq!(parsed.count, 4);
+  }
+
+  #[test]
+  fn drone_interp_curve_changed_matches_contract() {
+    let msg = json!({
+      "type": "drone_interp_curve_changed",
+      "index": 0,
+      "curve": 2.5,
+    })
+    .to_string();
+    let parsed: DroneInterpCurveChangedContract = serde_json::from_str(&msg)
+      .expect("drone_interp_curve_changed does not match contract");
+    assert_eq!(parsed.msg_type, "drone_interp_curve_changed");
+    assert_eq!(parsed.index, 0);
+  }
+
+  #[test]
+  fn check_log_matches_contract() {
+    let msg = json!({
+      "type": "check_log",
+      "timestamp": 1700000000.0,
+      "layer": "heartbeat",
+      "name": "cpu",
+      "result": "healthy",
+      "overridden": false,
+    })
+    .to_string();
+    let parsed: CheckLogContract =
+      serde_json::from_str(&msg).expect("check_log does not match contract");
+    assert_eq!(parsed.msg_type, "check_log");
+    assert_eq!(parsed.name, "cpu");
+  }
+
+  #[test]
+  fn patch_export_matches_contract() {
+    let msg = json!({
+      "type": "patch_export",
+      "toml": "[patch]\nfreq = 440.0",
+      "json": "{\"freq\": 440.0}",
+      "nix": "{ freq = 440.0; }",
+    })
+    .to_string();
+    let parsed: PatchExportContract =
+      serde_json::from_str(&msg).expect("patch_export does not match contract");
+    assert_eq!(parsed.msg_type, "patch_export");
+    assert!(!parsed.toml.is_empty());
+  }
+
+  #[test]
+  fn locked_params_changed_with_index_matches_contract() {
+    let msg = json!({
+      "type": "locked_params_changed",
+      "layer": "drone_lo",
+      "index": 0,
+      "params": ["freq", "volume"],
+    })
+    .to_string();
+    let parsed: LockedParamsChangedContract = serde_json::from_str(&msg)
+      .expect("locked_params_changed (with index) does not match contract");
+    assert_eq!(parsed.msg_type, "locked_params_changed");
+    assert_eq!(parsed.index, Some(0));
+    assert_eq!(parsed.params.len(), 2);
+  }
+
+  #[test]
+  fn locked_params_changed_without_index_matches_contract() {
+    let msg = json!({
+      "type": "locked_params_changed",
+      "layer": "heartbeat",
+      "params": ["freq"],
+    })
+    .to_string();
+    let parsed: LockedParamsChangedContract = serde_json::from_str(&msg)
+      .expect("locked_params_changed (without index) does not match contract");
+    assert_eq!(parsed.msg_type, "locked_params_changed");
+    assert_eq!(parsed.index, None);
+  }
+
+  #[test]
+  fn locked_drones_changed_matches_contract() {
+    let msg = json!({
+      "type": "locked_drones_changed",
+      "indices": [0, 2],
+    })
+    .to_string();
+    let parsed: LockedDronesChangedContract = serde_json::from_str(&msg)
+      .expect("locked_drones_changed does not match contract");
+    assert_eq!(parsed.msg_type, "locked_drones_changed");
+    assert_eq!(parsed.indices, vec![0, 2]);
+  }
+
+  #[test]
+  fn boop_specs_changed_matches_contract() {
+    let msg = json!({
+      "type": "boop_specs_changed",
+      "specs": [
+        {"freq": 440.0, "duration": 0.2, "pinned": false},
+        {"freq": 880.0, "duration": 0.1, "pinned": true},
+      ],
+    })
+    .to_string();
+    let parsed: BoopSpecsChangedContract = serde_json::from_str(&msg)
+      .expect("boop_specs_changed does not match contract");
+    assert_eq!(parsed.msg_type, "boop_specs_changed");
+    assert_eq!(parsed.specs.len(), 2);
+  }
+
+  #[test]
+  fn drone_specs_changed_matches_contract() {
+    let msg = json!({
+      "type": "drone_specs_changed",
+      "index": 1,
+      "specs": [
+        {"freq": 220.0, "duration": 0.5, "pinned": false},
+      ],
+    })
+    .to_string();
+    let parsed: DroneSpecsChangedContract = serde_json::from_str(&msg)
+      .expect("drone_specs_changed does not match contract");
+    assert_eq!(parsed.msg_type, "drone_specs_changed");
+    assert_eq!(parsed.index, 1);
+    assert_eq!(parsed.specs.len(), 1);
+  }
+
+  #[test]
+  fn import_error_matches_contract() {
+    let msg = json!({
+      "type": "import_error",
+      "message": "Invalid TOML: unexpected key",
+    })
+    .to_string();
+    let parsed: ImportErrorContract =
+      serde_json::from_str(&msg).expect("import_error does not match contract");
+    assert_eq!(parsed.msg_type, "import_error");
+    assert!(!parsed.message.is_empty());
   }
 }

@@ -72,7 +72,7 @@ fn patch_subcommand() {
       );
       let stdout = String::from_utf8_lossy(&output.stdout);
       assert!(
-        stdout.contains("base_freq:"),
+        stdout.contains("freq:"),
         "Expected patch output, got: {}",
         stdout
       );

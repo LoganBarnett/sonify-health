@@ -16,7 +16,7 @@ slot_duration_secs = 2
 poll_interval_secs = 5
 
 [patch]
-base_freq = 1165.4094037952248
+freq = 1165.4094037952248
 sine_ratio = 2.37
 tri_ratio = 1.22
 saw_ratio = 0.02
@@ -80,7 +80,7 @@ freq = 460.0
 duration = 0.5
 
 [profiles.cpu.lo]
-base_freq = 460.0
+freq = 460.0
 sine_ratio = 1.0
 tri_ratio = 0.0
 saw_ratio = 0.0
@@ -109,7 +109,7 @@ fm_depth = 1.0
 downsample = 0.0
 
 [profiles.cpu.hi]
-base_freq = 460.0
+freq = 460.0
 sine_ratio = 1.0
 tri_ratio = 0.0
 saw_ratio = 0.0

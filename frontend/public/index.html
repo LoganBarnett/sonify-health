@@ -48,6 +48,10 @@
         }
       });
 
+      app.ports.consoleError.subscribe(function (m) {
+        console.error("[elm]", m);
+      });
+
       connect();
     </script>
   </body>

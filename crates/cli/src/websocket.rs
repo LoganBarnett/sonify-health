@@ -229,13 +229,11 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       }
       let _ = preview.broadcast_tx.send(broadcast.to_string());
       match &owner {
-        PatchOwner::Heartbeat if matches!(param, "note_seed" | "base_freq") => {
+        PatchOwner::Heartbeat if matches!(param, "note_seed" | "freq") => {
           preview.recompute_boop_specs();
           broadcast_boop_specs(preview);
         }
-        PatchOwner::DroneLo(i)
-          if matches!(param, "note_seed" | "base_freq") =>
-        {
+        PatchOwner::DroneLo(i) if matches!(param, "note_seed" | "freq") => {
           preview.recompute_drone_specs(*i);
           broadcast_drone_specs(preview, *i);
         }
@@ -425,10 +423,10 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       {
         let mut patches = preview.patches.write().unwrap();
         if let Some(p) = patches.get_mut(&PatchOwner::DroneLo(index)) {
-          p.base_freq = freq;
+          p.freq = freq;
         }
         if let Some(p) = patches.get_mut(&PatchOwner::DroneHi(index)) {
-          p.base_freq = freq;
+          p.freq = freq;
         }
       }
       for layer in &["drone_lo", "drone_hi"] {
@@ -437,7 +435,7 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
             "type": "param_changed",
             "layer": layer,
             "index": index,
-            "param": "base_freq",
+            "param": "freq",
             "value": freq,
           })
           .to_string(),

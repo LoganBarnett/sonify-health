@@ -355,7 +355,7 @@ degenerate combinations:
   seed = hash("silicon")
   rng  = Xoshiro256(seed)
 
-  base_freq    = rng.next_in_range(100.0, 600.0)   # Hz
+  freq    = rng.next_in_range(100.0, 600.0)   # Hz
   sine_ratio   = rng.next_in_range(0.5, 1.0)       # dominant
   tri_ratio    = rng.next_in_range(0.0, 0.3)
   saw_ratio    = rng.next_in_range(0.0, 0.15)
@@ -379,7 +379,7 @@ A derive macro on the ~Voice~ struct enforces this:
   #[derive(VoiceGenerate)]
   struct Voice {
       #[voice_param(order = 0, range = 100.0..600.0)]
-      base_freq: f64,
+      freq: f64,
 
       #[voice_param(order = 1, range = 0.5..1.0)]
       sine_ratio: f64,

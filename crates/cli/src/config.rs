@@ -436,29 +436,29 @@ mod tests {
   fn profiles_section_parses() {
     let toml = r#"
       [profiles.cpu.lo]
-      base_freq = 220.0
+      freq = 220.0
       sine_ratio = 0.5
 
       [profiles.cpu.hi]
-      base_freq = 440.0
+      freq = 440.0
       sine_ratio = 1.0
 
       [profiles.mem.lo]
-      base_freq = 330.0
+      freq = 330.0
 
       [profiles.mem.hi]
-      base_freq = 660.0
+      freq = 660.0
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
     let dp = raw.profiles.unwrap();
     assert_eq!(dp.len(), 2);
-    assert_eq!(dp["cpu"].lo.base_freq, Some(220.0));
+    assert_eq!(dp["cpu"].lo.freq, Some(220.0));
     assert_eq!(dp["cpu"].lo.sine_ratio, Some(0.5));
-    assert_eq!(dp["cpu"].hi.base_freq, Some(440.0));
+    assert_eq!(dp["cpu"].hi.freq, Some(440.0));
     assert_eq!(dp["cpu"].hi.sine_ratio, Some(1.0));
-    assert_eq!(dp["mem"].lo.base_freq, Some(330.0));
-    assert_eq!(dp["mem"].hi.base_freq, Some(660.0));
+    assert_eq!(dp["mem"].lo.freq, Some(330.0));
+    assert_eq!(dp["mem"].hi.freq, Some(660.0));
     assert_eq!(dp["mem"].lo.sine_ratio, None);
   }
 
@@ -476,7 +476,7 @@ mod tests {
     // check profiles.
     let exported = format!(
       r#"[patch]
-base_freq = {hb_base}
+freq = {hb_base}
 sine_ratio = {hb_sine}
 tri_ratio = {hb_tri}
 saw_ratio = {hb_saw}
@@ -514,16 +514,16 @@ freq = 920.0
 duration = 0.25
 
 [profiles.cpu.lo]
-base_freq = {lo_base}
+freq = {lo_base}
 sine_ratio = {lo_sine}
 amplitude = {lo_amp}
 
 [profiles.cpu.hi]
-base_freq = {hi_base}
+freq = {hi_base}
 sine_ratio = {hi_sine}
 amplitude = {hi_amp}
 "#,
-      hb_base = patch.base_freq,
+      hb_base = patch.freq,
       hb_sine = patch.sine_ratio,
       hb_tri = patch.tri_ratio,
       hb_saw = patch.saw_ratio,
@@ -543,10 +543,10 @@ amplitude = {hi_amp}
       hb_trem_rate = patch.tremolo_rate,
       hb_trem_depth = patch.tremolo_depth,
       hb_amp = patch.amplitude,
-      lo_base = drone_lo.base_freq,
+      lo_base = drone_lo.freq,
       lo_sine = drone_lo.sine_ratio,
       lo_amp = drone_lo.amplitude,
-      hi_base = drone_hi.base_freq,
+      hi_base = drone_hi.freq,
       hi_sine = drone_hi.sine_ratio,
       hi_amp = drone_hi.amplitude,
     );
@@ -560,8 +560,8 @@ amplitude = {hi_amp}
       .as_ref()
       .expect("Export should produce a [patch] section");
     assert!(
-      (patch_ovr.base_freq.unwrap() - patch.base_freq).abs() < f64::EPSILON,
-      "base_freq did not round-trip",
+      (patch_ovr.freq.unwrap() - patch.freq).abs() < f64::EPSILON,
+      "freq did not round-trip",
     );
     assert!(
       (patch_ovr.amplitude.unwrap() - patch.amplitude).abs() < f64::EPSILON,
@@ -575,14 +575,12 @@ amplitude = {hi_amp}
       .expect("Export should produce a [profiles] section");
     let cpu_profile = dp.get("cpu").expect("Export should include cpu profile");
     assert!(
-      (cpu_profile.lo.base_freq.unwrap() - drone_lo.base_freq).abs()
-        < f64::EPSILON,
-      "Profile lo base_freq did not round-trip",
+      (cpu_profile.lo.freq.unwrap() - drone_lo.freq).abs() < f64::EPSILON,
+      "Profile lo freq did not round-trip",
     );
     assert!(
-      (cpu_profile.hi.base_freq.unwrap() - drone_hi.base_freq).abs()
-        < f64::EPSILON,
-      "Profile hi base_freq did not round-trip",
+      (cpu_profile.hi.freq.unwrap() - drone_hi.freq).abs() < f64::EPSILON,
+      "Profile hi freq did not round-trip",
     );
 
     // Check notes should survive.

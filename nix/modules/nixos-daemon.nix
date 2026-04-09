@@ -252,12 +252,12 @@ in {
       type = lib.types.attrsOf lib.types.anything;
       default = {};
       example = {
-        base_freq = 523.0;
+        freq = 523.0;
         sine_ratio = 0.8;
       };
       description = ''
         Hostname-derived voice parameter overrides.  Unspecified fields
-        use the hash-derived default.  Available: base_freq, sine_ratio,
+        use the hash-derived default.  Available: freq, sine_ratio,
         tri_ratio, saw_ratio, square_ratio, attack_ms, release_ms,
         chirp_ratio, stereo_pan, reverb_mix.
       '';

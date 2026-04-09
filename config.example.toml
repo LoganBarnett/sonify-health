@@ -8,7 +8,7 @@ listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # Override hostname-derived voice parameters.
 # Omitted fields use the hash-derived default.
 # [voice]
-# base_freq = 523.0
+# freq = 523.0
 # sine_ratio = 0.8
 # tri_ratio = 0.1
 # saw_ratio = 0.05
@@ -60,9 +60,9 @@ slot_duration_secs = 2    # Time budget per machine.
 # Drone profiles: lo (metric=0) and hi (metric=1) voice profiles.
 # The system interpolates between lo and hi based on the metric value.
 # [drone_profiles.gpu.lo]
-# base_freq = 220.0
+# freq = 220.0
 # amplitude = 0.2
 #
 # [drone_profiles.gpu.hi]
-# base_freq = 880.0
+# freq = 880.0
 # amplitude = 0.5

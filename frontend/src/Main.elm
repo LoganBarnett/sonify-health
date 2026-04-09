@@ -73,6 +73,7 @@ type alias Model =
     , boopSpecRanges : BoopSpecRanges
     , importText : String
     , importError : Maybe String
+    , protocolError : Maybe String
     }
 
 
@@ -118,6 +119,7 @@ type Msg
     | ClearDronePin Int Int
     | SetImportText String
     | SubmitImport
+    | DismissProtocolError
     | NoOp
 
 
@@ -169,6 +171,7 @@ init _ url key =
             }
       , importText = ""
       , importError = Nothing
+      , protocolError = Nothing
       }
     , cmdForRoute route
     )
@@ -852,6 +855,9 @@ update msg model =
             , Ports.websocketSend (encodeImportConfig model.importText)
             )
 
+        DismissProtocolError ->
+            ( { model | protocolError = Nothing }, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -859,7 +865,7 @@ update msg model =
 handleServerMsg : String -> Model -> ( Model, Cmd Msg )
 handleServerMsg raw model =
     case decodeServerMsg raw of
-        Just (StateMsg s) ->
+        Ok (StateMsg s) ->
             ( { model
                 | patch = s.patch
                 , muted = s.muted
@@ -873,11 +879,12 @@ handleServerMsg raw model =
                 , boopSpecs = s.boopSpecs
                 , boopSpecRanges = s.boopSpecRanges
                 , connected = True
+                , protocolError = Nothing
               }
             , Cmd.none
             )
 
-        Just (ParamChanged layer maybeIndex param value) ->
+        Ok (ParamChanged layer maybeIndex param value) ->
             let
                 updateParam p =
                     if p.name == param then
@@ -894,6 +901,7 @@ handleServerMsg raw model =
                                 i
                                 (\c -> { c | patchLo = List.map updateParam c.patchLo })
                                 model.checks
+                        , protocolError = Nothing
                       }
                     , Cmd.none
                     )
@@ -905,30 +913,34 @@ handleServerMsg raw model =
                                 i
                                 (\c -> { c | patchHi = List.map updateParam c.patchHi })
                                 model.checks
+                        , protocolError = Nothing
                       }
                     , Cmd.none
                     )
 
                 _ ->
-                    ( { model | patch = List.map updateParam model.patch }
+                    ( { model
+                        | patch = List.map updateParam model.patch
+                        , protocolError = Nothing
+                      }
                     , Cmd.none
                     )
 
-        Just (MuteChanged muted) ->
-            ( { model | muted = muted }, Cmd.none )
+        Ok (MuteChanged muted) ->
+            ( { model | muted = muted, protocolError = Nothing }, Cmd.none )
 
-        Just (VolumeChanged layer maybeIndex vol) ->
+        Ok (VolumeChanged layer maybeIndex vol) ->
             case layer of
                 "master" ->
-                    ( { model | masterVolume = vol }, Cmd.none )
+                    ( { model | masterVolume = vol, protocolError = Nothing }, Cmd.none )
 
                 "heartbeat" ->
-                    ( { model | heartbeatVolume = vol }, Cmd.none )
+                    ( { model | heartbeatVolume = vol, protocolError = Nothing }, Cmd.none )
 
                 _ ->
-                    ( model, Cmd.none )
+                    ( { model | protocolError = Nothing }, Cmd.none )
 
-        Just (OverrideChanged layer index maybeValue overridden) ->
+        Ok (OverrideChanged layer index maybeValue overridden) ->
             ( { model
                 | checks =
                     updateCheckByKindIndex layer
@@ -937,53 +949,58 @@ handleServerMsg raw model =
                             { c
                                 | value =
                                     maybeValue
-                                        |> Maybe.andThen String.toFloat
                                         |> Maybe.withDefault c.value
                                 , overridden = overridden
                             }
                         )
                         model.checks
+                , protocolError = Nothing
               }
             , Cmd.none
             )
 
-        Just (DroneConfigChanged index boops) ->
+        Ok (DroneConfigChanged index boops) ->
             ( { model
                 | checks =
                     updateCheckByKindIndex "drone"
                         index
                         (\c -> { c | boops = boops })
                         model.checks
+                , protocolError = Nothing
               }
             , Cmd.none
             )
 
-        Just (DroneInterpCurveChanged index curve) ->
+        Ok (DroneInterpCurveChanged index curve) ->
             ( { model
                 | checks =
                     updateCheckByKindIndex "drone"
                         index
                         (\c -> { c | interpCurve = curve })
                         model.checks
+                , protocolError = Nothing
               }
             , Cmd.none
             )
 
-        Just (BoopCountChanged count) ->
-            ( { model | boopCount = count }, Cmd.none )
+        Ok (BoopCountChanged count) ->
+            ( { model | boopCount = count, protocolError = Nothing }, Cmd.none )
 
-        Just (HeartbeatLoopChanged enabled) ->
-            ( { model | heartbeatLoop = enabled }, Cmd.none )
+        Ok (HeartbeatLoopChanged enabled) ->
+            ( { model | heartbeatLoop = enabled, protocolError = Nothing }, Cmd.none )
 
-        Just (CheckLog entry) ->
-            ( { model | checkLog = entry :: List.take 99 model.checkLog }
+        Ok (CheckLog entry) ->
+            ( { model
+                | checkLog = entry :: List.take 99 model.checkLog
+                , protocolError = Nothing
+              }
             , Cmd.none
             )
 
-        Just (PatchExport data) ->
-            ( { model | exportData = Just data }, Cmd.none )
+        Ok (PatchExport data) ->
+            ( { model | exportData = Just data, protocolError = Nothing }, Cmd.none )
 
-        Just (LockedParamsChanged layer maybeIndex params) ->
+        Ok (LockedParamsChanged layer maybeIndex params) ->
             case ( layer, maybeIndex ) of
                 ( "drone_lo", Just i ) ->
                     ( { model
@@ -992,6 +1009,7 @@ handleServerMsg raw model =
                                 i
                                 (\c -> { c | lockedParamsLo = params })
                                 model.checks
+                        , protocolError = Nothing
                       }
                     , Cmd.none
                     )
@@ -1003,43 +1021,55 @@ handleServerMsg raw model =
                                 i
                                 (\c -> { c | lockedParamsHi = params })
                                 model.checks
+                        , protocolError = Nothing
                       }
                     , Cmd.none
                     )
 
                 _ ->
-                    ( { model | lockedParams = Set.fromList params }
+                    ( { model
+                        | lockedParams = Set.fromList params
+                        , protocolError = Nothing
+                      }
                     , Cmd.none
                     )
 
-        Just (LockedDronesChanged indices) ->
-            ( { model | lockedDrones = Set.fromList indices }, Cmd.none )
+        Ok (LockedDronesChanged indices) ->
+            ( { model
+                | lockedDrones = Set.fromList indices
+                , protocolError = Nothing
+              }
+            , Cmd.none
+            )
 
-        Just (BoopSpecsChanged specs) ->
-            ( { model | boopSpecs = specs }, Cmd.none )
+        Ok (BoopSpecsChanged specs) ->
+            ( { model | boopSpecs = specs, protocolError = Nothing }, Cmd.none )
 
-        Just (DroneSpecsChanged index newSpecs) ->
+        Ok (DroneSpecsChanged index newSpecs) ->
             ( { model
                 | checks =
                     updateCheckByKindIndex "drone"
                         index
                         (\c -> { c | specs = newSpecs })
                         model.checks
+                , protocolError = Nothing
               }
             , Cmd.none
             )
 
-        Just (ImportError message) ->
-            ( { model | importError = Just message }, Cmd.none )
+        Ok (ImportError message) ->
+            ( { model | importError = Just message, protocolError = Nothing }, Cmd.none )
 
-        Just Connected ->
-            ( { model | connected = True }, Cmd.none )
+        Ok Connected ->
+            ( { model | connected = True, protocolError = Nothing }, Cmd.none )
 
-        Just Disconnected ->
-            ( { model | connected = False }, Cmd.none )
+        Ok Disconnected ->
+            ( { model | connected = False, protocolError = Nothing }, Cmd.none )
 
-        Nothing ->
-            ( model, Cmd.none )
+        Err err ->
+            ( { model | protocolError = Just err }
+            , Ports.consoleError err
+            )
 
 
 
@@ -1051,13 +1081,27 @@ view model =
     { title = "sonify-health"
     , body =
         [ div [ class "app" ]
-            [ viewNavbar
+            [ viewProtocolError model
+            , viewNavbar
             , viewToolbar model
             , viewPage model
             , viewExportModal model
             ]
         ]
     }
+
+
+viewProtocolError : Model -> Html Msg
+viewProtocolError model =
+    case model.protocolError of
+        Just err ->
+            div [ class "protocol-error" ]
+                [ span [] [ text ("Protocol error: " ++ err) ]
+                , button [ onClick DismissProtocolError ] [ text "Dismiss" ]
+                ]
+
+        Nothing ->
+            text ""
 
 
 viewNavbar : Html Msg
@@ -1074,8 +1118,7 @@ viewPage model =
     case model.route of
         Home ->
             div [ class "panels" ]
-                [ viewHeartbeatPanel model
-                , viewDronePanel model
+                [ viewChecksPanel model
                 , viewCheckLog model
                 ]
 
@@ -1235,15 +1278,28 @@ viewPatchSlider layer maybeIndex locked param =
         ]
 
 
-viewHeartbeatPanel : Model -> Html Msg
-viewHeartbeatPanel model =
+viewChecksPanel : Model -> Html Msg
+viewChecksPanel model =
     let
-        hbChecks =
-            List.filter (\c -> c.kind == "heartbeat") model.checks
+        hasHeartbeats =
+            List.any (\c -> c.kind == "heartbeat") model.checks
     in
     section [ class "panel" ]
-        [ h2 [ class "panel-heading" ] [ text "Heartbeat" ]
-        , div [ class "control-row" ]
+        ([ h2 [ class "panel-heading" ] [ text "Checks" ] ]
+            ++ (if hasHeartbeats then
+                    [ viewHeartbeatToolbar model ]
+
+                else
+                    []
+               )
+            ++ List.map (viewCheckCard model) model.checks
+        )
+
+
+viewHeartbeatToolbar : Model -> Html Msg
+viewHeartbeatToolbar model =
+    div [ class "heartbeat-toolbar" ]
+        [ div [ class "control-row" ]
             [ label [ class "slider-label" ] [ text "Volume" ]
             , input
                 [ type_ "range"
@@ -1297,15 +1353,70 @@ viewHeartbeatPanel model =
                 ]
                 [ text "Play Now" ]
             ]
-        , viewBoopSpecs model.boopCount hbChecks model.boopSpecs model.boopSpecRanges
-        , if List.isEmpty hbChecks then
-            text ""
+        ]
 
-          else
-            div [ class "checks-list" ]
-                (h3 [ class "panel-subheading" ] [ text "Checks" ]
-                    :: List.map viewCheck hbChecks
-                )
+
+viewCheckCard : Model -> CheckInfo -> Html Msg
+viewCheckCard model check =
+    case check.kind of
+        "heartbeat" ->
+            viewHeartbeatCard model check
+
+        _ ->
+            viewDroneCard model check
+
+
+viewHeartbeatCard : Model -> CheckInfo -> Html Msg
+viewHeartbeatCard model check =
+    let
+        severity =
+            metricToSeverity check.value
+
+        offset =
+            check.checkIndex * model.boopCount
+
+        mySpecs =
+            List.drop offset model.boopSpecs
+                |> List.take model.boopCount
+    in
+    div [ class "check-card" ]
+        [ div [ class "check-header" ]
+            [ span [ class "check-name" ] [ text check.name ]
+            , span [ class "badge-kind" ] [ text "heartbeat" ]
+            , span [ class ("badge-" ++ severity) ]
+                [ text severity ]
+            , select
+                [ onInput (OverrideCheck check.checkIndex)
+                , class "override-select"
+                ]
+                [ option
+                    [ value ""
+                    , selected (not check.overridden)
+                    ]
+                    [ text "live" ]
+                , option
+                    [ value "healthy"
+                    , selected (check.overridden && severity == "healthy")
+                    ]
+                    [ text "healthy" ]
+                , option
+                    [ value "degraded"
+                    , selected (check.overridden && severity == "degraded")
+                    ]
+                    [ text "degraded" ]
+                , option
+                    [ value "down"
+                    , selected (check.overridden && severity == "down")
+                    ]
+                    [ text "down" ]
+                ]
+            , if check.overridden then
+                span [ class "override-indicator" ] [ text "(override)" ]
+
+              else
+                text ""
+            ]
+        , viewHeartbeatSpecs offset mySpecs model.boopSpecRanges
         , if List.isEmpty model.patch then
             text ""
 
@@ -1319,164 +1430,17 @@ viewHeartbeatPanel model =
         ]
 
 
-viewBoopSpecs : Int -> List CheckInfo -> List BoopSpecInfo -> BoopSpecRanges -> Html Msg
-viewBoopSpecs boopCount checks specs ranges =
-    if List.isEmpty specs then
-        text ""
-
-    else
-        div [ class "boop-specs" ]
-            (h3 [ class "panel-subheading" ] [ text "Boop Specs" ]
-                :: List.indexedMap (viewBoopRow boopCount checks ranges) specs
-            )
-
-
-viewBoopRow : Int -> List CheckInfo -> BoopSpecRanges -> Int -> BoopSpecInfo -> Html Msg
-viewBoopRow boopCount checks ranges index spec =
-    let
-        checkIdx =
-            if boopCount > 0 then
-                index // boopCount
-
-            else
-                0
-
-        checkName =
-            List.drop checkIdx checks
-                |> List.head
-                |> Maybe.map .name
-                |> Maybe.withDefault "?"
-    in
-    div [ class "boop-row" ]
-        [ span [ class "boop-index" ]
-            [ text (String.fromInt index) ]
-        , span [ class "boop-check-label" ]
-            [ text checkName ]
-        , label [ class "slider-label" ] [ text "Freq" ]
-        , input
-            [ type_ "range"
-            , Html.Attributes.min (String.fromFloat ranges.freqMin)
-            , Html.Attributes.max (String.fromFloat ranges.freqMax)
-            , step (String.fromFloat ranges.freqStep)
-            , value (String.fromFloat spec.freq)
-            , onInput (SetBoopFreq index)
-            , class "slider"
-            ]
-            []
-        , input
-            [ type_ "number"
-            , Html.Attributes.min (String.fromFloat ranges.freqMin)
-            , Html.Attributes.max (String.fromFloat ranges.freqMax)
-            , step (String.fromFloat ranges.freqStep)
-            , value (String.fromFloat spec.freq)
-            , onInput (SetBoopFreq index)
-            , class "slider-value-input"
-            ]
-            []
-        , label [ class "slider-label" ] [ text "Dur" ]
-        , input
-            [ type_ "range"
-            , Html.Attributes.min (String.fromFloat ranges.durationMin)
-            , Html.Attributes.max (String.fromFloat ranges.durationMax)
-            , step (String.fromFloat ranges.durationStep)
-            , value (String.fromFloat spec.duration)
-            , onInput (SetBoopDuration index)
-            , class "slider"
-            ]
-            []
-        , input
-            [ type_ "number"
-            , Html.Attributes.min (String.fromFloat ranges.durationMin)
-            , Html.Attributes.max (String.fromFloat ranges.durationMax)
-            , step (String.fromFloat ranges.durationStep)
-            , value (String.fromFloat spec.duration)
-            , onInput (SetBoopDuration index)
-            , class "slider-value-input"
-            ]
-            []
-        , if spec.pinned then
-            button
-                [ class "btn-live"
-                , onClick (ClearBoopPin index)
-                ]
-                [ text "Unpin" ]
-
-          else
-            text ""
-        ]
-
-
-viewCheck : CheckInfo -> Html Msg
-viewCheck check =
-    let
-        severity =
-            metricToSeverity check.value
-    in
-    div [ class "check-row" ]
-        [ span [ class "check-name" ] [ text check.name ]
-        , span [ class ("badge-" ++ severity) ]
-            [ text severity ]
-        , select
-            [ onInput (OverrideCheck check.checkIndex)
-            , class "override-select"
-            ]
-            [ option
-                [ value ""
-                , selected (not check.overridden)
-                ]
-                [ text "live" ]
-            , option
-                [ value "healthy"
-                , selected (check.overridden && severity == "healthy")
-                ]
-                [ text "healthy" ]
-            , option
-                [ value "degraded"
-                , selected (check.overridden && severity == "degraded")
-                ]
-                [ text "degraded" ]
-            , option
-                [ value "down"
-                , selected (check.overridden && severity == "down")
-                ]
-                [ text "down" ]
-            ]
-        , if check.overridden then
-            span [ class "override-indicator" ] [ text "(override)" ]
-
-          else
-            text ""
-        ]
-
-
-viewDronePanel : Model -> Html Msg
-viewDronePanel model =
-    let
-        dChecks =
-            List.filter (\c -> c.kind == "drone") model.checks
-    in
-    section [ class "panel" ]
-        [ h2 [ class "panel-heading" ] [ text "Drones" ]
-        , if List.isEmpty dChecks then
-            p [ class "text-muted" ] [ text "No drone metrics configured." ]
-
-          else
-            div [ class "drone-list" ]
-                (List.map (viewDrone model.lockedDrones) dChecks)
-        ]
-
-
-viewDrone : Set Int -> CheckInfo -> Html Msg
-viewDrone lockedDrones check =
+viewDroneCard : Model -> CheckInfo -> Html Msg
+viewDroneCard model check =
     let
         index =
             check.checkIndex
 
         isLocked =
-            Set.member index lockedDrones
+            Set.member index model.lockedDrones
     in
-    div [ class "drone-row" ]
-        [ div [ class "drone-header" ]
+    div [ class "check-card" ]
+        [ div [ class "check-header" ]
             [ button
                 [ class
                     (if isLocked then
@@ -1495,7 +1459,8 @@ viewDrone lockedDrones check =
                         "U"
                     )
                 ]
-            , span [ class "drone-name" ] [ text check.name ]
+            , span [ class "check-name" ] [ text check.name ]
+            , span [ class "badge-kind" ] [ text "drone" ]
             , label [ class "slider-label" ] [ text "Boops" ]
             , select
                 [ onInput (SetDroneBoops index)
@@ -1560,7 +1525,7 @@ viewDrone lockedDrones check =
                 ]
                 []
             ]
-        , viewDroneBoopSpecs index check.specs check.specRanges
+        , viewDroneSpecs check.checkIndex check.specs check.specRanges
         , h3 [ class "panel-subheading" ] [ text "Patch Lo" ]
         , div [ class "slider-grid" ]
             (List.map
@@ -1582,20 +1547,57 @@ viewDrone lockedDrones check =
         ]
 
 
-viewDroneBoopSpecs : Int -> List BoopSpecInfo -> BoopSpecRanges -> Html Msg
-viewDroneBoopSpecs droneIndex specs ranges =
+viewHeartbeatSpecs : Int -> List BoopSpecInfo -> BoopSpecRanges -> Html Msg
+viewHeartbeatSpecs globalOffset specs ranges =
     if List.isEmpty specs then
         text ""
 
     else
         div [ class "boop-specs" ]
             (h3 [ class "panel-subheading" ] [ text "Notes" ]
-                :: List.indexedMap (viewDroneBoopRow droneIndex ranges) specs
+                :: List.indexedMap
+                    (\i spec ->
+                        viewNoteSpecRow ranges
+                            (SetBoopFreq (globalOffset + i))
+                            (SetBoopDuration (globalOffset + i))
+                            (ClearBoopPin (globalOffset + i))
+                            i
+                            spec
+                    )
+                    specs
             )
 
 
-viewDroneBoopRow : Int -> BoopSpecRanges -> Int -> BoopSpecInfo -> Html Msg
-viewDroneBoopRow droneIndex ranges noteIndex spec =
+viewDroneSpecs : Int -> List BoopSpecInfo -> BoopSpecRanges -> Html Msg
+viewDroneSpecs droneIndex specs ranges =
+    if List.isEmpty specs then
+        text ""
+
+    else
+        div [ class "boop-specs" ]
+            (h3 [ class "panel-subheading" ] [ text "Notes" ]
+                :: List.indexedMap
+                    (\noteIdx spec ->
+                        viewNoteSpecRow ranges
+                            (SetDroneNoteFreq droneIndex noteIdx)
+                            (SetDroneNoteDuration droneIndex noteIdx)
+                            (ClearDronePin droneIndex noteIdx)
+                            noteIdx
+                            spec
+                    )
+                    specs
+            )
+
+
+viewNoteSpecRow :
+    BoopSpecRanges
+    -> (String -> Msg)
+    -> (String -> Msg)
+    -> Msg
+    -> Int
+    -> BoopSpecInfo
+    -> Html Msg
+viewNoteSpecRow ranges setFreq setDur clearPin noteIndex spec =
     div [ class "boop-row" ]
         [ span [ class "boop-index" ]
             [ text (String.fromInt noteIndex) ]
@@ -1606,7 +1608,7 @@ viewDroneBoopRow droneIndex ranges noteIndex spec =
             , Html.Attributes.max (String.fromFloat ranges.freqMax)
             , step (String.fromFloat ranges.freqStep)
             , value (String.fromFloat spec.freq)
-            , onInput (SetDroneNoteFreq droneIndex noteIndex)
+            , onInput setFreq
             , class "slider"
             ]
             []
@@ -1616,7 +1618,7 @@ viewDroneBoopRow droneIndex ranges noteIndex spec =
             , Html.Attributes.max (String.fromFloat ranges.freqMax)
             , step (String.fromFloat ranges.freqStep)
             , value (String.fromFloat spec.freq)
-            , onInput (SetDroneNoteFreq droneIndex noteIndex)
+            , onInput setFreq
             , class "slider-value-input"
             ]
             []
@@ -1627,7 +1629,7 @@ viewDroneBoopRow droneIndex ranges noteIndex spec =
             , Html.Attributes.max (String.fromFloat ranges.durationMax)
             , step (String.fromFloat ranges.durationStep)
             , value (String.fromFloat spec.duration)
-            , onInput (SetDroneNoteDuration droneIndex noteIndex)
+            , onInput setDur
             , class "slider"
             ]
             []
@@ -1637,14 +1639,14 @@ viewDroneBoopRow droneIndex ranges noteIndex spec =
             , Html.Attributes.max (String.fromFloat ranges.durationMax)
             , step (String.fromFloat ranges.durationStep)
             , value (String.fromFloat spec.duration)
-            , onInput (SetDroneNoteDuration droneIndex noteIndex)
+            , onInput setDur
             , class "slider-value-input"
             ]
             []
         , if spec.pinned then
             button
                 [ class "btn-live"
-                , onClick (ClearDronePin droneIndex noteIndex)
+                , onClick clearPin
                 ]
                 [ text "Unpin" ]
 

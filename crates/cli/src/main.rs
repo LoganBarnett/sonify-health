@@ -512,17 +512,13 @@ fn run_heartbeat_preview(
   for (i, p) in patches.iter().enumerate() {
     debug!(
       boop = i,
-      freq = format_args!("{:.1} Hz", p.base_freq),
+      freq = format_args!("{:.1} Hz", p.freq),
       duration = format_args!("{:.3}s", p.duration),
       value = %values[i],
       "Note spec"
     );
   }
-  info!(
-    base_freq = patch.base_freq,
-    boops = count,
-    "Playing heartbeat preview"
-  );
+  info!(freq = patch.freq, boops = count, "Playing heartbeat preview");
 
   let graph = heartbeat::heartbeat_graph(&patches);
   AudioOutput::play_for(
@@ -566,10 +562,7 @@ fn run_drone_preview(
   let slot_secs = config.daemon.timing.slot_duration_secs;
 
   debug!(?patch, "Resolved patch");
-  info!(
-    base_freq = patch.base_freq,
-    boops, metric, duration, "Playing drone preview"
-  );
+  info!(freq = patch.freq, boops, metric, duration, "Playing drone preview");
 
   let mixer = AudioMixer::new(config.audio_device.as_deref())?;
 

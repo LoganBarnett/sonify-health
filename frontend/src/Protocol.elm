@@ -110,7 +110,7 @@ type ServerMsg
     | ParamChanged String (Maybe Int) String Float
     | MuteChanged Bool
     | VolumeChanged String (Maybe Int) Float
-    | OverrideChanged String Int (Maybe String) Bool
+    | OverrideChanged String Int (Maybe Float) Bool
     | HeartbeatLoopChanged Bool
     | BoopCountChanged Int
     | DroneConfigChanged Int Int
@@ -126,10 +126,10 @@ type ServerMsg
     | Disconnected
 
 
-decodeServerMsg : String -> Maybe ServerMsg
+decodeServerMsg : String -> Result String ServerMsg
 decodeServerMsg raw =
     D.decodeString serverMsgDecoder raw
-        |> Result.toMaybe
+        |> Result.mapError D.errorToString
 
 
 serverMsgDecoder : D.Decoder ServerMsg
@@ -230,7 +230,15 @@ stateDecoderWithMeta metas =
                     }
         )
         (D.field "patch" patchDecoder
-            |> D.map (\vals -> mergePatchParams vals metas)
+            |> D.andThen
+                (\vals ->
+                    case mergePatchParams vals metas of
+                        Ok params ->
+                            D.succeed params
+
+                        Err e ->
+                            D.fail e
+                )
         )
         (D.field "muted" D.bool)
         (D.field "master_volume" D.float)
@@ -262,7 +270,7 @@ patchParamMetaDecoder =
 mergePatchParams :
     List ( String, Float )
     -> List { name : String, description : String, min : Float, max : Float, step : Float }
-    -> List PatchParam
+    -> Result String (List PatchParam)
 mergePatchParams values metas =
     let
         lookup name =
@@ -276,18 +284,37 @@ mergePatchParams values metas =
                 )
                 values
                 |> List.head
-                |> Maybe.withDefault 0
+
+        merge m =
+            case lookup m.name of
+                Just v ->
+                    Ok
+                        { name = m.name
+                        , description = m.description
+                        , value = v
+                        , min = m.min
+                        , max = m.max
+                        , step = m.step
+                        }
+
+                Nothing ->
+                    Err ("Missing patch param: " ++ m.name)
     in
-    List.map
-        (\m ->
-            { name = m.name
-            , description = m.description
-            , value = lookup m.name
-            , min = m.min
-            , max = m.max
-            , step = m.step
-            }
+    List.foldl
+        (\m acc ->
+            case acc of
+                Err _ ->
+                    acc
+
+                Ok soFar ->
+                    case merge m of
+                        Ok param ->
+                            Ok (soFar ++ [ param ])
+
+                        Err e ->
+                            Err e
         )
+        (Ok [])
         metas
 
 
@@ -305,11 +332,27 @@ checkInfoDecoderWithMeta metas =
         |> andMap (D.field "overridden" D.bool)
         |> andMap
             (D.field "patch_lo" patchDecoder
-                |> D.map (\vals -> mergePatchParams vals metas)
+                |> D.andThen
+                    (\vals ->
+                        case mergePatchParams vals metas of
+                            Ok params ->
+                                D.succeed params
+
+                            Err e ->
+                                D.fail e
+                    )
             )
         |> andMap
             (D.field "patch_hi" patchDecoder
-                |> D.map (\vals -> mergePatchParams vals metas)
+                |> D.andThen
+                    (\vals ->
+                        case mergePatchParams vals metas of
+                            Ok params ->
+                                D.succeed params
+
+                            Err e ->
+                                D.fail e
+                    )
             )
         |> andMap (D.field "locked_params_lo" (D.list D.string))
         |> andMap (D.field "locked_params_hi" (D.list D.string))
@@ -344,15 +387,7 @@ overrideChangedDecoder =
     D.map4 OverrideChanged
         (D.field "layer" D.string)
         (D.field "index" D.int)
-        (D.maybe
-            (D.field "value"
-                (D.oneOf
-                    [ D.string
-                    , D.map String.fromFloat D.float
-                    ]
-                )
-            )
-        )
+        (D.maybe (D.field "value" D.float))
         (D.field "overridden" D.bool)
 
 

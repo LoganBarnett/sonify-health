@@ -115,7 +115,7 @@ pub fn heartbeat_graph(patches: &[Patch]) -> Box<dyn AudioUnit> {
 /// its own pentatonic note with a resonant lowpass filter.
 ///
 /// Shared synthesis params (waveform weights, reverb, pan, echo)
-/// are read from `patches[0]`; per-note params (`base_freq`,
+/// are read from `patches[0]`; per-note params (`freq`,
 /// `duration`, `attack_ms`, `release_ms`, `sustain`) from each
 /// `patches[i]`.
 pub fn heartbeat_graph_with_volume(
@@ -167,7 +167,7 @@ pub fn heartbeat_graph_with_volume(
   let mut t = 0.0f64;
   for i in 0..count {
     let p = &patches[i];
-    let freq = p.base_freq as f32;
+    let freq = p.freq as f32;
     let amp = p.amplitude as f32;
     let dur = p.duration as f32;
     let attack = p.attack_ms as f32 / 1000.0;
@@ -365,7 +365,7 @@ pub fn heartbeat_graph_with_volume(
 /// model as the heartbeat graph: resonant lowpass filter with
 /// waveform crossfade.
 pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
-  let freq = patch.base_freq as f32;
+  let freq = patch.freq as f32;
   let amp = patch.amplitude as f32;
   let harshness = 0.0_f32;
   let attack = (patch.attack_ms / 1000.0) as f32;
