@@ -1,11 +1,11 @@
 use crate::config::DaemonConfig;
 use crate::metrics::Metrics;
-use crate::preview_state::{severity_from_metric, PreviewState};
+use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
   check::{self, ResultMode},
-  heartbeat, Patch, Severity,
+  heartbeat, Patch,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -119,37 +119,23 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
           if let Some(metric) = overridden {
             st.set(i, metric);
-            let severity = severity_from_metric(metric);
-            send_check_log(
-              &prev,
-              "heartbeat",
-              &cfg.name,
-              &severity.to_string(),
-              true,
-            );
+            let label = metric_label(metric);
+            send_check_log(&prev, "heartbeat", &cfg.name, label, true);
           } else {
             match check::run_check(&cfg) {
               Ok(metric) => {
-                let severity = severity_from_metric(metric);
+                let label = metric_label(metric);
                 info!(
                   check = cfg.name,
-                  severity = %severity,
+                  severity = label,
                   "Heartbeat check completed"
                 );
                 st.set(i, metric);
                 m.check_severity
                   .with_label_values(&[&cfg.name])
-                  .set(severity as i64);
-                m.check_runs
-                  .with_label_values(&[&cfg.name, &severity.to_string()])
-                  .inc();
-                send_check_log(
-                  &prev,
-                  "heartbeat",
-                  &cfg.name,
-                  &severity.to_string(),
-                  false,
-                );
+                  .set((metric * 2.0).round() as i64);
+                m.check_runs.with_label_values(&[&cfg.name, label]).inc();
+                send_check_log(&prev, "heartbeat", &cfg.name, label, false);
               }
               Err(e) => {
                 warn!(
@@ -267,12 +253,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             .iter()
             .map(|s| base_patch.clone().with_note(s.freq, s.duration))
             .collect();
-          let severities: Vec<Severity> =
-            (0..patches.len()).map(|_| Severity::Healthy).collect();
-
           let graph = heartbeat::heartbeat_graph_with_volume(
             &patches,
-            &severities,
             Some(&prev.combined_volumes[i]),
           );
 
@@ -449,15 +431,14 @@ fn play_heartbeat_preview(
     .map(|s| base_patch.clone().with_note(s.freq, s.duration))
     .collect();
 
-  // Each check's severity repeats for its phrase of boops.
-  let severities: Vec<_> = (0..total)
+  let labels: Vec<_> = (0..total)
     .map(|i| {
       let check_idx = if boops_per_check > 0 {
         i / boops_per_check
       } else {
         0
       };
-      severity_from_metric(
+      metric_label(
         preview
           .heartbeat_state
           .metrics
@@ -468,17 +449,10 @@ fn play_heartbeat_preview(
     })
     .collect();
 
-  info!(
-    severities = ?severities
-      .iter()
-      .map(|s| s.to_string())
-      .collect::<Vec<_>>(),
-    "Playing heartbeat"
-  );
+  info!(severities = ?labels, "Playing heartbeat");
 
   let graph = heartbeat::heartbeat_graph_with_volume(
     &patches,
-    &severities,
     Some(&preview.effective_heartbeat_volume),
   );
   let slot = mixer.add(graph);

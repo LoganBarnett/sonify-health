@@ -19,7 +19,7 @@ use patch_args::CliPatchOverrides;
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
   check::ResultMode,
-  heartbeat, NoteSpec, Patch, Severity,
+  heartbeat, NoteSpec, Patch,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -38,8 +38,8 @@ enum ApplicationError {
   #[error("Failed to load configuration: {0}")]
   ConfigurationLoad(#[from] ConfigError),
 
-  #[error("Invalid severity input: {0}")]
-  InvalidSeverity(String),
+  #[error("Invalid metric input: {0}")]
+  InvalidMetric(String),
 
   #[error("Invalid drone metric: {0}")]
   InvalidDroneMetric(String),
@@ -499,45 +499,32 @@ fn run_heartbeat_preview(
   values: &[String],
 ) -> Result<(), ApplicationError> {
   if values.is_empty() {
-    return Err(ApplicationError::InvalidSeverity(
-      "expected 1 or more severity values, got 0".to_string(),
+    return Err(ApplicationError::InvalidMetric(
+      "expected 1 or more metric values, got 0".to_string(),
     ));
   }
 
-  let parse_severity = |s: &str| -> Result<Severity, ApplicationError> {
-    s.parse::<u8>()
-      .map_err(|e| ApplicationError::InvalidSeverity(e.to_string()))
-      .and_then(|v| {
-        Severity::try_from(v)
-          .map_err(|e| ApplicationError::InvalidSeverity(e.to_string()))
-      })
-  };
-
-  let severities: Vec<Severity> = values
-    .iter()
-    .map(|v| parse_severity(v))
-    .collect::<Result<_, _>>()?;
-
+  let count = values.len();
   let patch = patch_args.resolve_patch(config);
   debug!(?patch, "Resolved patch");
   let slot_secs = config.daemon.timing.slot_duration_secs;
-  let patches = patch.heartbeat_notes(severities.len(), 1, slot_secs);
+  let patches = patch.heartbeat_notes(count, 1, slot_secs);
   for (i, p) in patches.iter().enumerate() {
     debug!(
       boop = i,
       freq = format_args!("{:.1} Hz", p.base_freq),
       duration = format_args!("{:.3}s", p.duration),
-      severity = %severities[i],
+      value = %values[i],
       "Note spec"
     );
   }
   info!(
     base_freq = patch.base_freq,
-    boops = severities.len(),
+    boops = count,
     "Playing heartbeat preview"
   );
 
-  let graph = heartbeat::heartbeat_graph(&patches, &severities);
+  let graph = heartbeat::heartbeat_graph(&patches);
   AudioOutput::play_for(
     graph,
     heartbeat::heartbeat_duration(&patches),
@@ -600,9 +587,7 @@ fn run_drone_preview(
     let play_handle = std::thread::spawn(move || {
       while play_run.load(Ordering::Relaxed) {
         let patches = patch.drone_notes(0, boops, slot_secs);
-        let severities: Vec<Severity> =
-          (0..patches.len()).map(|_| Severity::Healthy).collect();
-        let graph = heartbeat::heartbeat_graph(&patches, &severities);
+        let graph = heartbeat::heartbeat_graph(&patches);
         let phrase_dur = heartbeat::heartbeat_duration(&patches);
         let slot = handle.add(graph);
         std::thread::sleep(phrase_dur);
@@ -630,9 +615,7 @@ fn run_drone_preview(
       std::time::Instant::now() + Duration::from_secs_f64(duration);
     while std::time::Instant::now() < deadline {
       let patches = patch.drone_notes(0, boops, slot_secs);
-      let severities: Vec<Severity> =
-        (0..patches.len()).map(|_| Severity::Healthy).collect();
-      let graph = heartbeat::heartbeat_graph(&patches, &severities);
+      let graph = heartbeat::heartbeat_graph(&patches);
       let phrase_dur = heartbeat::heartbeat_duration(&patches);
       let slot = mixer.add(graph);
       std::thread::sleep(phrase_dur);

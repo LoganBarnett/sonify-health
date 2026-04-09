@@ -1,5 +1,4 @@
 use crate::patch::Patch;
-use crate::severity::Severity;
 use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 use std::time::Duration;
@@ -19,11 +18,6 @@ const MAX_CUTOFF: f32 = 18000.0;
 /// Base gap between consecutive boops.  Actual gaps scale
 /// proportionally with the shorter of the two adjacent boops.
 const GAP_SECS: f64 = 0.1;
-
-/// Convert a cent offset to a frequency multiplier.
-fn cents_to_ratio(cents: f64) -> f64 {
-  2.0_f64.powf(cents / 1200.0)
-}
 
 /// Compute the gap between two adjacent boops.  Proportional to
 /// the shorter duration so that quick boops cluster tightly while
@@ -112,19 +106,13 @@ struct BoopTiming {
 }
 
 /// Build a complete heartbeat audio graph (no external volume).
-pub fn heartbeat_graph(
-  patches: &[Patch],
-  severities: &[Severity],
-) -> Box<dyn AudioUnit> {
-  heartbeat_graph_with_volume(patches, severities, None)
+pub fn heartbeat_graph(patches: &[Patch]) -> Box<dyn AudioUnit> {
+  heartbeat_graph_with_volume(patches, None)
 }
 
 /// Build a heartbeat audio graph with optional external volume
 /// multiplier (used for preview volume control).  Each boop plays
-/// its own pentatonic note with severity-driven timbre: detuning
-/// for dissonance, harshness via saw bleed-in, and a resonant
-/// lowpass filter.  The chirp onset sweep is preserved at all
-/// severity levels.
+/// its own pentatonic note with a resonant lowpass filter.
 ///
 /// Shared synthesis params (waveform weights, reverb, pan, echo)
 /// are read from `patches[0]`; per-note params (`base_freq`,
@@ -132,10 +120,9 @@ pub fn heartbeat_graph(
 /// `patches[i]`.
 pub fn heartbeat_graph_with_volume(
   patches: &[Patch],
-  severities: &[Severity],
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
-  let count = Ord::min(patches.len(), severities.len());
+  let count = patches.len();
   let shared = &patches[0];
   let chirp_ratio = shared.chirp_ratio as f32;
   let brightness = shared.brightness as f32;
@@ -180,11 +167,8 @@ pub fn heartbeat_graph_with_volume(
   let mut t = 0.0f64;
   for i in 0..count {
     let p = &patches[i];
-    let profile = severities[i].profile();
-    let detune_sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-    let freq =
-      (p.base_freq * cents_to_ratio(profile.detune_cents * detune_sign)) as f32;
-    let amp = p.amplitude as f32 * profile.amplitude as f32;
+    let freq = p.base_freq as f32;
+    let amp = p.amplitude as f32;
     let dur = p.duration as f32;
     let attack = p.attack_ms as f32 / 1000.0;
     let release = p.release_ms as f32 / 1000.0;
@@ -200,10 +184,9 @@ pub fn heartbeat_graph_with_volume(
       attack,
       release,
       sustain: sustain_level,
-      harshness: profile.harshness as f32,
-      filter_cutoff: (freq * profile.filter_cutoff as f32 * brightness)
-        .min(MAX_CUTOFF),
-      filter_q: profile.filter_q as f32 * resonance,
+      harshness: 0.0,
+      filter_cutoff: (freq * 13.0 * brightness).min(MAX_CUTOFF),
+      filter_q: 0.5 * resonance,
     });
 
     t += (p.attack_ms / 1000.0) + p.duration;
@@ -377,15 +360,14 @@ pub fn heartbeat_graph_with_volume(
   Box::new(stereo)
 }
 
-/// Build an audio graph for a single boop at the given severity.
-/// Duration and frequency come from the patch itself.  Applies
-/// the same timbre model as the heartbeat graph: harshness
-/// crossfade and resonant lowpass filter.
-pub fn boop_graph(patch: &Patch, severity: Severity) -> Box<dyn AudioUnit> {
-  let profile = severity.profile();
-  let freq = (patch.base_freq * cents_to_ratio(profile.detune_cents)) as f32;
-  let amp = patch.amplitude as f32 * profile.amplitude as f32;
-  let harshness = profile.harshness as f32;
+/// Build an audio graph for a single boop.  Duration and
+/// frequency come from the patch itself.  Applies the same timbre
+/// model as the heartbeat graph: resonant lowpass filter with
+/// waveform crossfade.
+pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
+  let freq = patch.base_freq as f32;
+  let amp = patch.amplitude as f32;
+  let harshness = 0.0_f32;
   let attack = (patch.attack_ms / 1000.0) as f32;
   let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
   let dur = patch.duration as f32;
@@ -439,12 +421,8 @@ pub fn boop_graph(patch: &Patch, severity: Severity) -> Box<dyn AudioUnit> {
   let sub_osc = (sub_freq_source >> sub_waveform) * patch.sub_octave as f32;
   let combined = main_osc + sub_osc;
 
-  let cutoff = dc(
-    (freq * profile.filter_cutoff as f32 * patch.brightness as f32)
-      .min(MAX_CUTOFF),
-  );
-  let q_val =
-    dc((profile.filter_q as f32 * patch.resonance as f32 * 0.2).min(0.95));
+  let cutoff = dc((freq * 13.0 * patch.brightness as f32).min(MAX_CUTOFF));
+  let q_val = dc((0.5 * patch.resonance as f32 * 0.2).min(0.95));
 
   let sustain_level = patch.sustain as f32;
   let env = envelope(move |t: f32| {
@@ -492,7 +470,7 @@ mod tests {
   #[test]
   fn boop_produces_sound() {
     let patch = test_patch(440.0, 0.5);
-    let mut graph = boop_graph(&patch, Severity::Healthy);
+    let mut graph = boop_graph(&patch);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -505,35 +483,6 @@ mod tests {
       peak > 0.01,
       "Boop should produce audible samples, got peak {}",
       peak
-    );
-  }
-
-  #[test]
-  fn severity_profiles_produce_equal_amplitude() {
-    let patch = test_patch(440.0, 0.5);
-
-    let mut healthy = boop_graph(&patch, Severity::Healthy);
-    healthy.set_sample_rate(44100.0);
-    healthy.allocate();
-
-    let mut down = boop_graph(&patch, Severity::Down);
-    down.set_sample_rate(44100.0);
-    down.allocate();
-
-    let healthy_peak = (0..22050)
-      .map(|_| healthy.get_stereo().0.abs())
-      .fold(0.0f32, f32::max);
-
-    let down_peak = (0..22050)
-      .map(|_| down.get_stereo().0.abs())
-      .fold(0.0f32, f32::max);
-
-    assert!(
-      (down_peak - healthy_peak).abs() < 0.01,
-      "Flattened profiles should produce similar amplitude: \
-       down={}, healthy={}",
-      down_peak,
-      healthy_peak
     );
   }
 
@@ -619,8 +568,7 @@ mod tests {
       .iter()
       .map(|&f| base.clone().with_note(f, 0.4))
       .collect();
-    let severities = [Severity::Healthy, Severity::Degraded, Severity::Down];
-    let mut graph = heartbeat_graph(&patches, &severities);
+    let mut graph = heartbeat_graph(&patches);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -649,14 +597,7 @@ mod tests {
       .iter()
       .map(|&f| base.clone().with_note(f, 0.24))
       .collect();
-    let severities = [
-      Severity::Healthy,
-      Severity::Degraded,
-      Severity::Down,
-      Severity::Healthy,
-      Severity::Degraded,
-    ];
-    let mut graph = heartbeat_graph(&patches, &severities);
+    let mut graph = heartbeat_graph(&patches);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -692,13 +633,11 @@ mod tests {
       ..Default::default()
     });
 
-    let sev = Severity::Healthy;
-
-    let mut g_full = boop_graph(&full, sev);
+    let mut g_full = boop_graph(&full);
     g_full.set_sample_rate(44100.0);
     g_full.allocate();
 
-    let mut g_half = boop_graph(&half, sev);
+    let mut g_half = boop_graph(&half);
     g_half.set_sample_rate(44100.0);
     g_half.allocate();
 
@@ -733,20 +672,5 @@ mod tests {
       "sustain=0.5 body RMS ({half_rms:.6}) should be lower \
        than sustain=1.0 ({full_rms:.6})"
     );
-  }
-
-  #[test]
-  fn cents_to_ratio_identity() {
-    assert!((cents_to_ratio(0.0) - 1.0).abs() < 1e-10);
-  }
-
-  #[test]
-  fn cents_to_ratio_octave() {
-    assert!((cents_to_ratio(1200.0) - 2.0).abs() < 1e-10);
-  }
-
-  #[test]
-  fn cents_to_ratio_negative() {
-    assert!((cents_to_ratio(-1200.0) - 0.5).abs() < 1e-10);
   }
 }

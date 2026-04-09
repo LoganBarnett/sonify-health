@@ -657,7 +657,7 @@ struct ImportHeartbeatSection {
 }
 
 #[derive(Default, serde::Deserialize)]
-struct ImportDroneProfile {
+struct ImportProfile {
   lo: Option<PatchOverrides>,
   hi: Option<PatchOverrides>,
 }
@@ -665,26 +665,36 @@ struct ImportDroneProfile {
 #[derive(serde::Deserialize)]
 struct ImportToml {
   patch: Option<PatchOverrides>,
+  notes: Option<Vec<ImportBoop>>,
+  #[serde(alias = "drone_profiles")]
+  profiles: Option<std::collections::HashMap<String, ImportProfile>>,
+  #[serde(alias = "drone_notes")]
+  check_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
+  /// Legacy `[heartbeat]` section for backward compatibility.
   heartbeat: Option<ImportHeartbeatSection>,
-  drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
-  drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 }
 
 #[derive(serde::Deserialize)]
 struct ImportJson {
   patch: Option<PatchOverrides>,
+  notes: Option<Vec<ImportBoop>>,
+  #[serde(alias = "drone_profiles")]
+  profiles: Option<std::collections::HashMap<String, ImportProfile>>,
+  #[serde(alias = "drone_notes")]
+  check_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
+  /// Legacy `heartbeat` key for backward compatibility.
   heartbeat: Option<ImportHeartbeatSection>,
-  drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
-  drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
 }
 
 /// Per-entity patch overrides plus heartbeat note specs.
 struct ImportData {
-  heartbeat_params: Vec<(&'static str, f64)>,
-  drone_lo_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
-  drone_hi_params: std::collections::HashMap<String, Vec<(&'static str, f64)>>,
-  boops: Vec<NoteSpec>,
-  drone_notes: std::collections::HashMap<String, Vec<NoteSpec>>,
+  patch_params: Vec<(&'static str, f64)>,
+  profile_lo_params:
+    std::collections::HashMap<String, Vec<(&'static str, f64)>>,
+  profile_hi_params:
+    std::collections::HashMap<String, Vec<(&'static str, f64)>>,
+  notes: Vec<NoteSpec>,
+  check_notes: std::collections::HashMap<String, Vec<NoteSpec>>,
 }
 
 type ImportResult = Result<ImportData, String>;
@@ -700,7 +710,7 @@ fn parse_import(text: &str) -> ImportResult {
   }
 }
 
-fn boops_from_import(raw: &[ImportBoop]) -> Vec<NoteSpec> {
+fn note_specs_from_import(raw: &[ImportBoop]) -> Vec<NoteSpec> {
   raw
     .iter()
     .map(|b| NoteSpec {
@@ -711,52 +721,53 @@ fn boops_from_import(raw: &[ImportBoop]) -> Vec<NoteSpec> {
 }
 
 fn build_import_data(
-  legacy_patch: Option<&PatchOverrides>,
-  heartbeat: Option<ImportHeartbeatSection>,
-  drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
-  drone_notes_raw: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
+  patch: Option<&PatchOverrides>,
+  notes: Option<Vec<ImportBoop>>,
+  profiles: Option<std::collections::HashMap<String, ImportProfile>>,
+  check_notes_raw: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
+  legacy_heartbeat: Option<ImportHeartbeatSection>,
 ) -> ImportData {
-  // Heartbeat patch: prefer heartbeat.patch, fall back to bare [patch]
-  // for backwards compatibility.
-  let heartbeat_params = heartbeat
-    .as_ref()
-    .and_then(|hb| hb.patch.as_ref())
-    .or(legacy_patch)
+  // Patch params: prefer bare [patch], fall back to legacy
+  // [heartbeat.patch].
+  let patch_params = patch
+    .or(legacy_heartbeat.as_ref().and_then(|hb| hb.patch.as_ref()))
     .map(|p| p.to_fields())
     .unwrap_or_default();
 
-  let boops = heartbeat
-    .and_then(|hb| hb.notes)
+  // Notes: prefer bare [[notes]], fall back to legacy
+  // [[heartbeat.notes]].
+  let notes = notes
+    .or(legacy_heartbeat.and_then(|hb| hb.notes))
     .as_deref()
-    .map(boops_from_import)
+    .map(note_specs_from_import)
     .unwrap_or_default();
 
-  let profiles = drone_profiles.unwrap_or_default();
-  let drone_lo_params = profiles
+  let profiles = profiles.unwrap_or_default();
+  let profile_lo_params = profiles
     .iter()
     .filter_map(|(name, p)| {
       p.lo.as_ref().map(|v| (name.clone(), v.to_fields()))
     })
     .collect();
-  let drone_hi_params = profiles
+  let profile_hi_params = profiles
     .iter()
     .filter_map(|(name, p)| {
       p.hi.as_ref().map(|v| (name.clone(), v.to_fields()))
     })
     .collect();
 
-  let drone_notes = drone_notes_raw
+  let check_notes = check_notes_raw
     .unwrap_or_default()
     .into_iter()
-    .map(|(name, raw)| (name, boops_from_import(&raw)))
+    .map(|(name, raw)| (name, note_specs_from_import(&raw)))
     .collect();
 
   ImportData {
-    heartbeat_params,
-    drone_lo_params,
-    drone_hi_params,
-    boops,
-    drone_notes,
+    patch_params,
+    profile_lo_params,
+    profile_hi_params,
+    notes,
+    check_notes,
   }
 }
 
@@ -765,9 +776,10 @@ fn parse_import_json(text: &str) -> ImportResult {
     serde_json::from_str(text).map_err(|e| format!("JSON parse error: {e}"))?;
   Ok(build_import_data(
     parsed.patch.as_ref(),
+    parsed.notes,
+    parsed.profiles,
+    parsed.check_notes,
     parsed.heartbeat,
-    parsed.drone_profiles,
-    parsed.drone_notes,
   ))
 }
 
@@ -776,9 +788,10 @@ fn parse_import_toml(text: &str) -> ImportResult {
     toml::from_str(text).map_err(|e| format!("TOML parse error: {e}"))?;
   Ok(build_import_data(
     parsed.patch.as_ref(),
+    parsed.notes,
+    parsed.profiles,
+    parsed.check_notes,
     parsed.heartbeat,
-    parsed.drone_profiles,
-    parsed.drone_notes,
   ))
 }
 
@@ -795,19 +808,19 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
   {
     let mut patches = preview.patches.write().unwrap();
 
-    // Heartbeat patch params.
+    // Base patch params.
     if let Some(patch) = patches.get_mut(&PatchOwner::Heartbeat) {
-      for &(name, value) in &data.heartbeat_params {
+      for &(name, value) in &data.patch_params {
         if !is_locked(&PatchOwner::Heartbeat, name) {
           patch.set_param(name, value);
         }
       }
     }
 
-    // Drone profile params (matched by name).
+    // Profile params (matched by name).
     let drone_infos = preview.drone_infos.read().unwrap();
     for (i, info) in drone_infos.iter().enumerate() {
-      if let Some(params) = data.drone_lo_params.get(&info.name) {
+      if let Some(params) = data.profile_lo_params.get(&info.name) {
         let owner = PatchOwner::DroneLo(i);
         if let Some(patch) = patches.get_mut(&owner) {
           for &(name, value) in params {
@@ -817,7 +830,7 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
           }
         }
       }
-      if let Some(params) = data.drone_hi_params.get(&info.name) {
+      if let Some(params) = data.profile_hi_params.get(&info.name) {
         let owner = PatchOwner::DroneHi(i);
         if let Some(patch) = patches.get_mut(&owner) {
           for &(name, value) in params {
@@ -830,12 +843,12 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
     }
   }
 
-  if !data.boops.is_empty() {
+  if !data.notes.is_empty() {
     let mut specs = preview.boop_specs.write().unwrap();
     let mut pins = preview.boop_pins.write().unwrap();
-    for (i, boop) in data.boops.iter().enumerate() {
+    for (i, note) in data.notes.iter().enumerate() {
       if i < specs.len() {
-        specs[i] = boop.clone();
+        specs[i] = note.clone();
         if i < pins.len() {
           pins[i] = true;
         }
@@ -843,13 +856,13 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
     }
   }
 
-  // Apply imported drone notes as pinned specs.
-  if !data.drone_notes.is_empty() {
+  // Apply imported check notes as pinned specs.
+  if !data.check_notes.is_empty() {
     let drone_infos = preview.drone_infos.read().unwrap();
     let mut all_specs = preview.drone_boop_specs.write().unwrap();
     let mut all_pins = preview.drone_boop_pins.write().unwrap();
     for (i, info) in drone_infos.iter().enumerate() {
-      if let Some(notes) = data.drone_notes.get(&info.name) {
+      if let Some(notes) = data.check_notes.get(&info.name) {
         if let (Some(specs), Some(pins)) =
           (all_specs.get_mut(i), all_pins.get_mut(i))
         {
@@ -891,8 +904,8 @@ mod tests {
     ];
     let toml = print::format_toml(&patch, &[], &notes, &[]);
     let data = parse_import(&toml).expect("round-trip TOML should parse");
-    assert_eq!(data.boops.len(), notes.len());
-    for (orig, imp) in notes.iter().zip(data.boops.iter()) {
+    assert_eq!(data.notes.len(), notes.len());
+    for (orig, imp) in notes.iter().zip(data.notes.iter()) {
       assert!(
         (orig.freq - imp.freq).abs() < f64::EPSILON,
         "freq mismatch: {} vs {}",
@@ -923,8 +936,8 @@ mod tests {
     ];
     let json = print::format_json(&patch, &[], &notes, &[]);
     let data = parse_import(&json).expect("round-trip JSON should parse");
-    assert_eq!(data.boops.len(), notes.len());
-    for (orig, imp) in notes.iter().zip(data.boops.iter()) {
+    assert_eq!(data.notes.len(), notes.len());
+    for (orig, imp) in notes.iter().zip(data.notes.iter()) {
       assert!(
         (orig.freq - imp.freq).abs() < f64::EPSILON,
         "freq mismatch: {} vs {}",

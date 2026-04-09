@@ -4,7 +4,6 @@ use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{
   check::CheckConfig, state::CheckState, NoteSpec, Patch, PatchOverrides,
-  Severity,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{
@@ -761,14 +760,13 @@ impl PreviewState {
 
 // -- Helpers -----------------------------------------------------------------
 
-/// Convert a normalized metric (0.0–1.0) to a severity.
-/// 0.0→Healthy, 0.5→Degraded, 1.0→Down.
-pub fn severity_from_metric(value: f32) -> Severity {
-  let sev = (value * 2.0).round() as u8;
-  match sev {
-    0 => Severity::Healthy,
-    1 => Severity::Degraded,
-    _ => Severity::Down,
+/// Convert a normalized metric (0.0–1.0) to a display label.
+/// 0.0→"healthy", 0.5→"degraded", 1.0→"down".
+pub fn metric_label(value: f32) -> &'static str {
+  match (value * 2.0).round() as u8 {
+    0 => "healthy",
+    1 => "degraded",
+    _ => "down",
   }
 }
 
