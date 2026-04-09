@@ -1,91 +1,58 @@
 module Protocol exposing
-    ( BoopSpecInfo
-    , BoopSpecRanges
-    , CheckInfo
-    , CheckLogEntry
-    , PatchParam
+    ( HeartbeatInfo
+    , PatchParamMeta
+    , ProbeLogEntry
     , ServerMsg(..)
+    , TransitionInfo(..)
     , decodeServerMsg
-    , encodeClearBoopPin
-    , encodeClearDronePin
     , encodeClearOverride
-    , encodeExportPatch
+    , encodeExportConfig
     , encodeGetState
     , encodeImportConfig
-    , encodeLockDrone
-    , encodeLockParam
-    , encodeOverrideCheck
+    , encodeOverrideHeartbeat
     , encodeRevertAll
-    , encodeSetBoopCount
-    , encodeSetBoopSpec
-    , encodeSetDroneBoops
-    , encodeSetDroneInterpCurve
-    , encodeSetDroneSpec
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
     , encodeSetMasterVolume
     , encodeSetMuted
     , encodeSetPatchParam
     , encodeTriggerHeartbeat
-    , encodeUnlockAll
-    , encodeUnlockDrone
-    , encodeUnlockParam
     )
 
+import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 
 
-type alias PatchParam =
+type alias PatchParamMeta =
     { name : String
     , description : String
-    , value : Float
     , min : Float
     , max : Float
     , step : Float
     }
 
 
-type alias CheckInfo =
+type alias HeartbeatInfo =
     { name : String
-    , kind : String
-    , checkIndex : Int
-    , value : Float
-    , interpCurve : Float
-    , boops : Int
+    , continuous : Bool
+    , metric : Float
     , overridden : Bool
-    , patchLo : List PatchParam
-    , patchHi : List PatchParam
-    , lockedParamsLo : List String
-    , lockedParamsHi : List String
-    , specs : List BoopSpecInfo
-    , specRanges : BoopSpecRanges
+    , volume : Float
+    , transition : TransitionInfo
     }
 
 
-type alias CheckLogEntry =
+type TransitionInfo
+    = Discrete (List { threshold : Float, patch : String })
+    | Gradient { patches : List String, curve : Float }
+
+
+type alias ProbeLogEntry =
     { timestamp : Float
-    , layer : String
     , name : String
     , result : String
     , overridden : Bool
-    }
-
-
-type alias BoopSpecInfo =
-    { freq : Float
-    , duration : Float
-    , pinned : Bool
-    }
-
-
-type alias BoopSpecRanges =
-    { freqMin : Float
-    , freqMax : Float
-    , freqStep : Float
-    , durationMin : Float
-    , durationMax : Float
-    , durationStep : Float
     }
 
 
@@ -95,32 +62,22 @@ type alias BoopSpecRanges =
 
 type ServerMsg
     = StateMsg
-        { patch : List PatchParam
+        { patchParams : List PatchParamMeta
+        , library : Dict String (Dict String Float)
         , muted : Bool
         , masterVolume : Float
-        , heartbeatVolume : Float
         , heartbeatLoop : Bool
-        , boopCount : Int
-        , checks : List CheckInfo
-        , lockedParams : List String
-        , lockedDrones : List Int
-        , boopSpecs : List BoopSpecInfo
-        , boopSpecRanges : BoopSpecRanges
+        , heartbeats : List HeartbeatInfo
         }
-    | ParamChanged String (Maybe Int) String Float
+    | PatchParamChanged String String Float
     | MuteChanged Bool
     | VolumeChanged String (Maybe Int) Float
-    | OverrideChanged String Int (Maybe Float) Bool
+    | MetricChanged Int Float
+    | OverrideChanged Int (Maybe Float) Bool
     | HeartbeatLoopChanged Bool
-    | BoopCountChanged Int
-    | DroneConfigChanged Int Int
-    | DroneInterpCurveChanged Int Float
-    | CheckLog CheckLogEntry
-    | PatchExport { toml : String, json : String, nix : String }
-    | LockedParamsChanged String (Maybe Int) (List String)
-    | LockedDronesChanged (List Int)
-    | BoopSpecsChanged (List BoopSpecInfo)
-    | DroneSpecsChanged Int (List BoopSpecInfo)
+    | LibraryChanged (Dict String (Dict String Float))
+    | ProbeLog ProbeLogEntry
+    | ConfigExport (Dict String (Dict String Float))
     | ImportError String
     | Connected
     | Disconnected
@@ -141,8 +98,8 @@ serverMsgDecoder =
                     "state" ->
                         stateDecoder
 
-                    "param_changed" ->
-                        paramChangedDecoder
+                    "patch_param_changed" ->
+                        patchParamChangedDecoder
 
                     "mute_changed" ->
                         muteChangedDecoder
@@ -150,38 +107,23 @@ serverMsgDecoder =
                     "volume_changed" ->
                         volumeChangedDecoder
 
+                    "metric_changed" ->
+                        metricChangedDecoder
+
                     "override_changed" ->
                         overrideChangedDecoder
 
                     "heartbeat_loop_changed" ->
                         heartbeatLoopChangedDecoder
 
-                    "boop_count_changed" ->
-                        boopCountChangedDecoder
+                    "library_changed" ->
+                        libraryChangedDecoder
 
-                    "drone_config_changed" ->
-                        droneConfigChangedDecoder
+                    "probe_log" ->
+                        probeLogDecoder
 
-                    "drone_interp_curve_changed" ->
-                        droneInterpCurveChangedDecoder
-
-                    "check_log" ->
-                        checkLogDecoder
-
-                    "patch_export" ->
-                        patchExportDecoder
-
-                    "locked_params_changed" ->
-                        lockedParamsChangedDecoder
-
-                    "locked_drones_changed" ->
-                        lockedDronesChangedDecoder
-
-                    "boop_specs_changed" ->
-                        boopSpecsChangedDecoder
-
-                    "drone_specs_changed" ->
-                        droneSpecsChangedDecoder
+                    "config_export" ->
+                        configExportDecoder
 
                     "import_error" ->
                         importErrorDecoder
@@ -197,69 +139,42 @@ serverMsgDecoder =
             )
 
 
-andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
-andMap =
-    D.map2 (|>)
+
+-- Decoders
 
 
 stateDecoder : D.Decoder ServerMsg
 stateDecoder =
-    D.field "patch_params" (D.list patchParamMetaDecoder)
-        |> D.andThen stateDecoderWithMeta
-
-
-stateDecoderWithMeta :
-    List { name : String, description : String, min : Float, max : Float, step : Float }
-    -> D.Decoder ServerMsg
-stateDecoderWithMeta metas =
-    D.map8
-        (\patch muted masterVol hbVol hbLoop boopCount checks locked ->
-            \lockedDrones boopSpecs ranges ->
-                StateMsg
-                    { patch = patch
-                    , muted = muted
-                    , masterVolume = masterVol
-                    , heartbeatVolume = hbVol
-                    , heartbeatLoop = hbLoop
-                    , boopCount = boopCount
-                    , checks = checks
-                    , lockedParams = locked
-                    , lockedDrones = lockedDrones
-                    , boopSpecs = boopSpecs
-                    , boopSpecRanges = ranges
-                    }
+    D.map6
+        (\pp lib muted mv hbLoop hbs ->
+            StateMsg
+                { patchParams = pp
+                , library = lib
+                , muted = muted
+                , masterVolume = mv
+                , heartbeatLoop = hbLoop
+                , heartbeats = hbs
+                }
         )
-        (D.field "patch" patchDecoder
-            |> D.andThen
-                (\vals ->
-                    case mergePatchParams vals metas of
-                        Ok params ->
-                            D.succeed params
-
-                        Err e ->
-                            D.fail e
-                )
-        )
+        (D.field "patch_params" (D.list patchParamMetaDecoder))
+        (D.field "library" libraryDecoder)
         (D.field "muted" D.bool)
         (D.field "master_volume" D.float)
-        (D.field "heartbeat_volume" D.float)
         (D.field "heartbeat_loop" D.bool)
-        (D.field "boop_count" D.int)
-        (D.field "checks" (D.list (checkInfoDecoderWithMeta metas)))
-        (D.field "locked_params" (D.list D.string))
-        |> andMap (D.field "locked_drones" (D.list D.int))
-        |> andMap (D.field "boop_specs" (D.list boopSpecInfoDecoder))
-        |> andMap (D.field "boop_spec_ranges" boopSpecRangesDecoder)
+        (D.field "heartbeats" (D.list heartbeatInfoDecoder))
 
 
-patchDecoder : D.Decoder (List ( String, Float ))
-patchDecoder =
-    D.keyValuePairs D.float
-
-
-patchParamMetaDecoder : D.Decoder { name : String, description : String, min : Float, max : Float, step : Float }
+patchParamMetaDecoder : D.Decoder PatchParamMeta
 patchParamMetaDecoder =
-    D.map5 (\n d mn mx s -> { name = n, description = d, min = mn, max = mx, step = s })
+    D.map5
+        (\n d mn mx s ->
+            { name = n
+            , description = d
+            , min = mn
+            , max = mx
+            , step = s
+            }
+        )
         (D.field "name" D.string)
         (D.field "description" D.string)
         (D.field "min" D.float)
@@ -267,104 +182,53 @@ patchParamMetaDecoder =
         (D.field "step" D.float)
 
 
-mergePatchParams :
-    List ( String, Float )
-    -> List { name : String, description : String, min : Float, max : Float, step : Float }
-    -> Result String (List PatchParam)
-mergePatchParams values metas =
-    let
-        lookup name =
-            List.filterMap
-                (\( k, v ) ->
-                    if k == name then
-                        Just v
-
-                    else
-                        Nothing
-                )
-                values
-                |> List.head
-
-        merge m =
-            case lookup m.name of
-                Just v ->
-                    Ok
-                        { name = m.name
-                        , description = m.description
-                        , value = v
-                        , min = m.min
-                        , max = m.max
-                        , step = m.step
-                        }
-
-                Nothing ->
-                    Err ("Missing patch param: " ++ m.name)
-    in
-    List.foldl
-        (\m acc ->
-            case acc of
-                Err _ ->
-                    acc
-
-                Ok soFar ->
-                    case merge m of
-                        Ok param ->
-                            Ok (soFar ++ [ param ])
-
-                        Err e ->
-                            Err e
-        )
-        (Ok [])
-        metas
+libraryDecoder : D.Decoder (Dict String (Dict String Float))
+libraryDecoder =
+    D.dict (D.dict D.float)
 
 
-checkInfoDecoderWithMeta :
-    List { name : String, description : String, min : Float, max : Float, step : Float }
-    -> D.Decoder CheckInfo
-checkInfoDecoderWithMeta metas =
-    D.succeed CheckInfo
-        |> andMap (D.field "name" D.string)
-        |> andMap (D.field "kind" D.string)
-        |> andMap (D.field "check_index" D.int)
-        |> andMap (D.field "value" D.float)
-        |> andMap (D.field "interp_curve" D.float)
-        |> andMap (D.field "boops" D.int)
-        |> andMap (D.field "overridden" D.bool)
-        |> andMap
-            (D.field "patch_lo" patchDecoder
-                |> D.andThen
-                    (\vals ->
-                        case mergePatchParams vals metas of
-                            Ok params ->
-                                D.succeed params
+heartbeatInfoDecoder : D.Decoder HeartbeatInfo
+heartbeatInfoDecoder =
+    D.map6 HeartbeatInfo
+        (D.field "name" D.string)
+        (D.field "continuous" D.bool)
+        (D.field "metric" D.float)
+        (D.field "overridden" D.bool)
+        (D.field "volume" D.float)
+        (D.field "transition" transitionDecoder)
 
-                            Err e ->
-                                D.fail e
-                    )
+
+transitionDecoder : D.Decoder TransitionInfo
+transitionDecoder =
+    D.field "type" D.string
+        |> D.andThen
+            (\t ->
+                case t of
+                    "discrete" ->
+                        D.map Discrete
+                            (D.field "states"
+                                (D.list
+                                    (D.map2 (\th p -> { threshold = th, patch = p })
+                                        (D.field "threshold" D.float)
+                                        (D.field "patch" D.string)
+                                    )
+                                )
+                            )
+
+                    "gradient" ->
+                        D.map2 (\ps c -> Gradient { patches = ps, curve = c })
+                            (D.field "patches" (D.list D.string))
+                            (D.field "curve" D.float)
+
+                    _ ->
+                        D.fail ("Unknown transition type: " ++ t)
             )
-        |> andMap
-            (D.field "patch_hi" patchDecoder
-                |> D.andThen
-                    (\vals ->
-                        case mergePatchParams vals metas of
-                            Ok params ->
-                                D.succeed params
-
-                            Err e ->
-                                D.fail e
-                    )
-            )
-        |> andMap (D.field "locked_params_lo" (D.list D.string))
-        |> andMap (D.field "locked_params_hi" (D.list D.string))
-        |> andMap (D.field "specs" (D.list boopSpecInfoDecoder))
-        |> andMap (D.field "spec_ranges" boopSpecRangesDecoder)
 
 
-paramChangedDecoder : D.Decoder ServerMsg
-paramChangedDecoder =
-    D.map4 ParamChanged
-        (D.field "layer" D.string)
-        (D.maybe (D.field "index" D.int))
+patchParamChangedDecoder : D.Decoder ServerMsg
+patchParamChangedDecoder =
+    D.map3 PatchParamChanged
+        (D.field "patch_name" D.string)
         (D.field "param" D.string)
         (D.field "value" D.float)
 
@@ -382,10 +246,16 @@ volumeChangedDecoder =
         (D.field "volume" D.float)
 
 
+metricChangedDecoder : D.Decoder ServerMsg
+metricChangedDecoder =
+    D.map2 MetricChanged
+        (D.field "index" D.int)
+        (D.field "value" D.float)
+
+
 overrideChangedDecoder : D.Decoder ServerMsg
 overrideChangedDecoder =
-    D.map4 OverrideChanged
-        (D.field "layer" D.string)
+    D.map3 OverrideChanged
         (D.field "index" D.int)
         (D.maybe (D.field "value" D.float))
         (D.field "overridden" D.bool)
@@ -396,95 +266,31 @@ heartbeatLoopChangedDecoder =
     D.map HeartbeatLoopChanged (D.field "enabled" D.bool)
 
 
-checkLogDecoder : D.Decoder ServerMsg
-checkLogDecoder =
-    D.map5
-        (\ts layer name result overridden ->
-            CheckLog
+libraryChangedDecoder : D.Decoder ServerMsg
+libraryChangedDecoder =
+    D.map LibraryChanged (D.field "library" libraryDecoder)
+
+
+probeLogDecoder : D.Decoder ServerMsg
+probeLogDecoder =
+    D.map4
+        (\ts name result overridden ->
+            ProbeLog
                 { timestamp = ts
-                , layer = layer
                 , name = name
                 , result = result
                 , overridden = overridden
                 }
         )
         (D.field "timestamp" D.float)
-        (D.field "layer" D.string)
         (D.field "name" D.string)
         (D.field "result" D.string)
         (D.field "overridden" D.bool)
 
 
-boopCountChangedDecoder : D.Decoder ServerMsg
-boopCountChangedDecoder =
-    D.map BoopCountChanged (D.field "count" D.int)
-
-
-droneConfigChangedDecoder : D.Decoder ServerMsg
-droneConfigChangedDecoder =
-    D.map2 DroneConfigChanged
-        (D.field "index" D.int)
-        (D.field "boops" D.int)
-
-
-droneInterpCurveChangedDecoder : D.Decoder ServerMsg
-droneInterpCurveChangedDecoder =
-    D.map2 DroneInterpCurveChanged
-        (D.field "index" D.int)
-        (D.field "curve" D.float)
-
-
-patchExportDecoder : D.Decoder ServerMsg
-patchExportDecoder =
-    D.map3
-        (\t j n -> PatchExport { toml = t, json = j, nix = n })
-        (D.field "toml" D.string)
-        (D.field "json" D.string)
-        (D.field "nix" D.string)
-
-
-boopSpecInfoDecoder : D.Decoder BoopSpecInfo
-boopSpecInfoDecoder =
-    D.map3 BoopSpecInfo
-        (D.field "freq" D.float)
-        (D.field "duration" D.float)
-        (D.field "pinned" D.bool)
-
-
-boopSpecRangesDecoder : D.Decoder BoopSpecRanges
-boopSpecRangesDecoder =
-    D.map6 BoopSpecRanges
-        (D.field "freq_min" D.float)
-        (D.field "freq_max" D.float)
-        (D.field "freq_step" D.float)
-        (D.field "duration_min" D.float)
-        (D.field "duration_max" D.float)
-        (D.field "duration_step" D.float)
-
-
-lockedParamsChangedDecoder : D.Decoder ServerMsg
-lockedParamsChangedDecoder =
-    D.map3 LockedParamsChanged
-        (D.field "layer" D.string)
-        (D.maybe (D.field "index" D.int))
-        (D.field "params" (D.list D.string))
-
-
-lockedDronesChangedDecoder : D.Decoder ServerMsg
-lockedDronesChangedDecoder =
-    D.map LockedDronesChanged (D.field "indices" (D.list D.int))
-
-
-boopSpecsChangedDecoder : D.Decoder ServerMsg
-boopSpecsChangedDecoder =
-    D.map BoopSpecsChanged (D.field "specs" (D.list boopSpecInfoDecoder))
-
-
-droneSpecsChangedDecoder : D.Decoder ServerMsg
-droneSpecsChangedDecoder =
-    D.map2 DroneSpecsChanged
-        (D.field "index" D.int)
-        (D.field "specs" (D.list boopSpecInfoDecoder))
+configExportDecoder : D.Decoder ServerMsg
+configExportDecoder =
+    D.map ConfigExport (D.field "library" libraryDecoder)
 
 
 importErrorDecoder : D.Decoder ServerMsg
@@ -502,25 +308,58 @@ encodeGetState =
         |> E.encode 0
 
 
-encodeSetPatchParam : String -> Maybe Int -> String -> Float -> String
-encodeSetPatchParam layer maybeIndex param value =
-    let
-        base =
-            [ ( "type", E.string "set_patch_param" )
-            , ( "layer", E.string layer )
-            , ( "param", E.string param )
-            , ( "value", E.float value )
-            ]
+encodeSetPatchParam : String -> String -> Float -> String
+encodeSetPatchParam patchName param value =
+    E.object
+        [ ( "type", E.string "set_patch_param" )
+        , ( "patch_name", E.string patchName )
+        , ( "param", E.string param )
+        , ( "value", E.float value )
+        ]
+        |> E.encode 0
 
-        indexField =
-            case maybeIndex of
-                Just i ->
-                    [ ( "index", E.int i ) ]
 
-                Nothing ->
-                    []
-    in
-    E.object (base ++ indexField)
+encodeSetHeartbeatVolume : Int -> Float -> String
+encodeSetHeartbeatVolume index volume =
+    E.object
+        [ ( "type", E.string "set_heartbeat_volume" )
+        , ( "index", E.int index )
+        , ( "volume", E.float volume )
+        ]
+        |> E.encode 0
+
+
+encodeOverrideHeartbeat : Int -> Float -> String
+encodeOverrideHeartbeat index value =
+    E.object
+        [ ( "type", E.string "override_heartbeat" )
+        , ( "index", E.int index )
+        , ( "value", E.float value )
+        ]
+        |> E.encode 0
+
+
+encodeClearOverride : Int -> String
+encodeClearOverride index =
+    E.object
+        [ ( "type", E.string "clear_override" )
+        , ( "index", E.int index )
+        ]
+        |> E.encode 0
+
+
+encodeTriggerHeartbeat : String
+encodeTriggerHeartbeat =
+    E.object [ ( "type", E.string "trigger_heartbeat" ) ]
+        |> E.encode 0
+
+
+encodeSetHeartbeatLoop : Bool -> String
+encodeSetHeartbeatLoop enabled =
+    E.object
+        [ ( "type", E.string "set_heartbeat_loop" )
+        , ( "enabled", E.bool enabled )
+        ]
         |> E.encode 0
 
 
@@ -542,192 +381,15 @@ encodeSetMasterVolume vol =
         |> E.encode 0
 
 
-encodeSetHeartbeatVolume : Float -> String
-encodeSetHeartbeatVolume vol =
-    E.object
-        [ ( "type", E.string "set_heartbeat_volume" )
-        , ( "volume", E.float vol )
-        ]
-        |> E.encode 0
-
-
-encodeSetDroneInterpCurve : Int -> Float -> String
-encodeSetDroneInterpCurve index curve =
-    E.object
-        [ ( "type", E.string "set_drone_interp_curve" )
-        , ( "index", E.int index )
-        , ( "curve", E.float curve )
-        ]
-        |> E.encode 0
-
-
-encodeOverrideCheck : String -> Int -> Float -> String
-encodeOverrideCheck layer index value =
-    E.object
-        [ ( "type", E.string "override_check" )
-        , ( "layer", E.string layer )
-        , ( "index", E.int index )
-        , ( "value", E.float value )
-        ]
-        |> E.encode 0
-
-
-encodeClearOverride : String -> Int -> String
-encodeClearOverride layer index =
-    E.object
-        [ ( "type", E.string "clear_override" )
-        , ( "layer", E.string layer )
-        , ( "index", E.int index )
-        ]
-        |> E.encode 0
-
-
-encodeSetBoopCount : Int -> String
-encodeSetBoopCount count =
-    E.object
-        [ ( "type", E.string "set_boop_count" )
-        , ( "count", E.int count )
-        ]
-        |> E.encode 0
-
-
-encodeSetHeartbeatLoop : Bool -> String
-encodeSetHeartbeatLoop enabled =
-    E.object
-        [ ( "type", E.string "set_heartbeat_loop" )
-        , ( "enabled", E.bool enabled )
-        ]
-        |> E.encode 0
-
-
-encodeTriggerHeartbeat : String
-encodeTriggerHeartbeat =
-    E.object [ ( "type", E.string "trigger_heartbeat" ) ]
-        |> E.encode 0
-
-
 encodeRevertAll : String
 encodeRevertAll =
     E.object [ ( "type", E.string "revert_all" ) ]
         |> E.encode 0
 
 
-encodeSetDroneBoops : Int -> Int -> String
-encodeSetDroneBoops index boops =
-    E.object
-        [ ( "type", E.string "set_drone_boops" )
-        , ( "index", E.int index )
-        , ( "boops", E.int boops )
-        ]
-        |> E.encode 0
-
-
-encodeExportPatch : String
-encodeExportPatch =
-    E.object [ ( "type", E.string "export_toml" ) ]
-        |> E.encode 0
-
-
-encodeLockParam : String -> Maybe Int -> String -> String
-encodeLockParam layer maybeIndex param =
-    let
-        base =
-            [ ( "type", E.string "lock_param" )
-            , ( "layer", E.string layer )
-            , ( "param", E.string param )
-            ]
-
-        indexField =
-            case maybeIndex of
-                Just i ->
-                    [ ( "index", E.int i ) ]
-
-                Nothing ->
-                    []
-    in
-    E.object (base ++ indexField)
-        |> E.encode 0
-
-
-encodeUnlockParam : String -> Maybe Int -> String -> String
-encodeUnlockParam layer maybeIndex param =
-    let
-        base =
-            [ ( "type", E.string "unlock_param" )
-            , ( "layer", E.string layer )
-            , ( "param", E.string param )
-            ]
-
-        indexField =
-            case maybeIndex of
-                Just i ->
-                    [ ( "index", E.int i ) ]
-
-                Nothing ->
-                    []
-    in
-    E.object (base ++ indexField)
-        |> E.encode 0
-
-
-encodeUnlockAll : String
-encodeUnlockAll =
-    E.object [ ( "type", E.string "unlock_all" ) ]
-        |> E.encode 0
-
-
-encodeLockDrone : Int -> String
-encodeLockDrone index =
-    E.object
-        [ ( "type", E.string "lock_drone" )
-        , ( "index", E.int index )
-        ]
-        |> E.encode 0
-
-
-encodeUnlockDrone : Int -> String
-encodeUnlockDrone index =
-    E.object
-        [ ( "type", E.string "unlock_drone" )
-        , ( "index", E.int index )
-        ]
-        |> E.encode 0
-
-
-encodeSetBoopSpec : Int -> Maybe Float -> Maybe Float -> String
-encodeSetBoopSpec index maybeFreq maybeDuration =
-    let
-        base =
-            [ ( "type", E.string "set_boop_spec" )
-            , ( "index", E.int index )
-            ]
-
-        freqField =
-            case maybeFreq of
-                Just f ->
-                    [ ( "freq", E.float f ) ]
-
-                Nothing ->
-                    []
-
-        durationField =
-            case maybeDuration of
-                Just d ->
-                    [ ( "duration", E.float d ) ]
-
-                Nothing ->
-                    []
-    in
-    E.object (base ++ freqField ++ durationField)
-        |> E.encode 0
-
-
-encodeClearBoopPin : Int -> String
-encodeClearBoopPin index =
-    E.object
-        [ ( "type", E.string "clear_boop_pin" )
-        , ( "index", E.int index )
-        ]
+encodeExportConfig : String
+encodeExportConfig =
+    E.object [ ( "type", E.string "export_config" ) ]
         |> E.encode 0
 
 
@@ -736,44 +398,5 @@ encodeImportConfig text =
     E.object
         [ ( "type", E.string "import_config" )
         , ( "text", E.string text )
-        ]
-        |> E.encode 0
-
-
-encodeSetDroneSpec : Int -> Int -> Maybe Float -> Maybe Float -> String
-encodeSetDroneSpec index noteIndex maybeFreq maybeDuration =
-    let
-        base =
-            [ ( "type", E.string "set_drone_spec" )
-            , ( "index", E.int index )
-            , ( "note_index", E.int noteIndex )
-            ]
-
-        freqField =
-            case maybeFreq of
-                Just f ->
-                    [ ( "freq", E.float f ) ]
-
-                Nothing ->
-                    []
-
-        durationField =
-            case maybeDuration of
-                Just d ->
-                    [ ( "duration", E.float d ) ]
-
-                Nothing ->
-                    []
-    in
-    E.object (base ++ freqField ++ durationField)
-        |> E.encode 0
-
-
-encodeClearDronePin : Int -> Int -> String
-encodeClearDronePin index noteIndex =
-    E.object
-        [ ( "type", E.string "clear_drone_pin" )
-        , ( "index", E.int index )
-        , ( "note_index", E.int noteIndex )
         ]
         |> E.encode 0

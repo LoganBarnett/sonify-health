@@ -33,13 +33,14 @@ pub fn run_probe(
   command: &str,
   result_mode: &ResultMode,
 ) -> Result<f32, ProbeError> {
-  let output = Command::new("sh")
-    .args(["-c", command])
-    .output()
-    .map_err(|source| ProbeError::ProbeExecution {
-      name: name.to_string(),
-      source,
-    })?;
+  let output =
+    Command::new("sh")
+      .args(["-c", command])
+      .output()
+      .map_err(|source| ProbeError::ProbeExecution {
+        name: name.to_string(),
+        source,
+      })?;
 
   match result_mode {
     ResultMode::ExitCode => {
@@ -73,8 +74,7 @@ mod tests {
 
   #[test]
   fn exit_code_severity_zero_is_healthy() {
-    let val =
-      run_probe("test", "true", &ResultMode::ExitCodeSeverity).unwrap();
+    let val = run_probe("test", "true", &ResultMode::ExitCodeSeverity).unwrap();
     assert!((val - 0.0).abs() < 0.001);
   }
 
@@ -119,12 +119,9 @@ mod tests {
 
   #[test]
   fn missing_binary_returns_down_for_severity_mode() {
-    let val = run_probe(
-      "test",
-      "/nonexistent/binary",
-      &ResultMode::ExitCodeSeverity,
-    )
-    .unwrap();
+    let val =
+      run_probe("test", "/nonexistent/binary", &ResultMode::ExitCodeSeverity)
+        .unwrap();
     assert!((val - 1.0).abs() < 0.001);
   }
 }
