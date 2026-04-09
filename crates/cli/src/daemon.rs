@@ -1,6 +1,6 @@
 use crate::config::DaemonConfig;
 use crate::metrics::Metrics;
-use crate::preview_state::{severity_from_shared, PreviewState};
+use crate::preview_state::{severity_from_metric, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
@@ -117,8 +117,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             .copied()
             .flatten();
 
-          if let Some(severity) = overridden {
-            st.set(i, severity);
+          if let Some(metric) = overridden {
+            st.set(i, metric);
+            let severity = severity_from_metric(metric);
             send_check_log(
               &prev,
               "heartbeat",
@@ -129,13 +130,13 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           } else {
             match check::run_check(&cfg) {
               Ok(metric) => {
-                let severity = metric_to_severity(metric);
+                let severity = severity_from_metric(metric);
                 info!(
                   check = cfg.name,
                   severity = %severity,
                   "Heartbeat check completed"
                 );
-                st.set(i, severity);
+                st.set(i, metric);
                 m.check_severity
                   .with_label_values(&[&cfg.name])
                   .set(severity as i64);
@@ -345,7 +346,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
     // Heartbeat trigger (one-shot, immediate).
     if preview.heartbeat_trigger.swap(false, Ordering::Relaxed)
-      && !preview.heartbeat_state.boops.is_empty()
+      && !preview.heartbeat_state.metrics.is_empty()
     {
       play_heartbeat_preview(&mixer, &preview)?;
       metrics.heartbeats_played.inc();
@@ -355,7 +356,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
     // Heartbeat loop (continuous).
     if preview.heartbeat_loop.load(Ordering::Relaxed)
-      && !preview.heartbeat_state.boops.is_empty()
+      && !preview.heartbeat_state.metrics.is_empty()
     {
       play_heartbeat_preview(&mixer, &preview)?;
       metrics.heartbeats_played.inc();
@@ -390,7 +391,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     }
 
     // Normal slot-based heartbeat.
-    if !is_muted && !preview.heartbeat_state.boops.is_empty() {
+    if !is_muted && !preview.heartbeat_state.metrics.is_empty() {
       play_heartbeat_preview(&mixer, &preview)?;
       metrics.heartbeats_played.inc();
     }
@@ -456,10 +457,10 @@ fn play_heartbeat_preview(
       } else {
         0
       };
-      severity_from_shared(
+      severity_from_metric(
         preview
           .heartbeat_state
-          .boops
+          .metrics
           .get(check_idx)
           .map(|b| b.value())
           .unwrap_or(0.0),
@@ -487,17 +488,6 @@ fn play_heartbeat_preview(
 }
 
 // -- Helpers -----------------------------------------------------------------
-
-/// Convert a normalized metric (0.0–1.0) from an
-/// `ExitCodeSeverity` check back to a `Severity` enum value.
-fn metric_to_severity(metric: f32) -> Severity {
-  let sev_val = (metric * 2.0).round() as u8;
-  match sev_val {
-    0 => Severity::Healthy,
-    1 => Severity::Degraded,
-    _ => Severity::Down,
-  }
-}
 
 /// Sleep for `dur` in ~100 ms increments, checking `running` flag.
 fn sleep_checking(running: &AtomicBool, dur: Duration) {

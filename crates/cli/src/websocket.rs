@@ -8,7 +8,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::{NoteSpec, Patch, PatchOverrides, Severity};
+use sonify_health_lib::{NoteSpec, Patch, PatchOverrides};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -286,72 +286,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_drone_volume" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let vol = msg.get("volume").and_then(|v| v.as_f64())? as f32;
-      let dv = preview.drone_volumes.get(index)?;
-      dv.set_value(vol.clamp(0.0, 1.0));
-      preview.update_combined_volume(index);
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "volume_changed",
-          "layer": "drone",
-          "index": index,
-          "volume": vol,
-        })
-        .to_string(),
-      );
-      None
-    }
-
-    "set_drone_repeat_rate" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let rate = msg.get("rate").and_then(|v| v.as_f64())? as f32;
-      let clamped = rate.clamp(0.1, 10.0);
-      preview.drone_repeat_rates.get(index)?.set_value(clamped);
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "drone_repeat_rate_changed",
-          "index": index,
-          "rate": clamped,
-        })
-        .to_string(),
-      );
-      None
-    }
-
-    "set_drone_repeat_curve" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let curve = msg.get("curve").and_then(|v| v.as_f64())? as f32;
-      let clamped = curve.clamp(0.1, 5.0);
-      preview.drone_repeat_curves.get(index)?.set_value(clamped);
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "drone_repeat_curve_changed",
-          "index": index,
-          "curve": clamped,
-        })
-        .to_string(),
-      );
-      None
-    }
-
-    "set_drone_phrase_gap" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let gap = msg.get("gap").and_then(|v| v.as_f64())? as f32;
-      let clamped = gap.clamp(0.0, 16.0);
-      preview.drone_phrase_gaps.get(index)?.set_value(clamped);
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "drone_phrase_gap_changed",
-          "index": index,
-          "gap": clamped,
-        })
-        .to_string(),
-      );
-      None
-    }
-
     "set_drone_interp_curve" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let curve = msg.get("curve").and_then(|v| v.as_f64())? as f32;
@@ -374,19 +308,19 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
       match layer {
         "heartbeat" => {
-          let val_str = msg.get("value").and_then(|v| v.as_str())?;
-          let severity: Severity = val_str.parse().ok()?;
+          let val = msg.get("value").and_then(|v| v.as_f64())? as f32;
+          let clamped = val.clamp(0.0, 1.0);
           {
             let mut ov = preview.heartbeat_overrides.write().unwrap();
-            *ov.get_mut(index)? = Some(severity);
+            *ov.get_mut(index)? = Some(clamped);
           }
-          preview.heartbeat_state.set(index, severity);
+          preview.heartbeat_state.set(index, clamped);
           let _ = preview.broadcast_tx.send(
             json!({
               "type": "override_changed",
               "layer": "heartbeat",
               "index": index,
-              "value": severity.to_string(),
+              "value": clamped,
               "overridden": true,
             })
             .to_string(),
@@ -585,7 +519,7 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     "lock_drone" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      if index >= preview.drone_volumes.len() {
+      if index >= preview.combined_volumes.len() {
         return None;
       }
       preview.locked_drones.write().unwrap().insert(index);

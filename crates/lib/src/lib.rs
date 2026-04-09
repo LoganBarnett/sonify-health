@@ -11,4 +11,4 @@ pub use check::CheckConfig;
 pub use logging::{LogFormat, LogLevel};
 pub use patch::{NoteSpec, Patch, PatchOverrides, PatchParamMeta};
 pub use severity::Severity;
-pub use state::DroneState;
+pub use state::CheckState;

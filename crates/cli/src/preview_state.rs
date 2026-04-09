@@ -3,9 +3,8 @@ use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{
-  check::CheckConfig,
-  state::{DroneState, HeartbeatState},
-  NoteSpec, Patch, PatchOverrides, Severity,
+  check::CheckConfig, state::CheckState, NoteSpec, Patch, PatchOverrides,
+  Severity,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{
@@ -60,9 +59,9 @@ pub struct PreviewState {
   pub master_volume: Shared,
   pub heartbeat_volume: Shared,
   pub effective_heartbeat_volume: Shared,
-  pub heartbeat_state: Arc<HeartbeatState>,
-  pub drone_state: Arc<DroneState>,
-  pub heartbeat_overrides: RwLock<Vec<Option<Severity>>>,
+  pub heartbeat_state: Arc<CheckState>,
+  pub drone_state: Arc<CheckState>,
+  pub heartbeat_overrides: RwLock<Vec<Option<f32>>>,
   pub drone_overrides: RwLock<Vec<Option<f32>>>,
   pub heartbeat_loop: AtomicBool,
   pub heartbeat_trigger: AtomicBool,
@@ -186,8 +185,8 @@ impl PreviewState {
       master_volume: shared(1.0),
       heartbeat_volume: shared(1.0),
       effective_heartbeat_volume: shared(1.0),
-      heartbeat_state: Arc::new(HeartbeatState::new(check_count)),
-      drone_state: Arc::new(DroneState::new(drone_count)),
+      heartbeat_state: Arc::new(CheckState::new(check_count)),
+      drone_state: Arc::new(CheckState::new(drone_count)),
       heartbeat_overrides: RwLock::new(vec![None; check_count]),
       drone_overrides: RwLock::new(vec![None; drone_count]),
       heartbeat_loop: AtomicBool::new(false),
@@ -403,7 +402,7 @@ impl PreviewState {
       .enumerate()
       .map(|(i, name)| {
         let severity =
-          severity_from_shared(self.heartbeat_state.boops[i].value());
+          severity_from_metric(self.heartbeat_state.metrics[i].value());
         json!({
           "name": name,
           "severity": severity.to_string(),
@@ -729,8 +728,11 @@ impl PreviewState {
 
 // -- Helpers -----------------------------------------------------------------
 
-pub fn severity_from_shared(value: f32) -> Severity {
-  match value.round() as u8 {
+/// Convert a normalized metric (0.0–1.0) to a severity.
+/// 0.0→Healthy, 0.5→Degraded, 1.0→Down.
+pub fn severity_from_metric(value: f32) -> Severity {
+  let sev = (value * 2.0).round() as u8;
+  match sev {
     0 => Severity::Healthy,
     1 => Severity::Degraded,
     _ => Severity::Down,
