@@ -40,7 +40,7 @@ command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \
 result_mode = "stdout"
 register = "mid"
 
-[heartbeat.voice]
+[heartbeat.patch]
 base_freq = 1165.4094037952248
 sine_ratio = 2.37
 tri_ratio = 1.22

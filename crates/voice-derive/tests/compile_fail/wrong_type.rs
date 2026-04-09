@@ -1,8 +1,8 @@
-use sonify_health_voice_derive::VoiceGenerate;
+use sonify_health_voice_derive::PatchGenerate;
 
-#[derive(VoiceGenerate)]
+#[derive(PatchGenerate)]
 struct Bad {
-  #[voice_param(order = 0, range = 0.0..1.0)]
+  #[patch_param(order = 0, range = 0.0..1.0)]
   a: f32,
 }
 

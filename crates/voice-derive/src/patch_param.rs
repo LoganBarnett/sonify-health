@@ -1,25 +1,25 @@
 use syn::{Expr, ExprLit, ExprRange, ExprUnary, Field, Lit, UnOp};
 
-/// A parsed `#[voice_param(order = N, range = LO..HI)]` field.
-pub struct VoiceField {
+/// A parsed `#[patch_param(order = N, range = LO..HI)]` field.
+pub struct PatchField {
   pub ident: syn::Ident,
   pub order: u32,
   pub range_lo: f64,
   pub range_hi: f64,
 }
 
-impl VoiceField {
+impl PatchField {
   /// Parse a struct field's attributes.  Returns `None` if
-  /// the field has no `voice_param` attribute.
+  /// the field has no `patch_param` attribute.
   pub fn from_field(field: &Field) -> syn::Result<Option<Self>> {
     let ident = field.ident.clone().ok_or_else(|| {
-      syn::Error::new_spanned(field, "voice_param requires named fields")
+      syn::Error::new_spanned(field, "patch_param requires named fields")
     })?;
 
     let attr = field
       .attrs
       .iter()
-      .find(|a| a.path().is_ident("voice_param"));
+      .find(|a| a.path().is_ident("patch_param"));
 
     let attr = match attr {
       Some(a) => a,
@@ -30,7 +30,7 @@ impl VoiceField {
     if !is_f64(&field.ty) {
       return Err(syn::Error::new_spanned(
         &field.ty,
-        "voice_param fields must be f64",
+        "patch_param fields must be f64",
       ));
     }
 
@@ -67,7 +67,7 @@ impl VoiceField {
     let range_hi = range_hi
       .ok_or_else(|| syn::Error::new_spanned(attr, "missing range end"))?;
 
-    Ok(Some(VoiceField {
+    Ok(Some(PatchField {
       ident,
       order,
       range_lo,

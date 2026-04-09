@@ -1,5 +1,5 @@
+use crate::patch::Patch;
 use crate::severity::Severity;
-use crate::voice::{BoopSpec, Voice};
 use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 use std::time::Duration;
@@ -39,28 +39,29 @@ fn gap_between(dur_a: f64, dur_b: f64, max_dur: f64) -> f64 {
 /// proportional gaps, the release tail, and echo decay.
 /// When `echo_mix > 0.0`, four echo bounces (at 0.3 feedback) are
 /// appended so the last repeat is audible before the slot ends.
-pub fn heartbeat_duration(
-  specs: &[BoopSpec],
-  attack_secs: f64,
-  release_secs: f64,
-  echo_delay: f64,
-  echo_mix: f64,
-) -> Duration {
-  if specs.is_empty() {
+///
+/// Shared timing params (attack, release, echo) are read from
+/// `patches[0]`; per-note duration from each patch.
+pub fn heartbeat_duration(patches: &[Patch]) -> Duration {
+  if patches.is_empty() {
     return Duration::ZERO;
   }
 
-  let max_dur = specs.iter().map(|s| s.duration).fold(0.0f64, f64::max);
+  let shared = &patches[0];
+  let attack_secs = shared.attack_ms / 1000.0;
+  let release_secs = shared.release_ms / 1000.0;
 
-  let attack_total = attack_secs * specs.len() as f64;
-  let boop_sum: f64 = specs.iter().map(|s| s.duration).sum();
-  let gap_sum: f64 = specs
+  let max_dur = patches.iter().map(|p| p.duration).fold(0.0f64, f64::max);
+
+  let attack_total = attack_secs * patches.len() as f64;
+  let boop_sum: f64 = patches.iter().map(|p| p.duration).sum();
+  let gap_sum: f64 = patches
     .windows(2)
     .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
     .sum();
 
-  let echo_tail = if echo_mix > 0.0 {
-    4.0 * echo_delay
+  let echo_tail = if shared.echo_mix > 0.0 {
+    4.0 * shared.echo_delay
   } else {
     0.0
   };
@@ -75,19 +76,17 @@ pub fn heartbeat_duration(
 /// decay, and safety margin.  Used for gap=0 drone looping so
 /// `replace()` fires while the last note is still sustaining,
 /// letting the crossfade overlap sound with sound.
-pub fn heartbeat_content_duration(
-  specs: &[BoopSpec],
-  attack_secs: f64,
-) -> Duration {
-  if specs.is_empty() {
+pub fn heartbeat_content_duration(patches: &[Patch]) -> Duration {
+  if patches.is_empty() {
     return Duration::ZERO;
   }
 
-  let max_dur = specs.iter().map(|s| s.duration).fold(0.0f64, f64::max);
+  let attack_secs = patches[0].attack_ms / 1000.0;
+  let max_dur = patches.iter().map(|p| p.duration).fold(0.0f64, f64::max);
 
-  let attack_total = attack_secs * specs.len() as f64;
-  let boop_sum: f64 = specs.iter().map(|s| s.duration).sum();
-  let gap_sum: f64 = specs
+  let attack_total = attack_secs * patches.len() as f64;
+  let boop_sum: f64 = patches.iter().map(|p| p.duration).sum();
+  let gap_sum: f64 = patches
     .windows(2)
     .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
     .sum();
@@ -114,11 +113,10 @@ struct BoopTiming {
 
 /// Build a complete heartbeat audio graph (no external volume).
 pub fn heartbeat_graph(
-  voice: &Voice,
+  patches: &[Patch],
   severities: &[Severity],
-  specs: &[BoopSpec],
 ) -> Box<dyn AudioUnit> {
-  heartbeat_graph_with_volume(voice, severities, specs, None)
+  heartbeat_graph_with_volume(patches, severities, None)
 }
 
 /// Build a heartbeat audio graph with optional external volume
@@ -127,64 +125,70 @@ pub fn heartbeat_graph(
 /// for dissonance, harshness via saw bleed-in, and a resonant
 /// lowpass filter.  The chirp onset sweep is preserved at all
 /// severity levels.
+///
+/// Shared synthesis params (waveform weights, reverb, pan, echo)
+/// are read from `patches[0]`; per-note params (`base_freq`,
+/// `duration`, `attack_ms`, `release_ms`, `sustain`) from each
+/// `patches[i]`.
 pub fn heartbeat_graph_with_volume(
-  voice: &Voice,
+  patches: &[Patch],
   severities: &[Severity],
-  specs: &[BoopSpec],
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
-  let count = Ord::min(specs.len(), severities.len());
-  let chirp_ratio = voice.chirp_ratio as f32;
-  let brightness = voice.brightness as f32;
-  let resonance = voice.resonance as f32;
-  let sub_mix = voice.sub_octave as f32;
-  let voice_amplitude = voice.amplitude as f32;
-  let drive = (voice.drive as f32).max(0.01);
+  let count = Ord::min(patches.len(), severities.len());
+  let shared = &patches[0];
+  let chirp_ratio = shared.chirp_ratio as f32;
+  let brightness = shared.brightness as f32;
+  let resonance = shared.resonance as f32;
+  let sub_mix = shared.sub_octave as f32;
+  let drive = (shared.drive as f32).max(0.01);
   let drive_norm = 1.0 / drive.tanh();
-  let noise_mix = voice.noise_mix as f32;
-  let crush_param = voice.crush as f32;
+  let noise_mix = shared.noise_mix as f32;
+  let crush_param = shared.crush as f32;
   let crush_levels = 2.0_f32.powf(1.0 + 15.0 * (1.0 - crush_param));
-  let downsample = voice.downsample as f32;
+  let downsample = shared.downsample as f32;
   let ds_rate = 100_000.0_f32 / 2.0_f32.powf(downsample * 8.0);
-  let vibrato_rate = voice.vibrato_rate;
-  let vibrato_depth = voice.vibrato_depth;
-  let tremolo_rate = voice.tremolo_rate;
-  let tremolo_depth = voice.tremolo_depth;
-  let fm_ratio = voice.fm_ratio as f32;
-  let fm_depth = voice.fm_depth as f32;
+  let vibrato_rate = shared.vibrato_rate;
+  let vibrato_depth = shared.vibrato_depth;
+  let tremolo_rate = shared.tremolo_rate;
+  let tremolo_depth = shared.tremolo_depth;
+  let fm_ratio = shared.fm_ratio as f32;
+  let fm_depth = shared.fm_depth as f32;
 
-  let total_ratio =
-    voice.sine_ratio + voice.tri_ratio + voice.saw_ratio + voice.square_ratio;
+  let total_ratio = shared.sine_ratio
+    + shared.tri_ratio
+    + shared.saw_ratio
+    + shared.square_ratio;
   let norm = if total_ratio > 0.0 {
     1.0 / total_ratio
   } else {
     1.0
   } as f32;
 
-  let sine_w = voice.sine_ratio as f32 * norm;
-  let tri_w = voice.tri_ratio as f32 * norm;
-  let saw_w = voice.saw_ratio as f32 * norm;
-  let square_w = voice.square_ratio as f32 * norm;
+  let sine_w = shared.sine_ratio as f32 * norm;
+  let tri_w = shared.tri_ratio as f32 * norm;
+  let saw_w = shared.saw_ratio as f32 * norm;
+  let square_w = shared.square_ratio as f32 * norm;
 
-  let max_dur = specs[..count]
+  let max_dur = patches[..count]
     .iter()
-    .map(|s| s.duration)
+    .map(|p| p.duration)
     .fold(0.0f64, f64::max);
 
   // Pre-compute start times and per-boop parameters.
   let mut timings = Vec::with_capacity(count);
   let mut t = 0.0f64;
   for i in 0..count {
+    let p = &patches[i];
     let profile = severities[i].profile();
     let detune_sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-    let freq = (specs[i].freq
-      * cents_to_ratio(profile.detune_cents * detune_sign))
-      as f32;
-    let amp = voice_amplitude * profile.amplitude as f32;
-    let dur = specs[i].duration as f32;
-    let attack = voice.attack_ms as f32 / 1000.0;
-    let release = voice.release_ms as f32 / 1000.0;
-    let sustain_level = voice.sustain as f32;
+    let freq =
+      (p.base_freq * cents_to_ratio(profile.detune_cents * detune_sign)) as f32;
+    let amp = p.amplitude as f32 * profile.amplitude as f32;
+    let dur = p.duration as f32;
+    let attack = p.attack_ms as f32 / 1000.0;
+    let release = p.release_ms as f32 / 1000.0;
+    let sustain_level = p.sustain as f32;
     let start = t as f32;
 
     timings.push(BoopTiming {
@@ -202,9 +206,9 @@ pub fn heartbeat_graph_with_volume(
       filter_q: profile.filter_q as f32 * resonance,
     });
 
-    t += (voice.attack_ms / 1000.0) + specs[i].duration;
+    t += (p.attack_ms / 1000.0) + p.duration;
     if i + 1 < count {
-      t += gap_between(specs[i].duration, specs[i + 1].duration, max_dur);
+      t += gap_between(p.duration, patches[i + 1].duration, max_dur);
     }
   }
 
@@ -346,12 +350,12 @@ pub fn heartbeat_graph_with_volume(
 
   let ext = match external_volume {
     Some(s) => s.clone(),
-    None => shared(1.0),
+    None => fundsp::prelude32::shared(1.0),
   };
   let ext_vol = var(&ext) >> follow(0.1);
 
-  let echo_delay = voice.echo_delay as f32;
-  let echo_mix = voice.echo_mix as f32;
+  let echo_delay = shared.echo_delay as f32;
+  let echo_mix = shared.echo_mix as f32;
 
   let waveform = (sine() * sine_w_env)
     & (triangle() * tri_w)
@@ -368,48 +372,45 @@ pub fn heartbeat_graph_with_volume(
   let with_echo =
     mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
   let stereo = with_echo
-    >> pan(voice.stereo_pan as f32)
-    >> reverb_stereo(0.3, 0.8, voice.reverb_mix as f32);
+    >> pan(shared.stereo_pan as f32)
+    >> reverb_stereo(0.3, 0.8, shared.reverb_mix as f32);
   Box::new(stereo)
 }
 
-/// Build an audio graph for a single boop at the given severity
-/// and duration.  Applies the same timbre model as the heartbeat
-/// graph: harshness crossfade and resonant lowpass filter.
-pub fn boop_graph(
-  voice: &Voice,
-  severity: Severity,
-  duration_secs: f64,
-) -> Box<dyn AudioUnit> {
+/// Build an audio graph for a single boop at the given severity.
+/// Duration and frequency come from the patch itself.  Applies
+/// the same timbre model as the heartbeat graph: harshness
+/// crossfade and resonant lowpass filter.
+pub fn boop_graph(patch: &Patch, severity: Severity) -> Box<dyn AudioUnit> {
   let profile = severity.profile();
-  let freq = (voice.base_freq * cents_to_ratio(profile.detune_cents)) as f32;
-  let amp = voice.amplitude as f32 * profile.amplitude as f32;
+  let freq = (patch.base_freq * cents_to_ratio(profile.detune_cents)) as f32;
+  let amp = patch.amplitude as f32 * profile.amplitude as f32;
   let harshness = profile.harshness as f32;
-  let attack = (voice.attack_ms / 1000.0) as f32;
-  let release = (voice.release_ms / 1000.0).min(duration_secs * 0.5) as f32;
-  let dur = duration_secs as f32;
+  let attack = (patch.attack_ms / 1000.0) as f32;
+  let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
+  let dur = patch.duration as f32;
 
   let total_ratio =
-    voice.sine_ratio + voice.tri_ratio + voice.saw_ratio + voice.square_ratio;
+    patch.sine_ratio + patch.tri_ratio + patch.saw_ratio + patch.square_ratio;
   let norm = if total_ratio > 0.0 {
     1.0 / total_ratio
   } else {
     1.0
   } as f32;
 
-  let sine_w = voice.sine_ratio as f32 * norm * (1.0 - harshness);
-  let tri_w = voice.tri_ratio as f32 * norm;
-  let saw_w = voice.saw_ratio as f32 * norm + harshness;
-  let square_w = voice.square_ratio as f32 * norm;
+  let sine_w = patch.sine_ratio as f32 * norm * (1.0 - harshness);
+  let tri_w = patch.tri_ratio as f32 * norm;
+  let saw_w = patch.saw_ratio as f32 * norm + harshness;
+  let square_w = patch.square_ratio as f32 * norm;
 
-  let drive = (voice.drive as f32).max(0.01);
+  let drive = (patch.drive as f32).max(0.01);
   let drive_norm = 1.0 / drive.tanh();
-  let noise_mix = voice.noise_mix as f32;
-  let crush_param = voice.crush as f32;
+  let noise_mix = patch.noise_mix as f32;
+  let crush_param = patch.crush as f32;
   let crush_levels = 2.0_f32.powf(1.0 + 15.0 * (1.0 - crush_param));
-  let fm_ratio = voice.fm_ratio as f32;
-  let fm_depth = voice.fm_depth as f32;
-  let downsample = voice.downsample as f32;
+  let fm_ratio = patch.fm_ratio as f32;
+  let fm_depth = patch.fm_depth as f32;
+  let downsample = patch.downsample as f32;
   let ds_rate = 100_000.0_f32 / 2.0_f32.powf(downsample * 8.0);
 
   let fm_freq = freq * fm_ratio;
@@ -435,17 +436,17 @@ pub fn boop_graph(
     & (triangle() * tri_w)
     & (saw() * saw_w)
     & (square() * square_w);
-  let sub_osc = (sub_freq_source >> sub_waveform) * voice.sub_octave as f32;
+  let sub_osc = (sub_freq_source >> sub_waveform) * patch.sub_octave as f32;
   let combined = main_osc + sub_osc;
 
   let cutoff = dc(
-    (freq * profile.filter_cutoff as f32 * voice.brightness as f32)
+    (freq * profile.filter_cutoff as f32 * patch.brightness as f32)
       .min(MAX_CUTOFF),
   );
   let q_val =
-    dc((profile.filter_q as f32 * voice.resonance as f32 * 0.2).min(0.95));
+    dc((profile.filter_q as f32 * patch.resonance as f32 * 0.2).min(0.95));
 
-  let sustain_level = voice.sustain as f32;
+  let sustain_level = patch.sustain as f32;
   let env = envelope(move |t: f32| {
     let level = if attack > 0.0 && t < attack {
       // Attack: ramp 0→1.
@@ -465,8 +466,8 @@ pub fn boop_graph(
     level * amp
   });
 
-  let echo_delay = voice.echo_delay as f32;
-  let echo_mix = voice.echo_mix as f32;
+  let echo_delay = patch.echo_delay as f32;
+  let echo_mix = patch.echo_mix as f32;
 
   let driven = combined
     >> (shape(Tanh(drive)) * drive_norm)
@@ -481,12 +482,17 @@ pub fn boop_graph(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::VoiceOverrides;
+  use crate::PatchOverrides;
+
+  /// Helper: create a patch with the given freq and duration.
+  fn test_patch(freq: f64, duration: f64) -> Patch {
+    Patch::from_hostname("test").with_note(freq, duration)
+  }
 
   #[test]
   fn boop_produces_sound() {
-    let voice = Voice::from_hostname("test");
-    let mut graph = boop_graph(&voice, Severity::Healthy, 0.5);
+    let patch = test_patch(440.0, 0.5);
+    let mut graph = boop_graph(&patch, Severity::Healthy);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -504,13 +510,13 @@ mod tests {
 
   #[test]
   fn severity_profiles_produce_equal_amplitude() {
-    let voice = Voice::from_hostname("test");
+    let patch = test_patch(440.0, 0.5);
 
-    let mut healthy = boop_graph(&voice, Severity::Healthy, 0.5);
+    let mut healthy = boop_graph(&patch, Severity::Healthy);
     healthy.set_sample_rate(44100.0);
     healthy.allocate();
 
-    let mut down = boop_graph(&voice, Severity::Down, 0.5);
+    let mut down = boop_graph(&patch, Severity::Down);
     down.set_sample_rate(44100.0);
     down.allocate();
 
@@ -533,21 +539,17 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_sums_correctly() {
-    let specs = vec![
-      BoopSpec {
-        freq: 440.0,
-        duration: 0.4,
-      },
-      BoopSpec {
-        freq: 550.0,
-        duration: 0.4,
-      },
-      BoopSpec {
-        freq: 660.0,
-        duration: 0.4,
-      },
-    ];
-    let dur = heartbeat_duration(&specs, 0.0, 0.15, 0.0, 0.0);
+    let base = Patch::from_hostname("test").with_overrides(&PatchOverrides {
+      attack_ms: Some(0.0),
+      release_ms: Some(150.0),
+      echo_mix: Some(0.0),
+      ..Default::default()
+    });
+    let patches: Vec<Patch> = [440.0, 550.0, 660.0]
+      .iter()
+      .map(|&f| base.clone().with_note(f, 0.4))
+      .collect();
+    let dur = heartbeat_duration(&patches);
     // 3 × 0.4 = 1.2 boop time, plus gaps, release, and 0.05 tail.
     assert!(
       dur.as_secs_f64() > 1.2,
@@ -558,16 +560,20 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_empty() {
-    assert_eq!(heartbeat_duration(&[], 0.0, 0.15, 0.0, 0.0), Duration::ZERO);
+    assert_eq!(heartbeat_duration(&[]), Duration::ZERO);
   }
 
   #[test]
   fn heartbeat_duration_single_boop() {
-    let specs = vec![BoopSpec {
-      freq: 440.0,
-      duration: 1.2,
-    }];
-    let dur = heartbeat_duration(&specs, 0.0, 0.15, 0.0, 0.0);
+    let patch = Patch::from_hostname("test")
+      .with_overrides(&PatchOverrides {
+        attack_ms: Some(0.0),
+        release_ms: Some(150.0),
+        echo_mix: Some(0.0),
+        ..Default::default()
+      })
+      .with_note(440.0, 1.2);
+    let dur = heartbeat_duration(&[patch]);
     // Single boop: 1.2 + 0.15 release + 0.05 tail, no gaps.
     assert!(
       (dur.as_secs_f64() - 1.4).abs() < 1e-10,
@@ -578,12 +584,25 @@ mod tests {
 
   #[test]
   fn heartbeat_duration_includes_echo_tail() {
-    let specs = vec![BoopSpec {
-      freq: 440.0,
-      duration: 1.0,
-    }];
-    let without_echo = heartbeat_duration(&specs, 0.0, 0.15, 0.3, 0.0);
-    let with_echo = heartbeat_duration(&specs, 0.0, 0.15, 0.3, 0.5);
+    let base = Patch::from_hostname("test").with_overrides(&PatchOverrides {
+      attack_ms: Some(0.0),
+      release_ms: Some(150.0),
+      echo_delay: Some(0.3),
+      ..Default::default()
+    });
+    let without_echo = heartbeat_duration(&[base
+      .clone()
+      .with_overrides(&PatchOverrides {
+        echo_mix: Some(0.0),
+        ..Default::default()
+      })
+      .with_note(440.0, 1.0)]);
+    let with_echo = heartbeat_duration(&[base
+      .with_overrides(&PatchOverrides {
+        echo_mix: Some(0.5),
+        ..Default::default()
+      })
+      .with_note(440.0, 1.0)]);
     // Echo adds 4 × echo_delay = 1.2 s.
     assert!(
       (with_echo.as_secs_f64() - without_echo.as_secs_f64() - 1.2).abs()
@@ -595,32 +614,18 @@ mod tests {
 
   #[test]
   fn heartbeat_graph_produces_sound() {
-    let voice = Voice::from_hostname("test");
-    let specs = vec![
-      BoopSpec {
-        freq: 440.0,
-        duration: 0.4,
-      },
-      BoopSpec {
-        freq: 550.0,
-        duration: 0.4,
-      },
-      BoopSpec {
-        freq: 660.0,
-        duration: 0.4,
-      },
-    ];
+    let base = Patch::from_hostname("test");
+    let patches: Vec<Patch> = [440.0, 550.0, 660.0]
+      .iter()
+      .map(|&f| base.clone().with_note(f, 0.4))
+      .collect();
     let severities = [Severity::Healthy, Severity::Degraded, Severity::Down];
-    let mut graph = heartbeat_graph(&voice, &severities, &specs);
+    let mut graph = heartbeat_graph(&patches, &severities);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
-    let attack_secs = voice.attack_ms / 1000.0;
-    let release_secs = voice.release_ms / 1000.0;
     let samples =
-      (heartbeat_duration(&specs, attack_secs, release_secs, 0.0, 0.0)
-        .as_secs_f32()
-        * 44100.0) as usize;
+      (heartbeat_duration(&patches).as_secs_f32() * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();
@@ -638,29 +643,12 @@ mod tests {
 
   #[test]
   fn heartbeat_graph_five_boops() {
-    let voice = Voice::from_hostname("test");
-    let specs = vec![
-      BoopSpec {
-        freq: 220.0,
-        duration: 0.24,
-      },
-      BoopSpec {
-        freq: 330.0,
-        duration: 0.24,
-      },
-      BoopSpec {
-        freq: 440.0,
-        duration: 0.24,
-      },
-      BoopSpec {
-        freq: 550.0,
-        duration: 0.24,
-      },
-      BoopSpec {
-        freq: 660.0,
-        duration: 0.24,
-      },
-    ];
+    let base = Patch::from_hostname("test");
+    let freqs = [220.0, 330.0, 440.0, 550.0, 660.0];
+    let patches: Vec<Patch> = freqs
+      .iter()
+      .map(|&f| base.clone().with_note(f, 0.24))
+      .collect();
     let severities = [
       Severity::Healthy,
       Severity::Degraded,
@@ -668,16 +656,12 @@ mod tests {
       Severity::Healthy,
       Severity::Degraded,
     ];
-    let mut graph = heartbeat_graph(&voice, &severities, &specs);
+    let mut graph = heartbeat_graph(&patches, &severities);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
-    let attack_secs = voice.attack_ms / 1000.0;
-    let release_secs = voice.release_ms / 1000.0;
     let samples =
-      (heartbeat_duration(&specs, attack_secs, release_secs, 0.0, 0.0)
-        .as_secs_f32()
-        * 44100.0) as usize;
+      (heartbeat_duration(&patches).as_secs_f32() * 44100.0) as usize;
     let peak = (0..samples)
       .map(|_| {
         let (l, r) = graph.get_stereo();
@@ -695,28 +679,26 @@ mod tests {
 
   #[test]
   fn sustain_below_one_lowers_body_amplitude() {
-    let full = Voice::from_hostname("test").with_overrides(&VoiceOverrides {
-      sustain: Some(1.0),
-      attack_ms: Some(10.0),
-      release_ms: Some(50.0),
-      ..Default::default()
-    });
-    let half = full.clone().with_overrides(&VoiceOverrides {
+    let full = Patch::from_hostname("test")
+      .with_overrides(&PatchOverrides {
+        sustain: Some(1.0),
+        attack_ms: Some(10.0),
+        release_ms: Some(50.0),
+        ..Default::default()
+      })
+      .with_note(440.0, 0.3);
+    let half = full.clone().with_overrides(&PatchOverrides {
       sustain: Some(0.5),
       ..Default::default()
     });
 
-    let spec = BoopSpec {
-      freq: 440.0,
-      duration: 0.3,
-    };
     let sev = Severity::Healthy;
 
-    let mut g_full = boop_graph(&full, sev, spec.duration);
+    let mut g_full = boop_graph(&full, sev);
     g_full.set_sample_rate(44100.0);
     g_full.allocate();
 
-    let mut g_half = boop_graph(&half, sev, spec.duration);
+    let mut g_half = boop_graph(&half, sev);
     g_half.set_sample_rate(44100.0);
     g_half.allocate();
 

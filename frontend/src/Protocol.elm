@@ -4,13 +4,13 @@ module Protocol exposing
     , CheckInfo
     , CheckLogEntry
     , DroneInfo
+    , PatchParam
     , ServerMsg(..)
-    , VoiceParam
     , decodeServerMsg
     , encodeClearBoopPin
     , encodeClearDronePin
     , encodeClearOverride
-    , encodeExportVoice
+    , encodeExportPatch
     , encodeGetState
     , encodeImportConfig
     , encodeLockDrone
@@ -32,7 +32,7 @@ module Protocol exposing
     , encodeSetHeartbeatVolume
     , encodeSetMasterVolume
     , encodeSetMuted
-    , encodeSetVoiceParam
+    , encodeSetPatchParam
     , encodeTriggerHeartbeat
     , encodeUnlockAll
     , encodeUnlockDrone
@@ -43,7 +43,7 @@ import Json.Decode as D
 import Json.Encode as E
 
 
-type alias VoiceParam =
+type alias PatchParam =
     { name : String
     , description : String
     , value : Float
@@ -68,11 +68,10 @@ type alias DroneInfo =
     , repeatCurve : Float
     , phraseGap : Float
     , interpCurve : Float
-    , baseFreq : Maybe Float
     , boops : Int
     , overridden : Bool
-    , voiceLo : List VoiceParam
-    , voiceHi : List VoiceParam
+    , patchLo : List PatchParam
+    , patchHi : List PatchParam
     , lockedParamsLo : List String
     , lockedParamsHi : List String
     , droneSpecs : List BoopSpecInfo
@@ -112,7 +111,7 @@ type alias BoopSpecRanges =
 
 type ServerMsg
     = StateMsg
-        { voice : List VoiceParam
+        { patch : List PatchParam
         , muted : Bool
         , masterVolume : Float
         , heartbeatVolume : Float
@@ -131,13 +130,13 @@ type ServerMsg
     | OverrideChanged String Int (Maybe String) Bool
     | HeartbeatLoopChanged Bool
     | BoopCountChanged Int
-    | DroneConfigChanged Int (Maybe Float) Int
+    | DroneConfigChanged Int Int
     | DroneRepeatRateChanged Int Float
     | DroneRepeatCurveChanged Int Float
     | DronePhraseGapChanged Int Float
     | DroneInterpCurveChanged Int Float
     | CheckLog CheckLogEntry
-    | VoiceExport { toml : String, json : String, nix : String }
+    | PatchExport { toml : String, json : String, nix : String }
     | LockedParamsChanged String (Maybe Int) (List String)
     | LockedDronesChanged (List Int)
     | BoopSpecsChanged (List BoopSpecInfo)
@@ -198,8 +197,8 @@ serverMsgDecoder =
                     "check_log" ->
                         checkLogDecoder
 
-                    "voice_export" ->
-                        voiceExportDecoder
+                    "patch_export" ->
+                        patchExportDecoder
 
                     "locked_params_changed" ->
                         lockedParamsChangedDecoder
@@ -234,7 +233,7 @@ andMap =
 
 stateDecoder : D.Decoder ServerMsg
 stateDecoder =
-    D.field "voice_params" (D.list voiceParamMetaDecoder)
+    D.field "patch_params" (D.list patchParamMetaDecoder)
         |> D.andThen stateDecoderWithMeta
 
 
@@ -243,10 +242,10 @@ stateDecoderWithMeta :
     -> D.Decoder ServerMsg
 stateDecoderWithMeta metas =
     D.map8
-        (\voice muted masterVol hbVol hbLoop boopCount checks drones ->
+        (\patch muted masterVol hbVol hbLoop boopCount checks drones ->
             \locked lockedDrones boopSpecs ranges ->
                 StateMsg
-                    { voice = voice
+                    { patch = patch
                     , muted = muted
                     , masterVolume = masterVol
                     , heartbeatVolume = hbVol
@@ -260,8 +259,8 @@ stateDecoderWithMeta metas =
                     , boopSpecRanges = ranges
                     }
         )
-        (D.field "voice" voiceDecoder
-            |> D.map (\vals -> mergeVoiceParams vals metas)
+        (D.field "patch" patchDecoder
+            |> D.map (\vals -> mergePatchParams vals metas)
         )
         (D.field "muted" D.bool)
         (D.field "master_volume" D.float)
@@ -276,13 +275,13 @@ stateDecoderWithMeta metas =
         |> andMap (D.field "boop_spec_ranges" boopSpecRangesDecoder)
 
 
-voiceDecoder : D.Decoder (List ( String, Float ))
-voiceDecoder =
+patchDecoder : D.Decoder (List ( String, Float ))
+patchDecoder =
     D.keyValuePairs D.float
 
 
-voiceParamMetaDecoder : D.Decoder { name : String, description : String, min : Float, max : Float, step : Float }
-voiceParamMetaDecoder =
+patchParamMetaDecoder : D.Decoder { name : String, description : String, min : Float, max : Float, step : Float }
+patchParamMetaDecoder =
     D.map5 (\n d mn mx s -> { name = n, description = d, min = mn, max = mx, step = s })
         (D.field "name" D.string)
         (D.field "description" D.string)
@@ -291,11 +290,11 @@ voiceParamMetaDecoder =
         (D.field "step" D.float)
 
 
-mergeVoiceParams :
+mergePatchParams :
     List ( String, Float )
     -> List { name : String, description : String, min : Float, max : Float, step : Float }
-    -> List VoiceParam
-mergeVoiceParams values metas =
+    -> List PatchParam
+mergePatchParams values metas =
     let
         lookup name =
             List.filterMap
@@ -343,16 +342,15 @@ droneInfoDecoderWithMeta metas =
         |> andMap (D.field "repeat_curve" D.float)
         |> andMap (D.field "phrase_gap" D.float)
         |> andMap (D.field "interp_curve" D.float)
-        |> andMap (D.maybe (D.field "base_freq" D.float))
         |> andMap (D.field "boops" D.int)
         |> andMap (D.field "overridden" D.bool)
         |> andMap
-            (D.field "voice_lo" voiceDecoder
-                |> D.map (\vals -> mergeVoiceParams vals metas)
+            (D.field "patch_lo" patchDecoder
+                |> D.map (\vals -> mergePatchParams vals metas)
             )
         |> andMap
-            (D.field "voice_hi" voiceDecoder
-                |> D.map (\vals -> mergeVoiceParams vals metas)
+            (D.field "patch_hi" patchDecoder
+                |> D.map (\vals -> mergePatchParams vals metas)
             )
         |> andMap (D.field "locked_params_lo" (D.list D.string))
         |> andMap (D.field "locked_params_hi" (D.list D.string))
@@ -430,9 +428,8 @@ boopCountChangedDecoder =
 
 droneConfigChangedDecoder : D.Decoder ServerMsg
 droneConfigChangedDecoder =
-    D.map3 DroneConfigChanged
+    D.map2 DroneConfigChanged
         (D.field "index" D.int)
-        (D.maybe (D.field "base_freq" D.float))
         (D.field "boops" D.int)
 
 
@@ -464,10 +461,10 @@ droneInterpCurveChangedDecoder =
         (D.field "curve" D.float)
 
 
-voiceExportDecoder : D.Decoder ServerMsg
-voiceExportDecoder =
+patchExportDecoder : D.Decoder ServerMsg
+patchExportDecoder =
     D.map3
-        (\t j n -> VoiceExport { toml = t, json = j, nix = n })
+        (\t j n -> PatchExport { toml = t, json = j, nix = n })
         (D.field "toml" D.string)
         (D.field "json" D.string)
         (D.field "nix" D.string)
@@ -532,11 +529,11 @@ encodeGetState =
         |> E.encode 0
 
 
-encodeSetVoiceParam : String -> Maybe Int -> String -> Float -> String
-encodeSetVoiceParam layer maybeIndex param value =
+encodeSetPatchParam : String -> Maybe Int -> String -> Float -> String
+encodeSetPatchParam layer maybeIndex param value =
     let
         base =
-            [ ( "type", E.string "set_voice_param" )
+            [ ( "type", E.string "set_patch_param" )
             , ( "layer", E.string layer )
             , ( "param", E.string param )
             , ( "value", E.float value )
@@ -713,8 +710,8 @@ encodeSetDroneBoops index boops =
         |> E.encode 0
 
 
-encodeExportVoice : String
-encodeExportVoice =
+encodeExportPatch : String
+encodeExportPatch =
     E.object [ ( "type", E.string "export_toml" ) ]
         |> E.encode 0
 

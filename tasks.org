@@ -76,14 +76,14 @@ severity.  Creates chorus-like thickness on healthy tones.
 User-facing offset added to severity-driven harshness.  Lets user push healthy
 tones buzzier or pull down tones smoother.
 
-* TODO Add sustain parameter (ADSR envelope)
+* DONE Add sustain parameter (ADSR envelope)
 Add a =sustain= field to =Voice= (0.0–1.0, default 1.0) for a proper ADSR
 envelope: Attack → Decay → Sustain (level) → Release.  Sustain = 1.0 behaves
 like today (no decay stage).  Requires updating the envelope closure in
 =heartbeat.rs= and =boop_graph=, the =VoiceOverrides= struct, CLI args, config
 parsing, frontend, and all serialisation paths.
 
-* TODO Roll frequency into Voice / rename Voice
+* DONE Roll frequency into Voice / rename Voice
 With lo/hi profiles the frequency should interpolate like every other voice
 parameter.  Currently =base_freq= lives on =Voice= but actual note frequencies
 are generated separately in =BoopSpec= and overridden via

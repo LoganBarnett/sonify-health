@@ -1,4 +1,4 @@
-error: duplicate voice_param order 0: already used by `a`
+error: duplicate patch_param order 0: already used by `a`
  --> tests/compile_fail/duplicate_order.rs:8:3
   |
 8 |   b: f64,

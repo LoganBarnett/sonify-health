@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use sonify_health_lib::{
-  check::HeartbeatCheckConfig, timing::TimingConfig, BoopSpec,
-  DroneMetricConfig, LogFormat, LogLevel, Voice, VoiceOverrides,
+  check::HeartbeatCheckConfig, timing::TimingConfig, DroneMetricConfig,
+  LogFormat, LogLevel, NoteSpec, Patch, PatchOverrides,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,14 +52,14 @@ pub struct OidcConfig {
 }
 
 /// A drone profile as it appears in the config file under
-/// `[drone_profiles.<name>]`, containing `lo` and `hi` voice
+/// `[drone_profiles.<name>]`, containing `lo` and `hi` patch
 /// overrides for metric-driven interpolation.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct DroneProfileRaw {
   #[serde(default)]
-  pub lo: VoiceOverrides,
+  pub lo: PatchOverrides,
   #[serde(default)]
-  pub hi: VoiceOverrides,
+  pub hi: PatchOverrides,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -69,11 +69,11 @@ pub(crate) struct ConfigFileRaw {
   listen: Option<String>,
   audio_device: Option<String>,
   frontend_path: Option<PathBuf>,
-  voice: Option<VoiceOverrides>,
+  patch: Option<PatchOverrides>,
   heartbeat: Option<HeartbeatSectionRaw>,
   drone: Option<DroneSectionRaw>,
   drone_profiles: Option<HashMap<String, DroneProfileRaw>>,
-  drone_notes: Option<HashMap<String, Vec<NoteSpec>>>,
+  drone_notes: Option<HashMap<String, Vec<RawNoteSpec>>>,
   oidc: Option<OidcSectionRaw>,
 }
 
@@ -92,14 +92,14 @@ struct HeartbeatSectionRaw {
   #[serde(default)]
   checks: Vec<HeartbeatCheckConfig>,
   #[serde(default)]
-  notes: Vec<NoteSpec>,
-  voice: Option<VoiceOverrides>,
+  notes: Vec<RawNoteSpec>,
+  patch: Option<PatchOverrides>,
 }
 
 /// A note specification as it appears in the config file under
 /// `[[heartbeat.notes]]` or `[[drone_notes.<name>]]`.
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct NoteSpec {
+struct RawNoteSpec {
   freq: f64,
   duration: f64,
 }
@@ -134,7 +134,7 @@ pub struct Config {
   pub listen_address: ListenerAddress,
   pub audio_device: Option<String>,
   pub frontend_path: PathBuf,
-  voice_overrides: VoiceOverrides,
+  patch_overrides: PatchOverrides,
   pub daemon: DaemonConfig,
   pub oidc: Option<OidcConfig>,
 }
@@ -144,21 +144,21 @@ pub struct Config {
 pub struct DaemonConfig {
   pub timing: TimingConfig,
   pub heartbeat_checks: Vec<HeartbeatCheckConfig>,
-  pub heartbeat_notes: Vec<BoopSpec>,
+  pub heartbeat_notes: Vec<NoteSpec>,
   pub drone_poll_interval_secs: f64,
   pub drone_metrics: Vec<DroneMetricConfig>,
-  /// Voice overrides from `[heartbeat.voice]`, applied on top of the
-  /// base voice (hostname + `[voice]`).
-  pub heartbeat_voice_overrides: Option<VoiceOverrides>,
+  /// Patch overrides from `[heartbeat.patch]`, applied on top of the
+  /// base patch (hostname + `[patch]`).
+  pub heartbeat_patch_overrides: Option<PatchOverrides>,
   /// Per-drone profile overrides from `[drone_profiles.<name>]`,
-  /// keyed by metric name.  Each entry holds (lo, hi) voice
+  /// keyed by metric name.  Each entry holds (lo, hi) patch
   /// overrides for metric-driven interpolation.
   pub drone_profile_overrides:
-    HashMap<String, (VoiceOverrides, VoiceOverrides)>,
+    HashMap<String, (PatchOverrides, PatchOverrides)>,
   /// Per-drone note specs from `[[drone_notes.<name>]]`, keyed by
   /// metric name.  When present, these override algorithmic
   /// generation and start pinned.
-  pub drone_notes: HashMap<String, Vec<BoopSpec>>,
+  pub drone_notes: HashMap<String, Vec<NoteSpec>>,
 }
 
 impl Default for DaemonConfig {
@@ -169,7 +169,7 @@ impl Default for DaemonConfig {
       heartbeat_notes: Vec::new(),
       drone_poll_interval_secs: 5.0,
       drone_metrics: Vec::new(),
-      heartbeat_voice_overrides: None,
+      heartbeat_patch_overrides: None,
       drone_profile_overrides: HashMap::new(),
       drone_notes: HashMap::new(),
     }
@@ -233,7 +233,7 @@ impl Config {
 
     let drone_profile_overrides: HashMap<
       String,
-      (VoiceOverrides, VoiceOverrides),
+      (PatchOverrides, PatchOverrides),
     > = file
       .drone_profiles
       .unwrap_or_default()
@@ -241,14 +241,14 @@ impl Config {
       .map(|(name, p)| (name, (p.lo, p.hi)))
       .collect();
 
-    let drone_notes: HashMap<String, Vec<BoopSpec>> = file
+    let drone_notes: HashMap<String, Vec<NoteSpec>> = file
       .drone_notes
       .unwrap_or_default()
       .into_iter()
       .map(|(name, specs)| {
         let boops = specs
           .iter()
-          .map(|n| BoopSpec {
+          .map(|n| NoteSpec {
             freq: n.freq,
             duration: n.duration,
           })
@@ -263,7 +263,7 @@ impl Config {
         let heartbeat_notes = hb
           .notes
           .iter()
-          .map(|n| BoopSpec {
+          .map(|n| NoteSpec {
             freq: n.freq,
             duration: n.duration,
           })
@@ -274,7 +274,7 @@ impl Config {
           heartbeat_notes,
           drone_poll_interval_secs,
           drone_metrics: drone_metrics.clone(),
-          heartbeat_voice_overrides: hb.voice,
+          heartbeat_patch_overrides: hb.patch,
           drone_profile_overrides: drone_profile_overrides.clone(),
           drone_notes: drone_notes.clone(),
         }
@@ -354,7 +354,7 @@ impl Config {
       listen_address,
       audio_device: file.audio_device,
       frontend_path,
-      voice_overrides: file.voice.unwrap_or_default(),
+      patch_overrides: file.patch.unwrap_or_default(),
       daemon,
       oidc,
     })
@@ -362,14 +362,14 @@ impl Config {
 
   /// Resolve the machine's voice: hostname-derived defaults with any
   /// configured overrides applied.
-  pub fn voice(&self) -> Voice {
-    Voice::from_hostname(&gethostname::gethostname().to_string_lossy())
-      .with_overrides(&self.voice_overrides)
+  pub fn patch(&self) -> Patch {
+    Patch::from_hostname(&gethostname::gethostname().to_string_lossy())
+      .with_overrides(&self.patch_overrides)
   }
 
-  /// Return the config file's voice overrides.
-  pub fn voice_overrides_ref(&self) -> &VoiceOverrides {
-    &self.voice_overrides
+  /// Return the config file's patch overrides.
+  pub fn patch_overrides_ref(&self) -> &PatchOverrides {
+    &self.patch_overrides
   }
 }
 
@@ -409,25 +409,22 @@ mod tests {
     assert_eq!(drone.metrics.len(), 2);
     assert_eq!(drone.metrics[0].name, "gpu");
     assert_eq!(drone.metrics[1].name, "mem");
-    assert_eq!(drone.metrics[0].base_freq, None);
     assert_eq!(drone.metrics[0].boops, None);
   }
 
   #[test]
-  fn drone_base_freq_and_boops_parse() {
+  fn drone_boops_parse() {
     let toml = r#"
       [drone]
       [[drone.metrics]]
       name = "cpu"
       command = "echo 0.5"
       result_mode = "stdout"
-      base_freq = 220.0
       boops = 3
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
     let drone = raw.drone.unwrap();
-    assert_eq!(drone.metrics[0].base_freq, Some(220.0));
     assert_eq!(drone.metrics[0].boops, Some(3));
   }
 
@@ -469,19 +466,19 @@ mod tests {
   }
 
   #[test]
-  fn heartbeat_voice_section_parses() {
+  fn heartbeat_patch_section_parses() {
     let toml = r#"
-      [heartbeat.voice]
+      [heartbeat.patch]
       base_freq = 440.0
       sine_ratio = 1.5
       amplitude = 0.3
     "#;
 
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    let voice = raw.heartbeat.unwrap().voice.unwrap();
-    assert_eq!(voice.base_freq, Some(440.0));
-    assert_eq!(voice.sine_ratio, Some(1.5));
-    assert_eq!(voice.amplitude, Some(0.3));
+    let patch = raw.heartbeat.unwrap().patch.unwrap();
+    assert_eq!(patch.base_freq, Some(440.0));
+    assert_eq!(patch.sine_ratio, Some(1.5));
+    assert_eq!(patch.amplitude, Some(0.3));
   }
 
   #[test]
@@ -544,20 +541,20 @@ mod tests {
   }
 
   /// The exported TOML format must round-trip through config loading.
-  /// `format_toml` produces `[heartbeat.voice]` and
+  /// `format_toml` produces `[heartbeat.patch]` and
   /// `[drone_profiles.<name>.lo/hi]` sections; these must be parsed
   /// by `ConfigFileRaw` so users can paste an export into a config
   /// file.
   #[test]
   fn export_toml_round_trips_through_config_parser() {
-    let voice = Voice::from_hostname("test");
-    let drone_lo = Voice::from_hostname("drone-lo");
-    let drone_hi = Voice::from_hostname("drone-hi");
+    let patch = Patch::from_hostname("test");
+    let drone_lo = Patch::from_hostname("drone-lo");
+    let drone_hi = Patch::from_hostname("drone-hi");
 
-    // Simulate what format_toml produces: heartbeat voice, notes,
+    // Simulate what format_toml produces: heartbeat patch, notes,
     // and drone profiles.
     let exported = format!(
-      r#"[heartbeat.voice]
+      r#"[heartbeat.patch]
 base_freq = {hb_base}
 sine_ratio = {hb_sine}
 tri_ratio = {hb_tri}
@@ -605,26 +602,26 @@ base_freq = {hi_base}
 sine_ratio = {hi_sine}
 amplitude = {hi_amp}
 "#,
-      hb_base = voice.base_freq,
-      hb_sine = voice.sine_ratio,
-      hb_tri = voice.tri_ratio,
-      hb_saw = voice.saw_ratio,
-      hb_attack = voice.attack_ms,
-      hb_release = voice.release_ms,
-      hb_chirp = voice.chirp_ratio,
-      hb_pan = voice.stereo_pan,
-      hb_reverb = voice.reverb_mix,
-      hb_seed = voice.note_seed,
-      hb_echo_delay = voice.echo_delay,
-      hb_echo_mix = voice.echo_mix,
-      hb_brightness = voice.brightness,
-      hb_resonance = voice.resonance,
-      hb_sub = voice.sub_octave,
-      hb_vib_rate = voice.vibrato_rate,
-      hb_vib_depth = voice.vibrato_depth,
-      hb_trem_rate = voice.tremolo_rate,
-      hb_trem_depth = voice.tremolo_depth,
-      hb_amp = voice.amplitude,
+      hb_base = patch.base_freq,
+      hb_sine = patch.sine_ratio,
+      hb_tri = patch.tri_ratio,
+      hb_saw = patch.saw_ratio,
+      hb_attack = patch.attack_ms,
+      hb_release = patch.release_ms,
+      hb_chirp = patch.chirp_ratio,
+      hb_pan = patch.stereo_pan,
+      hb_reverb = patch.reverb_mix,
+      hb_seed = patch.note_seed,
+      hb_echo_delay = patch.echo_delay,
+      hb_echo_mix = patch.echo_mix,
+      hb_brightness = patch.brightness,
+      hb_resonance = patch.resonance,
+      hb_sub = patch.sub_octave,
+      hb_vib_rate = patch.vibrato_rate,
+      hb_vib_depth = patch.vibrato_depth,
+      hb_trem_rate = patch.tremolo_rate,
+      hb_trem_depth = patch.tremolo_depth,
+      hb_amp = patch.amplitude,
       lo_base = drone_lo.base_freq,
       lo_sine = drone_lo.sine_ratio,
       lo_amp = drone_lo.amplitude,
@@ -636,20 +633,20 @@ amplitude = {hi_amp}
     let raw: ConfigFileRaw = toml::from_str(&exported)
       .expect("Exported TOML must parse as ConfigFileRaw");
 
-    // Heartbeat voice params should survive.
-    let hb_voice = raw
+    // Heartbeat patch params should survive.
+    let hb_patch = raw
       .heartbeat
       .as_ref()
       .expect("Export should produce a [heartbeat] section")
-      .voice
+      .patch
       .as_ref()
-      .expect("Export should produce a [heartbeat.voice] section");
+      .expect("Export should produce a [heartbeat.patch] section");
     assert!(
-      (hb_voice.base_freq.unwrap() - voice.base_freq).abs() < f64::EPSILON,
+      (hb_patch.base_freq.unwrap() - patch.base_freq).abs() < f64::EPSILON,
       "Heartbeat base_freq did not round-trip",
     );
     assert!(
-      (hb_voice.amplitude.unwrap() - voice.amplitude).abs() < f64::EPSILON,
+      (hb_patch.amplitude.unwrap() - patch.amplitude).abs() < f64::EPSILON,
       "Heartbeat amplitude did not round-trip",
     );
 
@@ -690,7 +687,7 @@ amplitude = {hi_amp}
   }
 
   /// The example config files must parse without error, including
-  /// their `[heartbeat.voice]` and `[drone_voices.*]` sections.
+  /// their `[heartbeat.patch]` and `[drone_profiles.*]` sections.
   #[test]
   fn example_configs_parse() {
     let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -708,15 +705,15 @@ amplitude = {hi_amp}
         let raw: ConfigFileRaw = toml::from_str(&contents)
           .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 
-        // If the example has [heartbeat.voice], it must parse.
-        if contents.contains("[heartbeat.voice]") {
+        // If the example has [heartbeat.patch], it must parse.
+        if contents.contains("[heartbeat.patch]") {
           assert!(
             raw
               .heartbeat
               .as_ref()
-              .and_then(|hb| hb.voice.as_ref())
+              .and_then(|hb| hb.patch.as_ref())
               .is_some(),
-            "{}: [heartbeat.voice] should parse",
+            "{}: [heartbeat.patch] should parse",
             path.display()
           );
         }

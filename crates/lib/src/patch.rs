@@ -2,127 +2,132 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256StarStar;
 use sha2::{Digest, Sha256};
-use sonify_health_voice_derive::VoiceGenerate;
+use sonify_health_voice_derive::PatchGenerate;
 use std::fmt;
 use tracing::debug;
 
-/// Voice parameters derived deterministically from a hostname.
+/// Patch parameters derived deterministically from a hostname.
 ///
 /// Each parameter is drawn from a hostname-seeded PRNG in a fixed
 /// order.  The draw order is a contract: appending new parameters
 /// at the end is safe, but inserting between existing draws would
-/// change all subsequent voices.
+/// change all subsequent patches.
 ///
-/// The `VoiceGenerate` derive macro enforces:
+/// The `PatchGenerate` derive macro enforces:
 /// - Contiguous 0..N order values (no gaps).
 /// - No duplicate order values.
 /// - All annotated fields must be `f64`.
-#[derive(Debug, Clone, VoiceGenerate)]
-pub struct Voice {
-  #[voice_param(order = 0, range = 100.0..12000.0)]
+#[derive(Debug, Clone, PatchGenerate)]
+pub struct Patch {
+  #[patch_param(order = 0, range = 100.0..12000.0)]
   pub base_freq: f64,
 
-  #[voice_param(order = 1, range = 0.0..1.0)]
+  #[patch_param(order = 1, range = 0.0..1.0)]
   pub sine_ratio: f64,
 
-  #[voice_param(order = 2, range = 0.0..1.0)]
+  #[patch_param(order = 2, range = 0.0..1.0)]
   pub tri_ratio: f64,
 
-  #[voice_param(order = 3, range = 0.0..1.0)]
+  #[patch_param(order = 3, range = 0.0..1.0)]
   pub saw_ratio: f64,
 
-  #[voice_param(order = 4, range = 0.0..500.0)]
+  #[patch_param(order = 4, range = 0.0..500.0)]
   pub attack_ms: f64,
 
-  #[voice_param(order = 5, range = 0.0..1000.0)]
+  #[patch_param(order = 5, range = 0.0..1000.0)]
   pub release_ms: f64,
 
-  #[voice_param(order = 6, range = 0.5..4.0)]
+  #[patch_param(order = 6, range = 0.5..4.0)]
   pub chirp_ratio: f64,
 
-  #[voice_param(order = 7, range = -1.0..1.0)]
+  #[patch_param(order = 7, range = -1.0..1.0)]
   pub stereo_pan: f64,
 
-  #[voice_param(order = 8, range = 0.0..1.0)]
+  #[patch_param(order = 8, range = 0.0..1.0)]
   pub reverb_mix: f64,
 
-  #[voice_param(order = 9, range = 0.0..1.0)]
+  #[patch_param(order = 9, range = 0.0..1.0)]
   pub note_seed: f64,
 
-  #[voice_param(order = 10, range = 0.01..1.0)]
+  #[patch_param(order = 10, range = 0.01..1.0)]
   pub echo_delay: f64,
 
-  #[voice_param(order = 11, range = 0.0..1.0)]
+  #[patch_param(order = 11, range = 0.0..1.0)]
   pub echo_mix: f64,
 
-  #[voice_param(order = 12, range = 0.3..1.0)]
+  #[patch_param(order = 12, range = 0.3..1.0)]
   pub brightness: f64,
 
-  #[voice_param(order = 13, range = 0.2..2.0)]
+  #[patch_param(order = 13, range = 0.2..2.0)]
   pub resonance: f64,
 
-  #[voice_param(order = 14, range = 0.0..0.6)]
+  #[patch_param(order = 14, range = 0.0..0.6)]
   pub sub_octave: f64,
 
-  #[voice_param(order = 15, range = 0.0..20.0)]
+  #[patch_param(order = 15, range = 0.0..20.0)]
   pub vibrato_rate: f64,
 
-  #[voice_param(order = 16, range = 0.0..1.0)]
+  #[patch_param(order = 16, range = 0.0..1.0)]
   pub vibrato_depth: f64,
 
-  #[voice_param(order = 17, range = 0.0..20.0)]
+  #[patch_param(order = 17, range = 0.0..20.0)]
   pub tremolo_rate: f64,
 
-  #[voice_param(order = 18, range = 0.0..1.0)]
+  #[patch_param(order = 18, range = 0.0..1.0)]
   pub tremolo_depth: f64,
 
-  #[voice_param(order = 19, range = 0.1..0.5)]
+  #[patch_param(order = 19, range = 0.1..0.5)]
   pub amplitude: f64,
 
-  #[voice_param(order = 20, range = 0.0..1.0)]
+  #[patch_param(order = 20, range = 0.0..1.0)]
   pub square_ratio: f64,
 
-  #[voice_param(order = 21, range = 0.5..2.0)]
+  #[patch_param(order = 21, range = 0.5..2.0)]
   pub drive: f64,
 
-  #[voice_param(order = 22, range = 0.0..0.03)]
+  #[patch_param(order = 22, range = 0.0..0.03)]
   pub noise_mix: f64,
 
-  #[voice_param(order = 23, range = 0.0..0.01)]
+  #[patch_param(order = 23, range = 0.0..0.01)]
   pub crush: f64,
 
-  #[voice_param(order = 24, range = 0.0..0.1)]
+  #[patch_param(order = 24, range = 0.0..0.1)]
   pub fm_ratio: f64,
 
-  #[voice_param(order = 25, range = 0.0..0.1)]
+  #[patch_param(order = 25, range = 0.0..0.1)]
   pub fm_depth: f64,
 
-  #[voice_param(order = 26, range = 0.0..0.01)]
+  #[patch_param(order = 26, range = 0.0..0.01)]
   pub downsample: f64,
 
-  #[voice_param(order = 27, range = 0.0..1.0)]
+  #[patch_param(order = 27, range = 0.0..1.0)]
   pub sustain: f64,
+
+  /// Per-note duration in seconds.  Not a `#[patch_param]` — set
+  /// by `with_note()` or `heartbeat_notes()`/`drone_notes()`,
+  /// defaulting to 0.0 from `from_hostname`.
+  pub duration: f64,
 }
 
-/// Per-boop specification: frequency and duration.
+/// Lightweight serialisation struct for config and wire formats.
 #[derive(Debug, Clone)]
-pub struct BoopSpec {
+pub struct NoteSpec {
   pub freq: f64,
   pub duration: f64,
 }
 
-impl Voice {
-  /// Derive voice from the current machine's hostname.
+impl Patch {
+  /// Derive patch from the current machine's hostname.
   pub fn from_current_host() -> Self {
     Self::from_hostname(&gethostname::gethostname().to_string_lossy())
   }
 
-  /// Linearly interpolate every field between two voices.  The
+  /// Linearly interpolate every field between two patches.  The
   /// parameter `t` is clamped to 0.0..=1.0, where 0.0 yields `lo`
   /// and 1.0 yields `hi`.
-  pub fn lerp(lo: &Voice, hi: &Voice, t: f64) -> Voice {
+  pub fn lerp(lo: &Patch, hi: &Patch, t: f64) -> Patch {
     let t = t.clamp(0.0, 1.0);
-    Voice {
+    Patch {
       base_freq: lo.base_freq + (hi.base_freq - lo.base_freq) * t,
       sine_ratio: lo.sine_ratio + (hi.sine_ratio - lo.sine_ratio) * t,
       tri_ratio: lo.tri_ratio + (hi.tri_ratio - lo.tri_ratio) * t,
@@ -153,11 +158,27 @@ impl Voice {
       fm_depth: lo.fm_depth + (hi.fm_depth - lo.fm_depth) * t,
       downsample: lo.downsample + (hi.downsample - lo.downsample) * t,
       sustain: lo.sustain + (hi.sustain - lo.sustain) * t,
+      duration: 0.0,
     }
   }
 
+  /// Return a lightweight note spec for serialisation.
+  pub fn to_note_spec(&self) -> NoteSpec {
+    NoteSpec {
+      freq: self.base_freq,
+      duration: self.duration,
+    }
+  }
+
+  /// Set per-note frequency and duration, returning the modified patch.
+  pub fn with_note(mut self, freq: f64, duration: f64) -> Self {
+    self.base_freq = freq;
+    self.duration = duration;
+    self
+  }
+
   /// Apply overrides, replacing only the specified fields.
-  pub fn with_overrides(mut self, o: &VoiceOverrides) -> Self {
+  pub fn with_overrides(mut self, o: &PatchOverrides) -> Self {
     if let Some(v) = o.base_freq {
       self.base_freq = v;
     }
@@ -245,21 +266,20 @@ impl Voice {
     self
   }
 
-  /// Generate per-boop specs for a single drone phrase.  Each drone
+  /// Generate note patches for a single drone phrase.  Each drone
   /// gets its own sub-PRNG seeded from `note_seed + "drone" +
   /// drone_index`, keeping every drone's note sequence independent
   /// from heartbeats and from each other.
   ///
-  /// `base_freq` is the effective drone frequency (after register
-  /// and any per-drone override).  All notes use `base_freq`
-  /// directly; the PRNG controls only duration.
-  pub fn drone_specs(
+  /// Each returned patch is a clone of `self` with per-note
+  /// `base_freq` and `duration` set.  The PRNG controls only
+  /// duration; all notes use `self.base_freq`.
+  pub fn drone_notes(
     &self,
     drone_index: usize,
     count: usize,
-    base_freq: f64,
     slot_secs: f64,
-  ) -> Vec<BoopSpec> {
+  ) -> Vec<Patch> {
     use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
 
     let mut hasher = Sha256::new();
@@ -272,73 +292,77 @@ impl Voice {
     let mut rng = Xoshiro256StarStar::from_seed(seed);
 
     let beat_secs = slot_secs / BEATS_PER_BAR;
-    let mut raw: Vec<(f64, f64)> = (0..count)
-      .map(|_| {
-        let note_val = NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())];
-        (base_freq, note_val)
-      })
+    let mut raw: Vec<f64> = (0..count)
+      .map(|_| NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())])
       .collect();
 
     // Fitting loop: downshift the longest note value until the bar
     // fits, stopping at MIN_NOTE_VALUE.
     loop {
-      let total_beats: f64 = raw.iter().map(|(_, v)| v).sum();
+      let total_beats: f64 = raw.iter().sum();
       if total_beats <= BEATS_PER_BAR {
         break;
       }
       let longest_idx = raw
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .map(|(i, _)| i);
       match longest_idx {
-        Some(i) if raw[i].1 > MIN_NOTE_VALUE => {
-          raw[i].1 /= 2.0;
+        Some(i) if raw[i] > MIN_NOTE_VALUE => {
+          raw[i] /= 2.0;
         }
         _ => break,
       }
     }
 
-    let specs: Vec<BoopSpec> = raw
+    let patches: Vec<Patch> = raw
       .into_iter()
-      .map(|(freq, note_val)| BoopSpec {
-        freq,
-        duration: note_val * beat_secs,
+      .map(|note_val| {
+        self.clone().with_note(self.base_freq, note_val * beat_secs)
       })
       .collect();
 
     debug!(
       note_seed = self.note_seed,
       drone_index,
-      base_freq = format_args!("{:.1} Hz", base_freq),
-      specs = ?specs.iter().map(|s| format!("{:.1}Hz/{:.3}s", s.freq, s.duration)).collect::<Vec<_>>(),
-      "Drone phrase specs generated"
+      base_freq = format_args!("{:.1} Hz", self.base_freq),
+      specs = ?patches.iter().map(|p| format!("{:.1}Hz/{:.3}s", p.base_freq, p.duration)).collect::<Vec<_>>(),
+      "Drone phrase notes generated"
     );
 
-    specs
+    patches
   }
 
-  /// Generate per-boop note and duration specs using a musical
+  /// Generate note patches for heartbeat boops using a musical
   /// beat grid.  Each check gets its own sub-PRNG seeded from
   /// `note_seed + "boop" + check_index`, so adding boops to one
   /// check never shifts another check's note sequence.
   ///
-  /// All notes use `base_freq` directly; the PRNG controls only
-  /// duration via `NOTE_VALUES` (whole/half/quarter/eighth).  A
-  /// fitting loop then downshifts the longest notes until the
-  /// total fits one bar (`BEATS_PER_BAR`), flooring at
-  /// `MIN_NOTE_VALUE`.
-  pub fn boop_specs(
+  /// Each returned patch is a clone of `self` with per-note
+  /// `duration` set from PRNG.  A fitting loop downshifts the
+  /// longest notes until the total fits one bar
+  /// (`BEATS_PER_BAR`), flooring at `MIN_NOTE_VALUE`.
+  /// Generate note patches for heartbeat boops using a musical
+  /// beat grid.  Each check gets its own sub-PRNG seeded from
+  /// `note_seed + "boop" + check_index`, so adding boops to one
+  /// check never shifts another check's note sequence.
+  ///
+  /// Each returned patch is a clone of `self` with per-note
+  /// `duration` set from PRNG.  A fitting loop downshifts the
+  /// longest notes until the total fits one bar
+  /// (`BEATS_PER_BAR`), flooring at `MIN_NOTE_VALUE`.
+  pub fn heartbeat_notes(
     &self,
     check_count: usize,
     boops_per_check: usize,
     slot_secs: f64,
-  ) -> Vec<BoopSpec> {
+  ) -> Vec<Patch> {
     use crate::heartbeat::{BEATS_PER_BAR, MIN_NOTE_VALUE, NOTE_VALUES};
 
     let beat_secs = slot_secs / BEATS_PER_BAR;
     let total = check_count * boops_per_check;
-    let mut raw: Vec<(f64, f64)> = Vec::with_capacity(total);
+    let mut raw: Vec<f64> = Vec::with_capacity(total);
 
     for check_idx in 0..check_count {
       let mut hasher = Sha256::new();
@@ -351,26 +375,25 @@ impl Voice {
       let mut rng = Xoshiro256StarStar::from_seed(seed);
 
       for _ in 0..boops_per_check {
-        let note_val = NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())];
-        raw.push((self.base_freq, note_val));
+        raw.push(NOTE_VALUES[rng.gen_range(0..NOTE_VALUES.len())]);
       }
     }
 
     // Fitting loop: downshift the longest note value until
     // the bar fits, stopping at MIN_NOTE_VALUE.
     loop {
-      let total_beats: f64 = raw.iter().map(|(_, v)| v).sum();
+      let total_beats: f64 = raw.iter().sum();
       if total_beats <= BEATS_PER_BAR {
         break;
       }
       let longest_idx = raw
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .map(|(i, _)| i);
       match longest_idx {
-        Some(i) if raw[i].1 > MIN_NOTE_VALUE => {
-          raw[i].1 /= 2.0;
+        Some(i) if raw[i] > MIN_NOTE_VALUE => {
+          raw[i] /= 2.0;
         }
         _ => break,
       }
@@ -378,17 +401,16 @@ impl Voice {
 
     raw
       .into_iter()
-      .map(|(freq, note_val)| BoopSpec {
-        freq,
-        duration: note_val * beat_secs,
+      .map(|note_val| {
+        self.clone().with_note(self.base_freq, note_val * beat_secs)
       })
       .collect()
   }
 }
 
-/// Optional overrides for voice parameters from configuration.
+/// Optional overrides for patch parameters from configuration.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct VoiceOverrides {
+pub struct PatchOverrides {
   pub base_freq: Option<f64>,
   pub sine_ratio: Option<f64>,
   pub tri_ratio: Option<f64>,
@@ -419,7 +441,7 @@ pub struct VoiceOverrides {
   pub sustain: Option<f64>,
 }
 
-impl fmt::Display for Voice {
+impl fmt::Display for Patch {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     writeln!(f, "base_freq:    {:.1} Hz", self.base_freq)?;
     writeln!(f, "sine_ratio:   {:.3}", self.sine_ratio)?;
@@ -456,9 +478,9 @@ mod tests {
   use super::*;
 
   #[test]
-  fn deterministic_voice() {
-    let v1 = Voice::from_hostname("silicon");
-    let v2 = Voice::from_hostname("silicon");
+  fn deterministic_patch() {
+    let v1 = Patch::from_hostname("silicon");
+    let v2 = Patch::from_hostname("silicon");
     assert_eq!(v1.base_freq, v2.base_freq);
     assert_eq!(v1.sine_ratio, v2.sine_ratio);
     assert_eq!(v1.attack_ms, v2.attack_ms);
@@ -466,21 +488,21 @@ mod tests {
   }
 
   #[test]
-  fn distinct_hostnames_produce_distinct_voices() {
-    let v1 = Voice::from_hostname("silicon");
-    let v2 = Voice::from_hostname("carbon");
+  fn distinct_hostnames_produce_distinct_patches() {
+    let v1 = Patch::from_hostname("silicon");
+    let v2 = Patch::from_hostname("carbon");
     assert!(
       v1.base_freq != v2.base_freq
         || v1.sine_ratio != v2.sine_ratio
         || v1.tri_ratio != v2.tri_ratio,
-      "Different hostnames should produce different voices"
+      "Different hostnames should produce different patches"
     );
   }
 
   #[test]
   fn parameters_within_range() {
     for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
-      let v = Voice::from_hostname(name);
+      let v = Patch::from_hostname(name);
       assert!((100.0..12000.0).contains(&v.base_freq));
       assert!((0.0..1.0).contains(&v.sine_ratio));
       assert!((0.0..1.0).contains(&v.tri_ratio));
@@ -514,9 +536,9 @@ mod tests {
 
   #[test]
   fn overrides_replace_specified_fields_only() {
-    let v = Voice::from_hostname("test");
+    let v = Patch::from_hostname("test");
     let original_sine = v.sine_ratio;
-    let overridden = v.with_overrides(&VoiceOverrides {
+    let overridden = v.with_overrides(&PatchOverrides {
       base_freq: Some(440.0),
       ..Default::default()
     });
@@ -525,22 +547,22 @@ mod tests {
   }
 
   #[test]
-  fn drone_specs_deterministic() {
-    let v = Voice::from_hostname("test");
-    let s1 = v.drone_specs(0, 3, 400.0, 4.0);
-    let s2 = v.drone_specs(0, 3, 400.0, 4.0);
+  fn drone_notes_deterministic() {
+    let v = Patch::from_hostname("test");
+    let s1 = v.drone_notes(0, 3, 4.0);
+    let s2 = v.drone_notes(0, 3, 4.0);
     assert_eq!(s1.len(), s2.len());
     for (a, b) in s1.iter().zip(s2.iter()) {
-      assert_eq!(a.freq, b.freq);
+      assert_eq!(a.base_freq, b.base_freq);
       assert_eq!(a.duration, b.duration);
     }
   }
 
   #[test]
-  fn drone_specs_independent_across_indices() {
-    let v = Voice::from_hostname("test");
-    let s0 = v.drone_specs(0, 3, 400.0, 4.0);
-    let s1 = v.drone_specs(1, 3, 400.0, 4.0);
+  fn drone_notes_independent_across_indices() {
+    let v = Patch::from_hostname("test");
+    let s0 = v.drone_notes(0, 3, 4.0);
+    let s1 = v.drone_notes(1, 3, 4.0);
     // Different drone indices should produce different duration sequences.
     let same = s0
       .iter()
@@ -550,17 +572,17 @@ mod tests {
   }
 
   #[test]
-  fn boop_notes_stable_across_count_changes() {
-    let v = Voice::from_hostname("test");
+  fn heartbeat_notes_stable_across_count_changes() {
+    let v = Patch::from_hostname("test");
     // With 3 checks and 1 boop each, record each check's first note.
-    let specs_1 = v.boop_specs(3, 1, 4.0);
+    let patches_1 = v.heartbeat_notes(3, 1, 4.0);
     // With 3 checks and 3 boops each, the first boop per check
     // must keep the same frequency.
-    let specs_3 = v.boop_specs(3, 3, 4.0);
+    let patches_3 = v.heartbeat_notes(3, 3, 4.0);
     for check in 0..3 {
       assert_eq!(
-        specs_1[check].freq,
-        specs_3[check * 3].freq,
+        patches_1[check].base_freq,
+        patches_3[check * 3].base_freq,
         "Check {check}'s first note shifted when boops_per_check changed"
       );
     }
@@ -571,33 +593,33 @@ mod tests {
     // Force two whole notes (8 beats) into a 4-beat bar.
     // The fitting loop should halve both to half notes (2 beats
     // each = 4 beats total), which fits exactly.
-    let v = Voice::from_hostname("test").with_overrides(&VoiceOverrides {
+    let v = Patch::from_hostname("test").with_overrides(&PatchOverrides {
       base_freq: Some(440.0),
       ..Default::default()
     });
     // With slot_secs = 4.0, beat_secs = 1.0.  Two boops gives
     // at most 8 beats raw; the fitting loop must bring it to ≤ 4.
-    let specs = v.boop_specs(1, 2, 4.0);
-    let total_dur: f64 = specs.iter().map(|s| s.duration).sum();
+    let patches = v.heartbeat_notes(1, 2, 4.0);
+    let total_dur: f64 = patches.iter().map(|p| p.duration).sum();
     assert!(
       total_dur <= 4.0 + 1e-10,
       "Total duration {total_dur:.3} should fit within 4.0 s slot"
     );
     // Each note should be at least MIN_NOTE_VALUE × beat_secs = 0.5 s.
-    for (i, spec) in specs.iter().enumerate() {
+    for (i, patch) in patches.iter().enumerate() {
       assert!(
-        spec.duration >= 0.5 - 1e-10,
+        patch.duration >= 0.5 - 1e-10,
         "Boop {i} duration {:.3} below minimum 0.5 s",
-        spec.duration
+        patch.duration
       );
     }
   }
 
   #[test]
   fn lerp_at_zero_equals_lo() {
-    let lo = Voice::from_hostname("lo");
-    let hi = Voice::from_hostname("hi");
-    let result = Voice::lerp(&lo, &hi, 0.0);
+    let lo = Patch::from_hostname("lo");
+    let hi = Patch::from_hostname("hi");
+    let result = Patch::lerp(&lo, &hi, 0.0);
     assert_eq!(result.base_freq, lo.base_freq);
     assert_eq!(result.amplitude, lo.amplitude);
     assert_eq!(result.reverb_mix, lo.reverb_mix);
@@ -605,9 +627,9 @@ mod tests {
 
   #[test]
   fn lerp_at_one_equals_hi() {
-    let lo = Voice::from_hostname("lo");
-    let hi = Voice::from_hostname("hi");
-    let result = Voice::lerp(&lo, &hi, 1.0);
+    let lo = Patch::from_hostname("lo");
+    let hi = Patch::from_hostname("hi");
+    let result = Patch::lerp(&lo, &hi, 1.0);
     assert_eq!(result.base_freq, hi.base_freq);
     assert_eq!(result.amplitude, hi.amplitude);
     assert_eq!(result.reverb_mix, hi.reverb_mix);
@@ -615,9 +637,9 @@ mod tests {
 
   #[test]
   fn lerp_at_half_equals_midpoint() {
-    let lo = Voice::from_hostname("lo");
-    let hi = Voice::from_hostname("hi");
-    let result = Voice::lerp(&lo, &hi, 0.5);
+    let lo = Patch::from_hostname("lo");
+    let hi = Patch::from_hostname("hi");
+    let result = Patch::lerp(&lo, &hi, 0.5);
     let expected_freq = (lo.base_freq + hi.base_freq) / 2.0;
     assert!(
       (result.base_freq - expected_freq).abs() < 1e-10,
@@ -636,11 +658,11 @@ mod tests {
 
   #[test]
   fn lerp_clamps_t() {
-    let lo = Voice::from_hostname("lo");
-    let hi = Voice::from_hostname("hi");
-    let below = Voice::lerp(&lo, &hi, -0.5);
+    let lo = Patch::from_hostname("lo");
+    let hi = Patch::from_hostname("hi");
+    let below = Patch::lerp(&lo, &hi, -0.5);
     assert_eq!(below.base_freq, lo.base_freq);
-    let above = Voice::lerp(&lo, &hi, 2.0);
+    let above = Patch::lerp(&lo, &hi, 2.0);
     assert_eq!(above.base_freq, hi.base_freq);
   }
 
@@ -662,7 +684,7 @@ mod tests {
     let expected_base_freq: f64 = rng.gen_range(100.0..12000.0);
     let expected_sine_ratio: f64 = rng.gen_range(0.0..1.0);
 
-    let derived = Voice::from_hostname("silicon");
+    let derived = Patch::from_hostname("silicon");
     assert_eq!(derived.base_freq, expected_base_freq);
     assert_eq!(derived.sine_ratio, expected_sine_ratio);
   }

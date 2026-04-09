@@ -61,19 +61,19 @@ fn version_flag() {
 }
 
 #[test]
-fn voice_subcommand() {
-  let output = Command::new(binary_path()).arg("voice").output();
+fn patch_subcommand() {
+  let output = Command::new(binary_path()).arg("patch").output();
   match output {
     Ok(output) => {
       assert!(
         output.status.success(),
-        "voice subcommand failed: {}",
+        "patch subcommand failed: {}",
         String::from_utf8_lossy(&output.stderr)
       );
       let stdout = String::from_utf8_lossy(&output.stdout);
       assert!(
         stdout.contains("base_freq:"),
-        "Expected voice output, got: {}",
+        "Expected patch output, got: {}",
         stdout
       );
     }
@@ -84,15 +84,15 @@ fn voice_subcommand() {
 }
 
 #[test]
-fn voice_with_hostname_flag() {
+fn patch_with_hostname_flag() {
   let output = Command::new(binary_path())
-    .args(["voice", "--hostname", "silicon"])
+    .args(["patch", "--hostname", "silicon"])
     .output();
   match output {
     Ok(output) => {
       assert!(
         output.status.success(),
-        "voice --hostname failed: {}",
+        "patch --hostname failed: {}",
         String::from_utf8_lossy(&output.stderr)
       );
       let stdout = String::from_utf8_lossy(&output.stdout);

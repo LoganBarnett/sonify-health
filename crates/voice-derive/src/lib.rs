@@ -1,13 +1,13 @@
-//! Derive macro for deterministic voice parameter generation.
+//! Derive macro for deterministic patch parameter generation.
 //!
-//! `#[derive(VoiceGenerate)]` on a struct with
-//! `#[voice_param(order = N, range = LO..HI)]` annotations
+//! `#[derive(PatchGenerate)]` on a struct with
+//! `#[patch_param(order = N, range = LO..HI)]` annotations
 //! generates a `from_hostname(&str) -> Self` constructor that
 //! seeds a PRNG from the hostname hash and draws each field in
 //! the declared order.
 //!
 //! Compile-time checks:
-//! - Every `voice_param` field must be `f64`.
+//! - Every `patch_param` field must be `f64`.
 //! - `order` values must form a contiguous 0..N sequence.
 //! - No duplicate `order` values.
 
@@ -15,11 +15,11 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
-mod voice_param;
-use voice_param::VoiceField;
+mod patch_param;
+use patch_param::PatchField;
 
 /// Derive `from_hostname` for deterministic voice generation.
-#[proc_macro_derive(VoiceGenerate, attributes(voice_param))]
+#[proc_macro_derive(PatchGenerate, attributes(patch_param))]
 pub fn derive_voice_generate(input: TokenStream) -> TokenStream {
   let input = parse_macro_input!(input as DeriveInput);
   match expand(input) {
@@ -36,7 +36,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
       _ => {
         return Err(syn::Error::new_spanned(
           &input,
-          "VoiceGenerate requires a struct with named \
+          "PatchGenerate requires a struct with named \
            fields",
         ))
       }
@@ -44,16 +44,16 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     _ => {
       return Err(syn::Error::new_spanned(
         &input,
-        "VoiceGenerate can only be derived for structs",
+        "PatchGenerate can only be derived for structs",
       ))
     }
   };
 
-  let mut voice_fields: Vec<VoiceField> = Vec::new();
+  let mut voice_fields: Vec<PatchField> = Vec::new();
   let mut plain_fields: Vec<syn::Ident> = Vec::new();
 
   for field in fields {
-    match VoiceField::from_field(field)? {
+    match PatchField::from_field(field)? {
       Some(vf) => voice_fields.push(vf),
       None => {
         if let Some(ident) = &field.ident {
@@ -129,7 +129,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
   Ok(expanded)
 }
 
-fn validate_orders(fields: &[VoiceField]) -> syn::Result<()> {
+fn validate_orders(fields: &[PatchField]) -> syn::Result<()> {
   // Check for duplicate orders.
   let mut seen = std::collections::HashMap::<u32, &syn::Ident>::new();
   for vf in fields {
@@ -137,7 +137,7 @@ fn validate_orders(fields: &[VoiceField]) -> syn::Result<()> {
       return Err(syn::Error::new_spanned(
         &vf.ident,
         format!(
-          "duplicate voice_param order {}: already used \
+          "duplicate patch_param order {}: already used \
            by `{}`",
           vf.order, prev
         ),
@@ -153,7 +153,7 @@ fn validate_orders(fields: &[VoiceField]) -> syn::Result<()> {
       return Err(syn::Error::new(
         proc_macro2::Span::call_site(),
         format!(
-          "voice_param order {} is missing — orders must \
+          "patch_param order {} is missing — orders must \
            be contiguous 0..{}",
           i, max
         ),

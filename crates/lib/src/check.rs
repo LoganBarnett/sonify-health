@@ -27,8 +27,6 @@ pub struct DroneMetricConfig {
   pub name: String,
   pub command: String,
   pub result_mode: ResultMode,
-  /// Override base frequency for note selection (Hz).
-  pub base_freq: Option<f64>,
   /// Number of boops per drone phrase.
   pub boops: Option<usize>,
 }
@@ -163,7 +161,6 @@ mod tests {
       name: "test".into(),
       command: "echo 0.75".into(),
       result_mode: ResultMode::Stdout,
-      base_freq: None,
       boops: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
@@ -189,7 +186,6 @@ mod tests {
       name: "test".into(),
       command: "echo 5.0".into(),
       result_mode: ResultMode::Stdout,
-      base_freq: None,
       boops: None,
     };
     let val = run_drone_poll(&cfg).unwrap();

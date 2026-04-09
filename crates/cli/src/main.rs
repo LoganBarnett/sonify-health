@@ -3,10 +3,10 @@ mod config;
 mod daemon;
 mod logging;
 mod metrics;
+mod patch_args;
 mod preview_state;
 mod print;
 mod systemd;
-mod voice_args;
 mod web_base;
 mod websocket;
 
@@ -15,9 +15,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use config::{Config, ConfigError};
 use daemon::DaemonError;
 use logging::init_logging;
+use patch_args::CliPatchOverrides;
 use sonify_health_lib::{
   audio::{AudioError, AudioOutput},
-  drone, heartbeat, Severity, Voice,
+  drone, heartbeat, Patch, Severity,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -29,7 +30,6 @@ use tokio::signal;
 use tower_http::trace::TraceLayer;
 use tower_sessions::{cookie::SameSite, MemoryStore, SessionManagerLayer};
 use tracing::{debug, info};
-use voice_args::CliVoiceOverrides;
 use web_base::AppState;
 
 #[derive(Debug, Error)]
@@ -155,14 +155,14 @@ enum Command {
     continuous: bool,
 
     #[command(flatten)]
-    voice: CliVoiceOverrides,
+    patch: CliPatchOverrides,
 
     /// Positional values: 1 or more severities for heartbeat,
     /// 1 metric for drone.
     values: Vec<String>,
   },
 
-  /// Print the fully-resolved voice configuration in a paste-ready
+  /// Print the fully-resolved patch configuration in a paste-ready
   /// format (TOML, Nix, or CLI flags).
   Print {
     /// Output format.
@@ -170,12 +170,12 @@ enum Command {
     format: PrintFormat,
 
     #[command(flatten)]
-    voice: CliVoiceOverrides,
+    patch: CliPatchOverrides,
   },
 
-  /// Display the machine's voice parameters.
-  Voice {
-    /// Preview another machine's voice by hostname.
+  /// Display the machine's patch parameters.
+  Patch {
+    /// Preview another machine's patch by hostname.
     #[arg(long)]
     hostname: Option<String>,
   },
@@ -218,7 +218,7 @@ async fn main() -> Result<(), ApplicationError> {
       boops,
       duration,
       continuous,
-      voice,
+      patch,
       values,
     } => {
       let effective = if drone {
@@ -229,18 +229,18 @@ async fn main() -> Result<(), ApplicationError> {
         sound_type
       };
       match effective {
-        SoundType::Heartbeat => run_heartbeat_preview(&config, &voice, &values),
+        SoundType::Heartbeat => run_heartbeat_preview(&config, &patch, &values),
         SoundType::Drone => run_drone_preview(
-          &config, &voice, boops, duration, continuous, &values,
+          &config, &patch, boops, duration, continuous, &values,
         ),
       }
     }
-    Command::Print { format, voice } => {
-      run_print(&config, &voice, format);
+    Command::Print { format, patch } => {
+      run_print(&config, &patch, format);
       Ok(())
     }
-    Command::Voice { hostname } => {
-      run_voice(hostname.as_deref());
+    Command::Patch { hostname } => {
+      run_patch(hostname.as_deref());
       Ok(())
     }
     Command::Daemon => run_daemon(&config).await,
@@ -252,13 +252,13 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
-  let mut voice = config.voice();
-  if let Some(hb_overrides) = &config.daemon.heartbeat_voice_overrides {
-    voice = voice.with_overrides(hb_overrides);
+  let mut patch = config.patch();
+  if let Some(hb_overrides) = &config.daemon.heartbeat_patch_overrides {
+    patch = patch.with_overrides(hb_overrides);
   }
 
   let preview = Arc::new(preview_state::PreviewState::new(
-    voice.clone(),
+    patch.clone(),
     Arc::clone(&muted),
     &config.daemon.heartbeat_checks,
     &config.daemon.drone_metrics,
@@ -455,7 +455,7 @@ fn create_app(state: AppState, config: &Config) -> Router {
 
 fn run_heartbeat_preview(
   config: &Config,
-  voice_args: &CliVoiceOverrides,
+  patch_args: &CliPatchOverrides,
   values: &[String],
 ) -> Result<(), ApplicationError> {
   if values.is_empty() {
@@ -478,35 +478,29 @@ fn run_heartbeat_preview(
     .map(|v| parse_severity(v))
     .collect::<Result<_, _>>()?;
 
-  let voice = voice_args.resolve_voice(config);
-  debug!(?voice, "Resolved voice");
+  let patch = patch_args.resolve_patch(config);
+  debug!(?patch, "Resolved patch");
   let slot_secs = config.daemon.timing.slot_duration_secs;
-  let specs = voice.boop_specs(severities.len(), 1, slot_secs);
-  for (i, spec) in specs.iter().enumerate() {
+  let patches = patch.heartbeat_notes(severities.len(), 1, slot_secs);
+  for (i, p) in patches.iter().enumerate() {
     debug!(
       boop = i,
-      freq = format_args!("{:.1} Hz", spec.freq),
-      duration = format_args!("{:.3}s", spec.duration),
+      freq = format_args!("{:.1} Hz", p.base_freq),
+      duration = format_args!("{:.3}s", p.duration),
       severity = %severities[i],
-      "Boop spec"
+      "Note spec"
     );
   }
   info!(
-    base_freq = voice.base_freq,
+    base_freq = patch.base_freq,
     boops = severities.len(),
     "Playing heartbeat preview"
   );
 
-  let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
+  let graph = heartbeat::heartbeat_graph(&patches, &severities);
   AudioOutput::play_for(
     graph,
-    heartbeat::heartbeat_duration(
-      &specs,
-      voice.attack_ms / 1000.0,
-      voice.release_ms / 1000.0,
-      voice.echo_delay,
-      voice.echo_mix,
-    ),
+    heartbeat::heartbeat_duration(&patches),
     config.audio_device.as_deref(),
   )
   .map_err(ApplicationError::AudioPlayback)
@@ -514,7 +508,7 @@ fn run_heartbeat_preview(
 
 fn run_drone_preview(
   config: &Config,
-  voice_args: &CliVoiceOverrides,
+  patch_args: &CliPatchOverrides,
   boops: usize,
   duration: f64,
   continuous: bool,
@@ -541,12 +535,11 @@ fn run_drone_preview(
     )));
   }
 
-  let voice = voice_args.resolve_voice(config);
-  let effective_freq = voice.base_freq;
+  let patch = patch_args.resolve_patch(config);
   let slot_secs = config.daemon.timing.slot_duration_secs;
-  debug!(?voice, "Resolved voice");
+  debug!(?patch, "Resolved patch");
   info!(
-    base_freq = voice.base_freq,
+    base_freq = patch.base_freq,
     boops, metric, duration, "Playing drone preview"
   );
 
@@ -565,17 +558,11 @@ fn run_drone_preview(
     let handle = mixer.handle();
     let play_handle = std::thread::spawn(move || {
       while play_run.load(Ordering::Relaxed) {
-        let specs = voice.drone_specs(0, boops, effective_freq, slot_secs);
+        let patches = patch.drone_notes(0, boops, slot_secs);
         let severities: Vec<Severity> =
-          (0..specs.len()).map(|_| Severity::Healthy).collect();
-        let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
-        let phrase_dur = heartbeat::heartbeat_duration(
-          &specs,
-          voice.attack_ms / 1000.0,
-          voice.release_ms / 1000.0,
-          voice.echo_delay,
-          voice.echo_mix,
-        );
+          (0..patches.len()).map(|_| Severity::Healthy).collect();
+        let graph = heartbeat::heartbeat_graph(&patches, &severities);
+        let phrase_dur = heartbeat::heartbeat_duration(&patches);
         let slot = handle.add(graph);
         std::thread::sleep(phrase_dur);
         handle.remove(slot);
@@ -601,17 +588,11 @@ fn run_drone_preview(
     let deadline =
       std::time::Instant::now() + Duration::from_secs_f64(duration);
     while std::time::Instant::now() < deadline {
-      let specs = voice.drone_specs(0, boops, effective_freq, slot_secs);
+      let patches = patch.drone_notes(0, boops, slot_secs);
       let severities: Vec<Severity> =
-        (0..specs.len()).map(|_| Severity::Healthy).collect();
-      let graph = heartbeat::heartbeat_graph(&voice, &severities, &specs);
-      let phrase_dur = heartbeat::heartbeat_duration(
-        &specs,
-        voice.attack_ms / 1000.0,
-        voice.release_ms / 1000.0,
-        voice.echo_delay,
-        voice.echo_mix,
-      );
+        (0..patches.len()).map(|_| Severity::Healthy).collect();
+      let graph = heartbeat::heartbeat_graph(&patches, &severities);
+      let phrase_dur = heartbeat::heartbeat_duration(&patches);
       let slot = mixer.add(graph);
       std::thread::sleep(phrase_dur);
       mixer.remove(slot);
@@ -636,30 +617,30 @@ fn run_drone_preview(
 
 fn run_print(
   config: &Config,
-  voice_args: &CliVoiceOverrides,
+  patch_args: &CliPatchOverrides,
   format: PrintFormat,
 ) {
-  let voice = voice_args.resolve_voice(config);
+  let patch = patch_args.resolve_patch(config);
   let output = match format {
-    PrintFormat::Toml => print::format_toml(&voice, &[], &[], &[]),
-    PrintFormat::Nix => print::format_nix(&voice, &[], &[], &[]),
-    PrintFormat::Cli => print::format_cli(&voice),
+    PrintFormat::Toml => print::format_toml(&patch, &[], &[], &[]),
+    PrintFormat::Nix => print::format_nix(&patch, &[], &[], &[]),
+    PrintFormat::Cli => print::format_cli(&patch),
   };
   println!("{output}");
 }
 
-fn run_voice(hostname: Option<&str>) {
+fn run_patch(hostname: Option<&str>) {
   let hn = hostname.map(String::from).unwrap_or_else(|| {
     gethostname::gethostname().to_string_lossy().to_string()
   });
-  let voice = Voice::from_hostname(&hn);
+  let patch = Patch::from_hostname(&hn);
 
   debug!(
     hostname = %hn,
-    note_seed = voice.note_seed,
-    "Voice seed derivation"
+    note_seed = patch.note_seed,
+    "Patch seed derivation"
   );
 
   let label = hostname.unwrap_or("(current host)");
-  println!("Voice for {}:\n{}", label, voice);
+  println!("Patch for {}:\n{}", label, patch);
 }

@@ -4,7 +4,7 @@ use crate::preview_state::{severity_from_shared, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  check, drone, heartbeat, Severity, Voice,
+  check, drone, heartbeat, Patch, Severity,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -45,10 +45,10 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     preview,
   } = ctx;
   {
-    let voices = preview.voices.read().unwrap();
-    let voice = &voices[&crate::preview_state::VoiceOwner::Heartbeat];
-    debug!(?voice, "Resolved voice");
-    log_voice_derivation(voice);
+    let patches = preview.patches.read().unwrap();
+    let patch = &patches[&crate::preview_state::PatchOwner::Heartbeat];
+    debug!(?patch, "Resolved patch");
+    log_patch_derivation(patch);
   }
 
   // Log initial boop specs from materialized state.
@@ -243,21 +243,21 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           let metric = ds.metrics[i].value();
 
           // Interpolate between lo and hi profiles based on metric.
-          let voice = prev.effective_drone_voice(i, metric);
+          let base_patch = prev.effective_drone_patch(i, metric);
 
-          let specs = prev.drone_boop_specs.read().unwrap()[i].clone();
+          let note_specs = prev.drone_boop_specs.read().unwrap()[i].clone();
+          let patches: Vec<Patch> = note_specs
+            .iter()
+            .map(|s| base_patch.clone().with_note(s.freq, s.duration))
+            .collect();
           let severities: Vec<Severity> =
-            (0..specs.len()).map(|_| Severity::Healthy).collect();
+            (0..patches.len()).map(|_| Severity::Healthy).collect();
 
           let graph = heartbeat::heartbeat_graph_with_volume(
-            &voice,
+            &patches,
             &severities,
-            &specs,
             Some(&prev.combined_volumes[i]),
           );
-
-          let attack_secs = voice.attack_ms / 1000.0;
-          let release_secs = voice.release_ms / 1000.0;
 
           // Compute the gap before sleeping so we know whether
           // to use content-only or full duration.
@@ -271,15 +271,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           // note is still sustaining, letting the crossfade
           // overlap sound with sound instead of silence.
           let phrase_dur = if gap == 0.0 {
-            heartbeat::heartbeat_content_duration(&specs, attack_secs)
+            heartbeat::heartbeat_content_duration(&patches)
           } else {
-            heartbeat::heartbeat_duration(
-              &specs,
-              attack_secs,
-              release_secs,
-              voice.echo_delay,
-              voice.echo_mix,
-            )
+            heartbeat::heartbeat_duration(&patches)
           };
 
           // First iteration uses add; subsequent iterations use
@@ -430,12 +424,17 @@ fn play_heartbeat_preview(
   mixer: &AudioMixer,
   preview: &PreviewState,
 ) -> Result<(), DaemonError> {
-  let specs = preview.boop_specs.read().unwrap().clone();
-  let total = specs.len();
+  let note_specs = preview.boop_specs.read().unwrap().clone();
+  let total = note_specs.len();
   let boops_per_check = preview.boop_count.load(Ordering::Relaxed);
 
-  let voices = preview.voices.read().unwrap();
-  let voice = &voices[&crate::preview_state::VoiceOwner::Heartbeat];
+  let all_patches = preview.patches.read().unwrap();
+  let base_patch = &all_patches[&crate::preview_state::PatchOwner::Heartbeat];
+
+  let patches: Vec<Patch> = note_specs
+    .iter()
+    .map(|s| base_patch.clone().with_note(s.freq, s.duration))
+    .collect();
 
   // Each check's severity repeats for its phrase of boops.
   let severities: Vec<_> = (0..total)
@@ -465,21 +464,12 @@ fn play_heartbeat_preview(
   );
 
   let graph = heartbeat::heartbeat_graph_with_volume(
-    &voice,
+    &patches,
     &severities,
-    &specs,
     Some(&preview.effective_heartbeat_volume),
   );
-  let attack_secs = voice.attack_ms / 1000.0;
-  let release_secs = voice.release_ms / 1000.0;
   let slot = mixer.add(graph);
-  std::thread::sleep(heartbeat::heartbeat_duration(
-    &specs,
-    attack_secs,
-    release_secs,
-    voice.echo_delay,
-    voice.echo_mix,
-  ));
+  std::thread::sleep(heartbeat::heartbeat_duration(&patches));
   mixer.remove(slot);
   Ok(())
 }
@@ -497,7 +487,7 @@ fn sleep_checking(running: &AtomicBool, dur: Duration) {
   }
 }
 
-fn log_voice_derivation(voice: &Voice) {
+fn log_patch_derivation(patch: &Patch) {
   use sha2::{Digest, Sha256};
 
   let hostname = gethostname::gethostname().to_string_lossy().to_string();
@@ -508,8 +498,8 @@ fn log_voice_derivation(voice: &Voice) {
       .iter()
       .map(|b| format!("{:02x}", b))
       .collect::<String>(),
-    note_seed = voice.note_seed,
-    "Voice seed derivation"
+    note_seed = patch.note_seed,
+    "Patch seed derivation"
   );
 }
 

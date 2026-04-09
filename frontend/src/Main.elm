@@ -55,7 +55,7 @@ type alias Model =
     , route : Route
     , me : MeStatus
     , connected : Bool
-    , voice : List VoiceParam
+    , patch : List PatchParam
     , muted : Bool
     , masterVolume : Float
     , heartbeatVolume : Float
@@ -82,8 +82,8 @@ type Msg
     | UrlChanged Url
     | GotMe (Result Http.Error MeInfo)
     | WebSocketReceived String
-    | SetVoiceParam String (Maybe Int) String String
-    | VoiceDebounce String (Maybe Int) String Int Float
+    | SetPatchParam String (Maybe Int) String String
+    | PatchDebounce String (Maybe Int) String Int Float
     | ToggleMute
     | SetMasterVolume String
     | MasterVolDebounce Int Float
@@ -153,7 +153,7 @@ init _ url key =
       , route = route
       , me = MeLoading
       , connected = False
-      , voice = []
+      , patch = []
       , muted = False
       , masterVolume = 1.0
       , heartbeatVolume = 1.0
@@ -247,12 +247,12 @@ update msg model =
         WebSocketReceived raw ->
             handleServerMsg raw model
 
-        SetVoiceParam layer maybeIndex name valStr ->
+        SetPatchParam layer maybeIndex name valStr ->
             case String.toFloat valStr of
                 Just value ->
                     let
                         key =
-                            voiceDebounceKey layer maybeIndex name
+                            patchDebounceKey layer maybeIndex name
 
                         id =
                             model.nextDebounce
@@ -271,7 +271,7 @@ update msg model =
                                     List.indexedMap
                                         (\idx d ->
                                             if idx == i then
-                                                { d | voiceLo = List.map updateParam d.voiceLo }
+                                                { d | patchLo = List.map updateParam d.patchLo }
 
                                             else
                                                 d
@@ -282,7 +282,7 @@ update msg model =
                               }
                             , Process.sleep 50
                                 |> Task.perform
-                                    (\_ -> VoiceDebounce layer maybeIndex name id value)
+                                    (\_ -> PatchDebounce layer maybeIndex name id value)
                             )
 
                         ( "drone_hi", Just i ) ->
@@ -291,7 +291,7 @@ update msg model =
                                     List.indexedMap
                                         (\idx d ->
                                             if idx == i then
-                                                { d | voiceHi = List.map updateParam d.voiceHi }
+                                                { d | patchHi = List.map updateParam d.patchHi }
 
                                             else
                                                 d
@@ -302,32 +302,32 @@ update msg model =
                               }
                             , Process.sleep 50
                                 |> Task.perform
-                                    (\_ -> VoiceDebounce layer maybeIndex name id value)
+                                    (\_ -> PatchDebounce layer maybeIndex name id value)
                             )
 
                         _ ->
                             ( { model
-                                | voice = List.map updateParam model.voice
+                                | patch = List.map updateParam model.patch
                                 , debounces = Dict.insert key id model.debounces
                                 , nextDebounce = id + 1
                               }
                             , Process.sleep 50
                                 |> Task.perform
-                                    (\_ -> VoiceDebounce layer maybeIndex name id value)
+                                    (\_ -> PatchDebounce layer maybeIndex name id value)
                             )
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        VoiceDebounce layer maybeIndex name id value ->
+        PatchDebounce layer maybeIndex name id value ->
             let
                 key =
-                    voiceDebounceKey layer maybeIndex name
+                    patchDebounceKey layer maybeIndex name
             in
             if Dict.get key model.debounces == Just id then
                 ( model
                 , Ports.websocketSend
-                    (encodeSetVoiceParam layer maybeIndex name value)
+                    (encodeSetPatchParam layer maybeIndex name value)
                 )
 
             else
@@ -675,7 +675,7 @@ update msg model =
 
         Export ->
             ( model
-            , Ports.websocketSend encodeExportVoice
+            , Ports.websocketSend encodeExportPatch
             )
 
         DismissExport ->
@@ -1040,7 +1040,7 @@ handleServerMsg raw model =
     case decodeServerMsg raw of
         Just (StateMsg s) ->
             ( { model
-                | voice = s.voice
+                | patch = s.patch
                 , muted = s.muted
                 , masterVolume = s.masterVolume
                 , heartbeatVolume = s.heartbeatVolume
@@ -1073,7 +1073,7 @@ handleServerMsg raw model =
                             List.indexedMap
                                 (\idx d ->
                                     if idx == i then
-                                        { d | voiceLo = List.map updateParam d.voiceLo }
+                                        { d | patchLo = List.map updateParam d.patchLo }
 
                                     else
                                         d
@@ -1089,7 +1089,7 @@ handleServerMsg raw model =
                             List.indexedMap
                                 (\idx d ->
                                     if idx == i then
-                                        { d | voiceHi = List.map updateParam d.voiceHi }
+                                        { d | patchHi = List.map updateParam d.patchHi }
 
                                     else
                                         d
@@ -1100,7 +1100,7 @@ handleServerMsg raw model =
                     )
 
                 _ ->
-                    ( { model | voice = List.map updateParam model.voice }
+                    ( { model | patch = List.map updateParam model.patch }
                     , Cmd.none
                     )
 
@@ -1188,13 +1188,13 @@ handleServerMsg raw model =
                 _ ->
                     ( model, Cmd.none )
 
-        Just (DroneConfigChanged index baseFreq boops) ->
+        Just (DroneConfigChanged index boops) ->
             ( { model
                 | drones =
                     List.indexedMap
                         (\i d ->
                             if i == index then
-                                { d | baseFreq = baseFreq, boops = boops }
+                                { d | boops = boops }
 
                             else
                                 d
@@ -1279,7 +1279,7 @@ handleServerMsg raw model =
             , Cmd.none
             )
 
-        Just (VoiceExport data) ->
+        Just (PatchExport data) ->
             ( { model | exportData = Just data }, Cmd.none )
 
         Just (LockedParamsChanged layer maybeIndex params) ->
@@ -1499,8 +1499,8 @@ viewToolbar model =
         ]
 
 
-viewVoiceSlider : String -> Maybe Int -> Set String -> VoiceParam -> Html Msg
-viewVoiceSlider layer maybeIndex locked param =
+viewPatchSlider : String -> Maybe Int -> Set String -> PatchParam -> Html Msg
+viewPatchSlider layer maybeIndex locked param =
     let
         isLocked =
             Set.member param.name locked
@@ -1532,7 +1532,7 @@ viewVoiceSlider layer maybeIndex locked param =
             , Html.Attributes.max (String.fromFloat param.max)
             , step (String.fromFloat param.step)
             , value (String.fromFloat param.value)
-            , onInput (SetVoiceParam layer maybeIndex param.name)
+            , onInput (SetPatchParam layer maybeIndex param.name)
             , class "slider"
             ]
             []
@@ -1542,7 +1542,7 @@ viewVoiceSlider layer maybeIndex locked param =
             , Html.Attributes.max (String.fromFloat param.max)
             , step (String.fromFloat param.step)
             , value (String.fromFloat param.value)
-            , onInput (SetVoiceParam layer maybeIndex param.name)
+            , onInput (SetPatchParam layer maybeIndex param.name)
             , class "slider-value-input"
             ]
             []
@@ -1616,15 +1616,15 @@ viewHeartbeatPanel model =
                 (h3 [ class "panel-subheading" ] [ text "Checks" ]
                     :: List.indexedMap viewCheck model.checks
                 )
-        , if List.isEmpty model.voice then
+        , if List.isEmpty model.patch then
             text ""
 
           else
             div [ class "slider-grid" ]
-                (h3 [ class "panel-subheading" ] [ text "Voice" ]
+                (h3 [ class "panel-subheading" ] [ text "Patch" ]
                     :: List.map
-                        (viewVoiceSlider "heartbeat" Nothing model.lockedParams)
-                        model.voice
+                        (viewPatchSlider "heartbeat" Nothing model.lockedParams)
+                        model.patch
                 )
         ]
 
@@ -1955,23 +1955,23 @@ viewDrone lockedDrones index drone =
                 []
             ]
         , viewDroneBoopSpecs index drone.droneSpecs drone.droneSpecRanges
-        , h3 [ class "panel-subheading" ] [ text "Voice Lo" ]
+        , h3 [ class "panel-subheading" ] [ text "Patch Lo" ]
         , div [ class "slider-grid" ]
             (List.map
-                (viewVoiceSlider "drone_lo"
+                (viewPatchSlider "drone_lo"
                     (Just index)
                     (Set.fromList drone.lockedParamsLo)
                 )
-                drone.voiceLo
+                drone.patchLo
             )
-        , h3 [ class "panel-subheading" ] [ text "Voice Hi" ]
+        , h3 [ class "panel-subheading" ] [ text "Patch Hi" ]
         , div [ class "slider-grid" ]
             (List.map
-                (viewVoiceSlider "drone_hi"
+                (viewPatchSlider "drone_hi"
                     (Just index)
                     (Set.fromList drone.lockedParamsHi)
                 )
-                drone.voiceHi
+                drone.patchHi
             )
         ]
 
@@ -2153,7 +2153,7 @@ viewExportModal model =
                                 "Import Config"
 
                              else
-                                "Export Voice"
+                                "Export Patch"
                             )
                         ]
                     , div [ class "tab-bar" ]
@@ -2184,9 +2184,9 @@ formatParamName name =
     String.replace "_" " " name
 
 
-voiceDebounceKey : String -> Maybe Int -> String -> String
-voiceDebounceKey layer maybeIndex name =
-    "voice:"
+patchDebounceKey : String -> Maybe Int -> String -> String
+patchDebounceKey layer maybeIndex name =
+    "patch:"
         ++ layer
         ++ ":"
         ++ (Maybe.map String.fromInt maybeIndex |> Maybe.withDefault "_")

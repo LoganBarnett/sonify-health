@@ -5,7 +5,7 @@ use serde_json::json;
 use sonify_health_lib::{
   check::{DroneMetricConfig, HeartbeatCheckConfig},
   state::{DroneState, HeartbeatState},
-  BoopSpec, Severity, Voice, VoiceOverrides,
+  NoteSpec, Patch, PatchOverrides, Severity,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{
@@ -14,8 +14,8 @@ use std::sync::{
 };
 use tokio::sync::broadcast;
 
-/// Voice parameter metadata matching `#[voice_param]` ranges.
-pub struct VoiceParamMeta {
+/// Patch parameter metadata matching `#[voice_param]` ranges.
+pub struct PatchParamMeta {
   pub name: &'static str,
   pub description: &'static str,
   pub min: f64,
@@ -23,22 +23,22 @@ pub struct VoiceParamMeta {
   pub step: f64,
 }
 
-pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
-  VoiceParamMeta {
+pub const PATCH_PARAMS: &[PatchParamMeta] = &[
+  PatchParamMeta {
     name: "base_freq",
     description: "Root pitch in Hz. All boop notes derive from this frequency.",
     min: 100.0,
     max: 12000.0,
     step: 1.0,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "sine_ratio",
     description: "Relative weight of the sine oscillator. Smooth, pure tone.",
     min: 0.0,
     max: 3.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "tri_ratio",
     description:
       "Relative weight of the triangle oscillator. Hollow, flute-like.",
@@ -46,7 +46,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 3.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "saw_ratio",
     description:
       "Relative weight of the sawtooth oscillator. Bright, buzzy edge.",
@@ -54,7 +54,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 3.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "attack_ms",
     description:
       "Fade-in time in milliseconds. Low = snappy click, high = soft swell.",
@@ -62,7 +62,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 500.0,
     step: 1.0,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "release_ms",
     description:
       "Fade-out time in milliseconds. Low = staccato, high = lingering tail.",
@@ -70,7 +70,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1000.0,
     step: 1.0,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "chirp_ratio",
     description:
       "Pitch bend at note onset. 1.0 = none, <1 = downward, >1 = upward chirp.",
@@ -78,28 +78,28 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 4.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "stereo_pan",
     description: "Left/right stereo position. -1 = full left, +1 = full right.",
     min: -1.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "reverb_mix",
     description: "Wet/dry reverb blend. 0 = fully dry, 1 = fully wet.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "note_seed",
     description: "Seed for boop duration selection.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "echo_delay",
     description:
       "Delay time in seconds. Short = slapback, long = distinct repeats.",
@@ -107,14 +107,14 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "echo_mix",
     description: "Echo wet/dry blend. 0 = no echo, 1 = full echo.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "brightness",
     description:
       "Lowpass cutoff scaler. 1.0 = full brightness, lower = darker tone.",
@@ -122,7 +122,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 2.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "resonance",
     description:
       "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak.",
@@ -130,7 +130,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 5.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "sub_octave",
     description:
       "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body.",
@@ -138,42 +138,42 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "vibrato_rate",
     description: "Vibrato speed (Hz). Above ~30 Hz becomes FM synthesis.",
     min: 0.0,
     max: 200.0,
     step: 0.1,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "vibrato_depth",
     description: "Vibrato depth (semitones). Large values produce FM sidebands.",
     min: 0.0,
     max: 12.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "tremolo_rate",
     description: "Tremolo speed (Hz)",
     min: 0.0,
     max: 20.0,
     step: 0.1,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "tremolo_depth",
     description: "Tremolo depth (fraction)",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "amplitude",
     description: "Output amplitude. 0 = silent, 1 = full scale.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "square_ratio",
     description:
       "Relative weight of the square oscillator. Hollow, reedy tone.",
@@ -181,7 +181,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 3.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "drive",
     description:
       "Pre-filter saturation. Low = clean, high = heavy distortion.",
@@ -189,7 +189,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 20.0,
     step: 0.1,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "noise_mix",
     description:
       "Pink noise mixed before the filter for texture and breath.",
@@ -197,14 +197,14 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "crush",
     description: "Bitcrush intensity. 0 = clean, higher = grungier.",
     min: 0.0,
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "fm_ratio",
     description:
       "FM modulator frequency as a ratio of the carrier. 1.0 = unison, 2.0 = octave.",
@@ -212,7 +212,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 8.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "fm_depth",
     description:
       "FM modulation index. 0 = clean, higher = richer metallic warble.",
@@ -220,7 +220,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 10.0,
     step: 0.1,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "downsample",
     description:
       "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier.",
@@ -228,7 +228,7 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
     max: 1.0,
     step: 0.01,
   },
-  VoiceParamMeta {
+  PatchParamMeta {
     name: "sustain",
     description:
       "Body amplitude after attack. 1.0 = full level, lower = quieter sustain.",
@@ -242,19 +242,18 @@ pub const VOICE_PARAMS: &[VoiceParamMeta] = &[
 #[derive(Clone)]
 pub struct DroneMetricInfo {
   pub name: String,
-  pub base_freq: Option<f64>,
   pub boops: usize,
 }
 
-/// Identifies which sound-producing entity owns a voice.
+/// Identifies which sound-producing entity owns a patch.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum VoiceOwner {
+pub enum PatchOwner {
   Heartbeat,
   DroneLo(usize),
   DroneHi(usize),
 }
 
-impl VoiceOwner {
+impl PatchOwner {
   /// Parse from the WebSocket `layer` + optional `index` fields.
   pub fn from_layer_index(layer: &str, index: Option<usize>) -> Option<Self> {
     match layer {
@@ -269,13 +268,13 @@ impl VoiceOwner {
 /// Shared mutable state backing the real-time preview UI.
 ///
 /// Both the Axum WebSocket handler and the `spawn_blocking` daemon
-/// thread share an `Arc<PreviewState>`.  Voice parameters, volumes,
+/// thread share an `Arc<PreviewState>`.  Patch parameters, volumes,
 /// and override maps are modified via the WebSocket protocol;
 /// audio-relevant `Shared<f32>` values feed directly into fundsp
 /// graphs.
 pub struct PreviewState {
-  original_voices: HashMap<VoiceOwner, Voice>,
-  pub voices: RwLock<HashMap<VoiceOwner, Voice>>,
+  original_patches: HashMap<PatchOwner, Patch>,
+  pub patches: RwLock<HashMap<PatchOwner, Patch>>,
   pub muted: Arc<AtomicBool>,
   /// Per-metric raw volume set by the UI (0.0..=1.0).
   pub drone_volumes: Vec<Shared>,
@@ -287,7 +286,7 @@ pub struct PreviewState {
   /// Base gap in seconds between drone phrases (0.0..=16.0).
   pub drone_phrase_gaps: Vec<Shared>,
   /// Power-curve exponent controlling how the metric reshapes the
-  /// lo/hi voice interpolation (0.1..=5.0).
+  /// lo/hi patch interpolation (0.1..=5.0).
   pub drone_interp_curves: Vec<Shared>,
   /// `mute_factor * per_metric_volume`, wired into audio graphs.
   pub combined_volumes: Vec<Shared>,
@@ -307,26 +306,26 @@ pub struct PreviewState {
   original_drone_infos: Vec<DroneMetricInfo>,
   pub boop_count: AtomicUsize,
   original_boop_count: usize,
-  pub locked_params: RwLock<HashMap<VoiceOwner, HashSet<String>>>,
+  pub locked_params: RwLock<HashMap<PatchOwner, HashSet<String>>>,
   pub locked_drones: RwLock<HashSet<usize>>,
-  pub boop_specs: RwLock<Vec<BoopSpec>>,
+  pub boop_specs: RwLock<Vec<NoteSpec>>,
   pub boop_pins: RwLock<Vec<bool>>,
-  pub drone_boop_specs: RwLock<Vec<Vec<BoopSpec>>>,
+  pub drone_boop_specs: RwLock<Vec<Vec<NoteSpec>>>,
   pub drone_boop_pins: RwLock<Vec<Vec<bool>>>,
-  original_drone_boop_specs: Vec<Vec<BoopSpec>>,
+  original_drone_boop_specs: Vec<Vec<NoteSpec>>,
   pub slot_secs: f64,
 }
 
 impl PreviewState {
   pub fn new(
-    voice: Voice,
+    voice: Patch,
     muted: Arc<AtomicBool>,
     heartbeat_checks: &[HeartbeatCheckConfig],
     drone_metrics: &[DroneMetricConfig],
-    drone_profile_overrides: &HashMap<String, (VoiceOverrides, VoiceOverrides)>,
+    drone_profile_overrides: &HashMap<String, (PatchOverrides, PatchOverrides)>,
     slot_secs: f64,
-    initial_notes: &[BoopSpec],
-    initial_drone_notes: &HashMap<String, Vec<BoopSpec>>,
+    initial_notes: &[NoteSpec],
+    initial_drone_notes: &HashMap<String, Vec<NoteSpec>>,
   ) -> Self {
     let drone_count = drone_metrics.len();
     let check_count = heartbeat_checks.len();
@@ -351,14 +350,15 @@ impl PreviewState {
       .iter()
       .map(|m| DroneMetricInfo {
         name: m.name.clone(),
-        base_freq: m.base_freq,
         boops: m.boops.unwrap_or(1),
       })
       .collect();
 
     let (initial_specs, initial_pins, boop_count) = if initial_notes.is_empty()
     {
-      let specs = voice.boop_specs(check_count, 1, slot_secs);
+      let patches = voice.heartbeat_notes(check_count, 1, slot_secs);
+      let specs: Vec<NoteSpec> =
+        patches.iter().map(Patch::to_note_spec).collect();
       let pins = vec![false; specs.len()];
       (specs, pins, 1)
     } else {
@@ -371,8 +371,8 @@ impl PreviewState {
       (initial_notes.to_vec(), pins, count)
     };
 
-    let mut voices = HashMap::new();
-    voices.insert(VoiceOwner::Heartbeat, voice.clone());
+    let mut patches = HashMap::new();
+    patches.insert(PatchOwner::Heartbeat, voice.clone());
     for (i, dm) in drone_metrics.iter().enumerate() {
       let (lo_voice, hi_voice) = drone_profile_overrides
         .get(&dm.name)
@@ -383,14 +383,14 @@ impl PreviewState {
           )
         })
         .unwrap_or_else(|| (voice.clone(), voice.clone()));
-      voices.insert(VoiceOwner::DroneLo(i), lo_voice);
-      voices.insert(VoiceOwner::DroneHi(i), hi_voice);
+      patches.insert(PatchOwner::DroneLo(i), lo_voice);
+      patches.insert(PatchOwner::DroneHi(i), hi_voice);
     }
 
     // Per-drone boop specs: use config notes (pinned) when present,
     // otherwise generate algorithmically (unpinned).
     let (drone_specs_init, drone_pins_init): (
-      Vec<Vec<BoopSpec>>,
+      Vec<Vec<NoteSpec>>,
       Vec<Vec<bool>>,
     ) = drone_metrics
       .iter()
@@ -400,14 +400,14 @@ impl PreviewState {
           let pins = vec![true; notes.len()];
           (notes.clone(), pins)
         } else {
-          let drone_voice = voices
-            .get(&VoiceOwner::DroneLo(i))
+          let drone_voice = patches
+            .get(&PatchOwner::DroneLo(i))
             .cloned()
             .unwrap_or_else(|| voice.clone());
           let info = &drone_infos[i];
-          let effective_freq = info.base_freq.unwrap_or(drone_voice.base_freq);
-          let specs =
-            drone_voice.drone_specs(i, info.boops, effective_freq, slot_secs);
+          let patches = drone_voice.drone_notes(i, info.boops, slot_secs);
+          let specs: Vec<NoteSpec> =
+            patches.iter().map(Patch::to_note_spec).collect();
           let pins = vec![false; specs.len()];
           (specs, pins)
         }
@@ -415,8 +415,8 @@ impl PreviewState {
       .unzip();
 
     Self {
-      original_voices: voices.clone(),
-      voices: RwLock::new(voices),
+      original_patches: patches.clone(),
+      patches: RwLock::new(patches),
       muted,
       drone_volumes,
       drone_repeat_rates,
@@ -489,15 +489,19 @@ impl PreviewState {
       .set_value(mute_factor * master * self.heartbeat_volume.value());
   }
 
-  /// Recompute materialized boop specs from the current voice,
+  /// Recompute materialized boop specs from the current patch,
   /// preserving pinned entries.
   pub fn recompute_boop_specs(&self) {
     let boops_per_check = self.boop_count.load(Ordering::Relaxed);
     let total = boops_per_check * self.check_names.len();
-    let voices = self.voices.read().unwrap();
-    let voice = &voices[&VoiceOwner::Heartbeat];
+    let patches = self.patches.read().unwrap();
+    let voice = &patches[&PatchOwner::Heartbeat];
     let check_count = self.check_names.len();
-    let fresh = voice.boop_specs(check_count, boops_per_check, self.slot_secs);
+    let fresh: Vec<NoteSpec> = voice
+      .heartbeat_notes(check_count, boops_per_check, self.slot_secs)
+      .iter()
+      .map(Patch::to_note_spec)
+      .collect();
 
     let mut specs = self.boop_specs.write().unwrap();
     let mut pins = self.boop_pins.write().unwrap();
@@ -505,7 +509,7 @@ impl PreviewState {
     // Resize pins to match new total, new entries unpinned.
     pins.resize(total, false);
 
-    let merged: Vec<BoopSpec> = fresh
+    let merged: Vec<NoteSpec> = fresh
       .into_iter()
       .enumerate()
       .map(|(i, fresh_spec)| {
@@ -526,12 +530,12 @@ impl PreviewState {
   /// preserving pinned entries.
   pub fn recompute_drone_specs(&self, index: usize) {
     let (voice, info) = {
-      let voices = self.voices.read().unwrap();
+      let patches = self.patches.read().unwrap();
       let infos = self.drone_infos.read().unwrap();
-      let voice = voices
-        .get(&VoiceOwner::DroneLo(index))
+      let voice = patches
+        .get(&PatchOwner::DroneLo(index))
         .cloned()
-        .unwrap_or_else(|| voices[&VoiceOwner::Heartbeat].clone());
+        .unwrap_or_else(|| patches[&PatchOwner::Heartbeat].clone());
       let info = match infos.get(index) {
         Some(i) => i.clone(),
         None => return,
@@ -539,9 +543,11 @@ impl PreviewState {
       (voice, info)
     };
 
-    let effective_freq = info.base_freq.unwrap_or(voice.base_freq);
-    let fresh =
-      voice.drone_specs(index, info.boops, effective_freq, self.slot_secs);
+    let fresh: Vec<NoteSpec> = voice
+      .drone_notes(index, info.boops, self.slot_secs)
+      .iter()
+      .map(Patch::to_note_spec)
+      .collect();
 
     let mut all_specs = self.drone_boop_specs.write().unwrap();
     let mut all_pins = self.drone_boop_pins.write().unwrap();
@@ -550,7 +556,7 @@ impl PreviewState {
       (all_specs.get_mut(index), all_pins.get_mut(index))
     {
       pins.resize(fresh.len(), false);
-      let merged: Vec<BoopSpec> = fresh
+      let merged: Vec<NoteSpec> = fresh
         .into_iter()
         .enumerate()
         .map(|(i, fresh_spec)| {
@@ -566,17 +572,17 @@ impl PreviewState {
     }
   }
 
-  /// Compute the effective drone voice at a given metric value by
+  /// Compute the effective drone patch at a given metric value by
   /// interpolating between the lo and hi profiles using the
   /// per-drone interpolation curve.
-  pub fn effective_drone_voice(&self, index: usize, metric: f32) -> Voice {
-    let voices = self.voices.read().unwrap();
-    let lo = voices
-      .get(&VoiceOwner::DroneLo(index))
+  pub fn effective_drone_patch(&self, index: usize, metric: f32) -> Patch {
+    let patches = self.patches.read().unwrap();
+    let lo = patches
+      .get(&PatchOwner::DroneLo(index))
       .cloned()
-      .unwrap_or_else(|| voices[&VoiceOwner::Heartbeat].clone());
-    let hi = voices
-      .get(&VoiceOwner::DroneHi(index))
+      .unwrap_or_else(|| patches[&PatchOwner::Heartbeat].clone());
+    let hi = patches
+      .get(&PatchOwner::DroneHi(index))
       .cloned()
       .unwrap_or_else(|| lo.clone());
     let curve = self
@@ -585,14 +591,14 @@ impl PreviewState {
       .map(|s| s.value() as f64)
       .unwrap_or(1.0);
     let t = (metric as f64).clamp(0.0, 1.0).powf(curve);
-    Voice::lerp(&lo, &hi, t)
+    Patch::lerp(&lo, &hi, t)
   }
 
   /// Build the full state snapshot JSON sent on connect and on
   /// `get_state` / `revert_all`.
   pub fn state_snapshot(&self) -> String {
-    let voices = self.voices.read().unwrap();
-    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let patches = self.patches.read().unwrap();
+    let heartbeat_voice = &patches[&PatchOwner::Heartbeat];
     let hb_overrides = self.heartbeat_overrides.read().unwrap();
     let drone_overrides = self.drone_overrides.read().unwrap();
     let drone_infos = self.drone_infos.read().unwrap();
@@ -600,14 +606,14 @@ impl PreviewState {
     let specs = self.boop_specs.read().unwrap();
     let pins = self.boop_pins.read().unwrap();
 
-    let heartbeat_voice_json = voice_to_json(heartbeat_voice);
+    let heartbeat_voice_json = patch_to_json(heartbeat_voice);
 
     let heartbeat_locked: Vec<_> = locked
-      .get(&VoiceOwner::Heartbeat)
+      .get(&PatchOwner::Heartbeat)
       .map(|s| s.iter().map(|p| json!(p)).collect())
       .unwrap_or_default();
 
-    let voice_params_json: Vec<_> = VOICE_PARAMS
+    let voice_params_json: Vec<_> = PATCH_PARAMS
       .iter()
       .map(|p| {
         json!({
@@ -636,7 +642,7 @@ impl PreviewState {
       .collect();
 
     let base_freq_meta =
-      VOICE_PARAMS.iter().find(|p| p.name == "base_freq").unwrap();
+      PATCH_PARAMS.iter().find(|p| p.name == "base_freq").unwrap();
 
     let drone_specs = self.drone_boop_specs.read().unwrap();
     let drone_pins = self.drone_boop_pins.read().unwrap();
@@ -645,20 +651,20 @@ impl PreviewState {
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let voice_lo = voices
-          .get(&VoiceOwner::DroneLo(i))
-          .map(voice_to_json)
+        let voice_lo = patches
+          .get(&PatchOwner::DroneLo(i))
+          .map(patch_to_json)
           .unwrap_or(json!({}));
-        let voice_hi = voices
-          .get(&VoiceOwner::DroneHi(i))
-          .map(voice_to_json)
+        let voice_hi = patches
+          .get(&PatchOwner::DroneHi(i))
+          .map(patch_to_json)
           .unwrap_or(json!({}));
         let lo_locked: Vec<_> = locked
-          .get(&VoiceOwner::DroneLo(i))
+          .get(&PatchOwner::DroneLo(i))
           .map(|s| s.iter().map(|p| json!(p)).collect())
           .unwrap_or_default();
         let hi_locked: Vec<_> = locked
-          .get(&VoiceOwner::DroneHi(i))
+          .get(&PatchOwner::DroneHi(i))
           .map(|s| s.iter().map(|p| json!(p)).collect())
           .unwrap_or_default();
         let d_specs = drone_specs.get(i).cloned().unwrap_or_default();
@@ -682,11 +688,10 @@ impl PreviewState {
           "repeat_curve": self.drone_repeat_curves[i].value(),
           "phrase_gap": self.drone_phrase_gaps[i].value(),
           "interp_curve": self.drone_interp_curves[i].value(),
-          "base_freq": info.base_freq,
           "boops": info.boops,
           "overridden": drone_overrides[i].is_some(),
-          "voice_lo": voice_lo,
-          "voice_hi": voice_hi,
+          "patch_lo": voice_lo,
+          "patch_hi": voice_hi,
           "locked_params_lo": lo_locked,
           "locked_params_hi": hi_locked,
           "specs": specs_json,
@@ -720,9 +725,9 @@ impl PreviewState {
 
     json!({
       "type": "state",
-      "voice": heartbeat_voice_json,
+      "patch": heartbeat_voice_json,
       "locked_params": heartbeat_locked,
-      "voice_params": voice_params_json,
+      "patch_params": voice_params_json,
       "muted": self.muted.load(Ordering::Relaxed),
       "master_volume": self.master_volume.value(),
       "heartbeat_volume": self.heartbeat_volume.value(),
@@ -745,7 +750,7 @@ impl PreviewState {
   }
 
   /// Collect per-drone specs as (name, specs) pairs for export.
-  fn drone_notes_for_export(&self) -> Vec<(String, Vec<BoopSpec>)> {
+  fn drone_notes_for_export(&self) -> Vec<(String, Vec<NoteSpec>)> {
     let drone_infos = self.drone_infos.read().unwrap();
     let all_specs = self.drone_boop_specs.read().unwrap();
     drone_infos
@@ -758,21 +763,21 @@ impl PreviewState {
       .collect()
   }
 
-  /// Format all voices as a TOML block.
+  /// Format all patches as a TOML block.
   pub fn export_toml(&self) -> String {
-    let voices = self.voices.read().unwrap();
-    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let patches = self.patches.read().unwrap();
+    let heartbeat_voice = &patches[&PatchOwner::Heartbeat];
     let drone_infos = self.drone_infos.read().unwrap();
     let drone_profiles: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let lo = voices
-          .get(&VoiceOwner::DroneLo(i))
+        let lo = patches
+          .get(&PatchOwner::DroneLo(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
-        let hi = voices
-          .get(&VoiceOwner::DroneHi(i))
+        let hi = patches
+          .get(&PatchOwner::DroneHi(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
         (info.name.clone(), lo, hi)
@@ -783,21 +788,21 @@ impl PreviewState {
     print::format_toml(heartbeat_voice, &drone_profiles, &specs, &drone_notes)
   }
 
-  /// Format all voices as a JSON object.
+  /// Format all patches as a JSON object.
   pub fn export_json(&self) -> String {
-    let voices = self.voices.read().unwrap();
-    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let patches = self.patches.read().unwrap();
+    let heartbeat_voice = &patches[&PatchOwner::Heartbeat];
     let drone_infos = self.drone_infos.read().unwrap();
     let drone_profiles: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let lo = voices
-          .get(&VoiceOwner::DroneLo(i))
+        let lo = patches
+          .get(&PatchOwner::DroneLo(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
-        let hi = voices
-          .get(&VoiceOwner::DroneHi(i))
+        let hi = patches
+          .get(&PatchOwner::DroneHi(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
         (info.name.clone(), lo, hi)
@@ -808,21 +813,21 @@ impl PreviewState {
     print::format_json(heartbeat_voice, &drone_profiles, &specs, &drone_notes)
   }
 
-  /// Format all voices as a Nix attribute set.
+  /// Format all patches as a Nix attribute set.
   pub fn export_nix(&self) -> String {
-    let voices = self.voices.read().unwrap();
-    let heartbeat_voice = &voices[&VoiceOwner::Heartbeat];
+    let patches = self.patches.read().unwrap();
+    let heartbeat_voice = &patches[&PatchOwner::Heartbeat];
     let drone_infos = self.drone_infos.read().unwrap();
     let drone_profiles: Vec<_> = drone_infos
       .iter()
       .enumerate()
       .map(|(i, info)| {
-        let lo = voices
-          .get(&VoiceOwner::DroneLo(i))
+        let lo = patches
+          .get(&PatchOwner::DroneLo(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
-        let hi = voices
-          .get(&VoiceOwner::DroneHi(i))
+        let hi = patches
+          .get(&PatchOwner::DroneHi(i))
           .cloned()
           .unwrap_or_else(|| heartbeat_voice.clone());
         (info.name.clone(), lo, hi)
@@ -833,17 +838,17 @@ impl PreviewState {
     print::format_nix(heartbeat_voice, &drone_profiles, &specs, &drone_notes)
   }
 
-  /// Reset everything to startup values.  Locked voice params
+  /// Reset everything to startup values.  Locked patch params
   /// and locked drones survive the reset; boop pins are cleared.
   pub fn revert(&self) {
     // Snapshot per-entity locked param values before resetting.
     let locked = self.locked_params.read().unwrap().clone();
-    let locked_values: HashMap<VoiceOwner, Vec<(String, f64)>> = {
-      let voices = self.voices.read().unwrap();
+    let locked_values: HashMap<PatchOwner, Vec<(String, f64)>> = {
+      let patches = self.patches.read().unwrap();
       locked
         .iter()
         .map(|(owner, params)| {
-          let vals: Vec<(String, f64)> = voices
+          let vals: Vec<(String, f64)> = patches
             .get(owner)
             .map(|voice| {
               params
@@ -889,15 +894,15 @@ impl PreviewState {
         .collect()
     };
 
-    *self.voices.write().unwrap() = self.original_voices.clone();
+    *self.patches.write().unwrap() = self.original_patches.clone();
 
     // Restore per-entity locked param values.
     {
-      let mut voices = self.voices.write().unwrap();
+      let mut patches = self.patches.write().unwrap();
       for (owner, vals) in &locked_values {
-        if let Some(voice) = voices.get_mut(owner) {
+        if let Some(voice) = patches.get_mut(owner) {
           for (name, value) in vals {
-            set_voice_param(voice, name, *value);
+            set_patch_param(voice, name, *value);
           }
         }
       }
@@ -954,7 +959,7 @@ impl PreviewState {
       .boop_count
       .store(self.original_boop_count, Ordering::Relaxed);
 
-    // Clear boop pins and recompute specs from reverted voice.
+    // Clear boop pins and recompute specs from reverted patch.
     {
       let mut pins = self.boop_pins.write().unwrap();
       pins.iter_mut().for_each(|p| *p = false);
@@ -986,7 +991,7 @@ impl PreviewState {
 
 // -- Helpers -----------------------------------------------------------------
 
-pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
+pub fn get_voice_param(voice: &Patch, param: &str) -> Option<f64> {
   match param {
     "base_freq" => Some(voice.base_freq),
     "sine_ratio" => Some(voice.sine_ratio),
@@ -1020,7 +1025,7 @@ pub fn get_voice_param(voice: &Voice, param: &str) -> Option<f64> {
   }
 }
 
-pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
+pub fn set_patch_param(voice: &mut Patch, param: &str, value: f64) -> bool {
   match param {
     "base_freq" => voice.base_freq = value,
     "sine_ratio" => voice.sine_ratio = value,
@@ -1055,7 +1060,7 @@ pub fn set_voice_param(voice: &mut Voice, param: &str, value: f64) -> bool {
   true
 }
 
-fn voice_to_json(voice: &Voice) -> serde_json::Value {
+fn patch_to_json(voice: &Patch) -> serde_json::Value {
   json!({
     "base_freq": voice.base_freq,
     "sine_ratio": voice.sine_ratio,
@@ -1103,7 +1108,7 @@ mod tests {
   use serde::Deserialize;
   use sonify_health_lib::{
     check::{DroneMetricConfig, HeartbeatCheckConfig, ResultMode},
-    Voice,
+    Patch,
   };
 
   // Contract structs mirror the Elm frontend decoders exactly.
@@ -1117,9 +1122,9 @@ mod tests {
   struct StateContract {
     #[serde(rename = "type")]
     msg_type: String,
-    voice: serde_json::Map<String, serde_json::Value>,
+    patch: serde_json::Map<String, serde_json::Value>,
     locked_params: Vec<String>,
-    voice_params: Vec<VoiceParamContract>,
+    patch_params: Vec<PatchParamContract>,
     muted: bool,
     master_volume: f64,
     heartbeat_volume: f64,
@@ -1128,12 +1133,12 @@ mod tests {
     checks: Vec<CheckContract>,
     drones: Vec<DroneContract>,
     locked_drones: Vec<u64>,
-    boop_specs: Vec<BoopSpecContract>,
-    boop_spec_ranges: BoopSpecRangesContract,
+    boop_specs: Vec<NoteSpecContract>,
+    boop_spec_ranges: NoteSpecRangesContract,
   }
 
   #[derive(Deserialize)]
-  struct VoiceParamContract {
+  struct PatchParamContract {
     name: String,
     description: String,
     min: f64,
@@ -1148,8 +1153,7 @@ mod tests {
     overridden: bool,
   }
 
-  /// Mirrors the Elm `DroneInfo` decoder.  The `base_freq` field is
-  /// nullable (Elm `Maybe Float`), so it uses `Option<f64>`.
+  /// Mirrors the Elm `DroneInfo` decoder.
   #[derive(Deserialize)]
   struct DroneContract {
     name: String,
@@ -1159,26 +1163,25 @@ mod tests {
     repeat_curve: f64,
     phrase_gap: f64,
     interp_curve: f64,
-    base_freq: Option<f64>,
     boops: u64,
     overridden: bool,
-    voice_lo: serde_json::Map<String, serde_json::Value>,
-    voice_hi: serde_json::Map<String, serde_json::Value>,
+    patch_lo: serde_json::Map<String, serde_json::Value>,
+    patch_hi: serde_json::Map<String, serde_json::Value>,
     locked_params_lo: Vec<String>,
     locked_params_hi: Vec<String>,
-    specs: Vec<BoopSpecContract>,
-    spec_ranges: BoopSpecRangesContract,
+    specs: Vec<NoteSpecContract>,
+    spec_ranges: NoteSpecRangesContract,
   }
 
   #[derive(Deserialize)]
-  struct BoopSpecContract {
+  struct NoteSpecContract {
     freq: f64,
     duration: f64,
     pinned: bool,
   }
 
   #[derive(Deserialize)]
-  struct BoopSpecRangesContract {
+  struct NoteSpecRangesContract {
     freq_min: f64,
     freq_max: f64,
     freq_step: f64,
@@ -1193,12 +1196,11 @@ mod tests {
     #[serde(rename = "type")]
     msg_type: String,
     index: u64,
-    base_freq: Option<f64>,
     boops: u64,
   }
 
   fn test_preview() -> PreviewState {
-    let voice = Voice::from_hostname("test");
+    let voice = Patch::from_hostname("test");
     let checks = vec![HeartbeatCheckConfig {
       name: "cpu".to_string(),
       command: "echo healthy".to_string(),
@@ -1208,7 +1210,6 @@ mod tests {
       name: "load".to_string(),
       command: "echo 0.5".to_string(),
       result_mode: ResultMode::Stdout,
-      base_freq: None,
       boops: Some(2),
     }];
     PreviewState::new(
@@ -1231,7 +1232,7 @@ mod tests {
       .expect("state_snapshot JSON does not match the Elm frontend contract");
 
     assert_eq!(state.msg_type, "state");
-    assert!(!state.voice_params.is_empty());
+    assert!(!state.patch_params.is_empty());
     assert_eq!(state.checks.len(), 1);
     assert_eq!(state.checks[0].name, "cpu");
     assert_eq!(state.drones.len(), 1);
@@ -1243,13 +1244,11 @@ mod tests {
   fn drone_config_changed_matches_frontend_contract() {
     let info = DroneMetricInfo {
       name: "load".to_string(),
-      base_freq: Some(220.0),
       boops: 3,
     };
     let msg = serde_json::json!({
       "type": "drone_config_changed",
       "index": 0,
-      "base_freq": info.base_freq,
       "boops": info.boops,
     })
     .to_string();
@@ -1260,43 +1259,27 @@ mod tests {
     );
 
     assert_eq!(parsed.msg_type, "drone_config_changed");
-    assert_eq!(parsed.base_freq, Some(220.0));
     assert_eq!(parsed.boops, 3);
-  }
-
-  #[test]
-  fn drone_config_changed_null_base_freq() {
-    let msg = serde_json::json!({
-      "type": "drone_config_changed",
-      "index": 0,
-      "base_freq": null,
-      "boops": 1,
-    })
-    .to_string();
-
-    let parsed: DroneConfigChangedContract = serde_json::from_str(&msg)
-      .expect("drone_config_changed with null base_freq should still decode");
-    assert_eq!(parsed.base_freq, None);
   }
 
   #[test]
   fn heartbeat_voice_change_does_not_affect_drone() {
     let preview = test_preview();
     let original_drone_freq = {
-      let voices = preview.voices.read().unwrap();
-      voices[&VoiceOwner::DroneLo(0)].base_freq
+      let patches = preview.patches.read().unwrap();
+      patches[&PatchOwner::DroneLo(0)].base_freq
     };
     {
-      let mut voices = preview.voices.write().unwrap();
-      let hb = voices.get_mut(&VoiceOwner::Heartbeat).unwrap();
-      set_voice_param(hb, "base_freq", 999.0);
+      let mut patches = preview.patches.write().unwrap();
+      let hb = patches.get_mut(&PatchOwner::Heartbeat).unwrap();
+      set_patch_param(hb, "base_freq", 999.0);
     }
-    let voices = preview.voices.read().unwrap();
+    let patches = preview.patches.read().unwrap();
     assert!(
-      (voices[&VoiceOwner::Heartbeat].base_freq - 999.0).abs() < f64::EPSILON,
+      (patches[&PatchOwner::Heartbeat].base_freq - 999.0).abs() < f64::EPSILON,
     );
     assert!(
-      (voices[&VoiceOwner::DroneLo(0)].base_freq - original_drone_freq).abs()
+      (patches[&PatchOwner::DroneLo(0)].base_freq - original_drone_freq).abs()
         < f64::EPSILON,
     );
   }
@@ -1305,20 +1288,20 @@ mod tests {
   fn drone_voice_change_does_not_affect_heartbeat() {
     let preview = test_preview();
     let original_hb_freq = {
-      let voices = preview.voices.read().unwrap();
-      voices[&VoiceOwner::Heartbeat].base_freq
+      let patches = preview.patches.read().unwrap();
+      patches[&PatchOwner::Heartbeat].base_freq
     };
     {
-      let mut voices = preview.voices.write().unwrap();
-      let drone = voices.get_mut(&VoiceOwner::DroneLo(0)).unwrap();
-      set_voice_param(drone, "base_freq", 777.0);
+      let mut patches = preview.patches.write().unwrap();
+      let drone = patches.get_mut(&PatchOwner::DroneLo(0)).unwrap();
+      set_patch_param(drone, "base_freq", 777.0);
     }
-    let voices = preview.voices.read().unwrap();
+    let patches = preview.patches.read().unwrap();
     assert!(
-      (voices[&VoiceOwner::DroneLo(0)].base_freq - 777.0).abs() < f64::EPSILON,
+      (patches[&PatchOwner::DroneLo(0)].base_freq - 777.0).abs() < f64::EPSILON,
     );
     assert!(
-      (voices[&VoiceOwner::Heartbeat].base_freq - original_hb_freq).abs()
+      (patches[&PatchOwner::Heartbeat].base_freq - original_hb_freq).abs()
         < f64::EPSILON,
     );
   }
@@ -1326,47 +1309,47 @@ mod tests {
   #[test]
   fn per_entity_lock_survives_revert() {
     let preview = test_preview();
-    // Change heartbeat voice and lock it.
+    // Change heartbeat patch and lock it.
     {
-      let mut voices = preview.voices.write().unwrap();
-      let hb = voices.get_mut(&VoiceOwner::Heartbeat).unwrap();
-      set_voice_param(hb, "base_freq", 555.0);
+      let mut patches = preview.patches.write().unwrap();
+      let hb = patches.get_mut(&PatchOwner::Heartbeat).unwrap();
+      set_patch_param(hb, "base_freq", 555.0);
     }
     preview
       .locked_params
       .write()
       .unwrap()
-      .entry(VoiceOwner::Heartbeat)
+      .entry(PatchOwner::Heartbeat)
       .or_default()
       .insert("base_freq".to_string());
 
     preview.revert();
 
-    let voices = preview.voices.read().unwrap();
+    let patches = preview.patches.read().unwrap();
     assert!(
-      (voices[&VoiceOwner::Heartbeat].base_freq - 555.0).abs() < f64::EPSILON,
+      (patches[&PatchOwner::Heartbeat].base_freq - 555.0).abs() < f64::EPSILON,
       "Locked heartbeat base_freq should survive revert",
     );
   }
 
   #[test]
-  fn state_snapshot_encodes_all_voices() {
+  fn state_snapshot_encodes_all_patches() {
     let preview = test_preview();
     // Set heartbeat and drone lo/hi to different values.
     {
-      let mut voices = preview.voices.write().unwrap();
-      set_voice_param(
-        voices.get_mut(&VoiceOwner::Heartbeat).unwrap(),
+      let mut patches = preview.patches.write().unwrap();
+      set_patch_param(
+        patches.get_mut(&PatchOwner::Heartbeat).unwrap(),
         "base_freq",
         111.0,
       );
-      set_voice_param(
-        voices.get_mut(&VoiceOwner::DroneLo(0)).unwrap(),
+      set_patch_param(
+        patches.get_mut(&PatchOwner::DroneLo(0)).unwrap(),
         "base_freq",
         222.0,
       );
-      set_voice_param(
-        voices.get_mut(&VoiceOwner::DroneHi(0)).unwrap(),
+      set_patch_param(
+        patches.get_mut(&PatchOwner::DroneHi(0)).unwrap(),
         "base_freq",
         333.0,
       );
@@ -1374,9 +1357,9 @@ mod tests {
     let json = preview.state_snapshot();
     let state: StateContract =
       serde_json::from_str(&json).expect("state_snapshot should decode");
-    let hb_freq = state.voice["base_freq"].as_f64().unwrap();
-    let lo_freq = state.drones[0].voice_lo["base_freq"].as_f64().unwrap();
-    let hi_freq = state.drones[0].voice_hi["base_freq"].as_f64().unwrap();
+    let hb_freq = state.patch["base_freq"].as_f64().unwrap();
+    let lo_freq = state.drones[0].patch_lo["base_freq"].as_f64().unwrap();
+    let hi_freq = state.drones[0].patch_hi["base_freq"].as_f64().unwrap();
     assert!((hb_freq - 111.0).abs() < f64::EPSILON);
     assert!((lo_freq - 222.0).abs() < f64::EPSILON);
     assert!((hi_freq - 333.0).abs() < f64::EPSILON);
@@ -1412,8 +1395,8 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 
-        let base_voice = Voice::from_hostname("test");
-        let voice = match &config.daemon.heartbeat_voice_overrides {
+        let base_voice = Patch::from_hostname("test");
+        let voice = match &config.daemon.heartbeat_patch_overrides {
           Some(ovr) => base_voice.with_overrides(ovr),
           None => base_voice,
         };
@@ -1458,13 +1441,13 @@ mod tests {
             path.display()
           );
           assert!(
-            !drone.voice_lo.is_empty(),
-            "{}: drone[{i}] voice_lo is empty",
+            !drone.patch_lo.is_empty(),
+            "{}: drone[{i}] patch_lo is empty",
             path.display()
           );
           assert!(
-            !drone.voice_hi.is_empty(),
-            "{}: drone[{i}] voice_hi is empty",
+            !drone.patch_hi.is_empty(),
+            "{}: drone[{i}] patch_hi is empty",
             path.display()
           );
         }
