@@ -214,6 +214,25 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "set_cycle_offset" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let value = msg.get("value").and_then(|v| v.as_f64())?;
+      let clamped = value.max(0.0);
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.cycle_offset_secs = clamped;
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "cycle_offset_changed",
+          "index": index,
+          "value": clamped,
+        })
+        .to_string(),
+      );
+      None
+    }
+
     "set_transition" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let raw = msg.get("transition")?;

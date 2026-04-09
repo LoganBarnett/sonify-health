@@ -93,6 +93,8 @@ type Msg
     | DismissExport
     | SetImportText String
     | SubmitImport
+    | SetCycleOffset Int String
+    | CycleOffsetDebounce Int Int Float
     | SetTransitionPatch Int Int String
     | SetTransitionThreshold Int Int String
     | AddTransitionState Int
@@ -363,6 +365,31 @@ update msg model =
                 , Ports.websocketSend (encodeImportConfig model.importText)
                 )
 
+        SetCycleOffset index rawVal ->
+            case String.toFloat rawVal of
+                Just val ->
+                    let
+                        key =
+                            "hb_offset:" ++ String.fromInt index
+                    in
+                    debounce key val model (CycleOffsetDebounce index)
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CycleOffsetDebounce index id val ->
+            let
+                key =
+                    "hb_offset:" ++ String.fromInt index
+            in
+            if isCurrentDebounce key id model then
+                ( model
+                , Ports.websocketSend (encodeSetCycleOffset index val)
+                )
+
+            else
+                ( model, Cmd.none )
+
         SetTransitionPatch hbIdx stateIdx patchName ->
             let
                 newHeartbeats =
@@ -610,6 +637,16 @@ handleServerMsg msg model =
 
         LibraryChanged lib ->
             ( { model | library = lib }, Cmd.none )
+
+        CycleOffsetChanged index value ->
+            ( { model
+                | heartbeats =
+                    updateAt index
+                        (\hb -> { hb | cycleOffsetSecs = value })
+                        model.heartbeats
+              }
+            , Cmd.none
+            )
 
         TransitionChanged index trans ->
             ( { model
@@ -1001,6 +1038,19 @@ viewHeartbeatCard model index hb =
                     ]
                     []
                 , text (String.left 4 (String.fromFloat hb.volume))
+                ]
+            , label [ class "slider-row" ]
+                [ text "Offset "
+                , input
+                    [ type_ "range"
+                    , Html.Attributes.min "0"
+                    , Html.Attributes.max "60"
+                    , step "0.1"
+                    , value (String.fromFloat hb.cycleOffsetSecs)
+                    , onInput (SetCycleOffset index)
+                    ]
+                    []
+                , text (String.left 4 (String.fromFloat hb.cycleOffsetSecs))
                 ]
             , label [ class "slider-row" ]
                 [ text "Override "

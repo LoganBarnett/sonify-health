@@ -141,6 +141,7 @@ impl PreviewState {
           "metric": hb.metric.value(),
           "overridden": overridden,
           "volume": hb.volume.value(),
+          "cycle_offset_secs": cfg.cycle_offset_secs,
           "transition": serde_json::to_value(&cfg.transition).unwrap_or_default(),
         })
       })

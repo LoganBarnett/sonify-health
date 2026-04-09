@@ -11,6 +11,7 @@ module Protocol exposing
     , encodeImportConfig
     , encodeOverrideHeartbeat
     , encodeRevertAll
+    , encodeSetCycleOffset
     , encodeSetHeartbeatLoop
     , encodeSetHeartbeatVolume
     , encodeSetMasterVolume
@@ -40,6 +41,7 @@ type alias HeartbeatInfo =
     , metric : Float
     , overridden : Bool
     , volume : Float
+    , cycleOffsetSecs : Float
     , transition : TransitionInfo
     }
 
@@ -77,6 +79,7 @@ type ServerMsg
     | OverrideChanged Int (Maybe Float) Bool
     | HeartbeatLoopChanged Bool
     | LibraryChanged (Dict String (Dict String Float))
+    | CycleOffsetChanged Int Float
     | TransitionChanged Int TransitionInfo
     | ProbeLog ProbeLogEntry
     | ConfigExport (Dict String (Dict String Float))
@@ -120,6 +123,9 @@ serverMsgDecoder =
 
                     "library_changed" ->
                         libraryChangedDecoder
+
+                    "cycle_offset_changed" ->
+                        cycleOffsetChangedDecoder
 
                     "transition_changed" ->
                         transitionChangedDecoder
@@ -194,12 +200,13 @@ libraryDecoder =
 
 heartbeatInfoDecoder : D.Decoder HeartbeatInfo
 heartbeatInfoDecoder =
-    D.map6 HeartbeatInfo
+    D.map7 HeartbeatInfo
         (D.field "name" D.string)
         (D.field "continuous" D.bool)
         (D.field "metric" D.float)
         (D.field "overridden" D.bool)
         (D.field "volume" D.float)
+        (D.field "cycle_offset_secs" D.float)
         (D.field "transition" transitionDecoder)
 
 
@@ -274,6 +281,13 @@ heartbeatLoopChangedDecoder =
 libraryChangedDecoder : D.Decoder ServerMsg
 libraryChangedDecoder =
     D.map LibraryChanged (D.field "library" libraryDecoder)
+
+
+cycleOffsetChangedDecoder : D.Decoder ServerMsg
+cycleOffsetChangedDecoder =
+    D.map2 CycleOffsetChanged
+        (D.field "index" D.int)
+        (D.field "value" D.float)
 
 
 transitionChangedDecoder : D.Decoder ServerMsg
@@ -410,6 +424,16 @@ encodeImportConfig text =
     E.object
         [ ( "type", E.string "import_config" )
         , ( "text", E.string text )
+        ]
+        |> E.encode 0
+
+
+encodeSetCycleOffset : Int -> Float -> String
+encodeSetCycleOffset index value =
+    E.object
+        [ ( "type", E.string "set_cycle_offset" )
+        , ( "index", E.int index )
+        , ( "value", E.float value )
         ]
         |> E.encode 0
 
