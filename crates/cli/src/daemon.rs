@@ -258,13 +258,29 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
           let attack_secs = voice.attack_ms / 1000.0;
           let release_secs = voice.release_ms / 1000.0;
-          let phrase_dur = heartbeat::heartbeat_duration(
-            &specs,
-            attack_secs,
-            release_secs,
-            voice.echo_delay,
-            voice.echo_mix,
-          );
+
+          // Compute the gap before sleeping so we know whether
+          // to use content-only or full duration.
+          let base_gap = prev.drone_phrase_gaps[i].value() as f64;
+          let curve = prev.drone_repeat_curves[i].value();
+          let rate = prev.drone_repeat_rates[i].value();
+          let gap = drone::phrase_gap_secs(base_gap, metric, curve, rate);
+
+          // When gap=0 the drone loops seamlessly: sleep only for
+          // the note content so replace() fires while the last
+          // note is still sustaining, letting the crossfade
+          // overlap sound with sound instead of silence.
+          let phrase_dur = if gap == 0.0 {
+            heartbeat::heartbeat_content_duration(&specs, attack_secs)
+          } else {
+            heartbeat::heartbeat_duration(
+              &specs,
+              attack_secs,
+              release_secs,
+              voice.echo_delay,
+              voice.echo_mix,
+            )
+          };
 
           // First iteration uses add; subsequent iterations use
           // replace for seamless graph swap.
@@ -286,12 +302,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             break;
           }
 
-          // Gap between phrases, shaped by repeat_curve and scaled
-          // by repeat_rate.
-          let base_gap = prev.drone_phrase_gaps[i].value() as f64;
-          let curve = prev.drone_repeat_curves[i].value();
-          let rate = prev.drone_repeat_rates[i].value();
-          let gap = drone::phrase_gap_secs(base_gap, metric, curve, rate);
           if gap > 0.0 {
             mix.remove(sid);
             slot_id = None;

@@ -5,6 +5,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+/// Number of frames over which `replace()` crossfades from the
+/// old graph to the new one.  256 frames ≈ 5.8 ms at 44.1 kHz —
+/// long enough to eliminate phase-discontinuity clicks, short
+/// enough to be inaudible as a blend.
+const CROSSFADE_FRAMES: usize = 256;
+
 /// Preferred buffer size in frames for a single-graph stream.
 /// Larger buffers give the CPU more headroom for expensive graphs
 /// (the 32-channel FDN reverb in particular) at the cost of a few
@@ -169,10 +175,20 @@ impl AudioOutput {
 // AudioMixer — single cpal stream that mixes N fundsp graphs.
 // ---------------------------------------------------------------------------
 
+/// Residual state from the previous graph during a crossfade.
+struct CrossfadeState {
+  adapter: BigBlockAdapter,
+  left: Vec<f32>,
+  right: Vec<f32>,
+  remaining_frames: usize,
+}
+
 struct MixerSlot {
   adapter: BigBlockAdapter,
   left: Vec<f32>,
   right: Vec<f32>,
+  /// Previous graph being crossfaded out after a `replace()`.
+  prev: Option<CrossfadeState>,
 }
 
 struct MixerInner {
@@ -249,10 +265,50 @@ fn mixer_callback(
         continue;
       }
 
-      for (i, frame) in data.chunks_mut(channels).enumerate() {
-        frame[0] += slot.left[i];
-        if channels > 1 {
-          frame[1] += slot.right[i];
+      // Crossfade: blend the previous graph out while the new
+      // graph fades in over CROSSFADE_FRAMES.
+      if let Some(prev) = slot.prev.as_mut() {
+        prev.left.resize(frames, 0.0);
+        prev.right.resize(frames, 0.0);
+        prev.adapter.process_big(
+          frames,
+          &[],
+          &mut [&mut prev.left, &mut prev.right],
+        );
+
+        let prev_finite = prev
+          .left
+          .iter()
+          .chain(prev.right.iter())
+          .all(|s| s.is_finite());
+
+        for (i, frame) in data.chunks_mut(channels).enumerate() {
+          // fade ramps from 1→0 over the crossfade window;
+          // once remaining_frames hits 0 we output 100% new.
+          let fade = if prev.remaining_frames > 0 {
+            prev.remaining_frames -= 1;
+            prev.remaining_frames as f32 / CROSSFADE_FRAMES as f32
+          } else {
+            0.0
+          };
+          let new_gain = 1.0 - fade;
+          let old_l = if prev_finite { prev.left[i] } else { 0.0 };
+          let old_r = if prev_finite { prev.right[i] } else { 0.0 };
+          frame[0] += slot.left[i] * new_gain + old_l * fade;
+          if channels > 1 {
+            frame[1] += slot.right[i] * new_gain + old_r * fade;
+          }
+        }
+
+        if prev.remaining_frames == 0 {
+          slot.prev = None;
+        }
+      } else {
+        for (i, frame) in data.chunks_mut(channels).enumerate() {
+          frame[0] += slot.left[i];
+          if channels > 1 {
+            frame[1] += slot.right[i];
+          }
         }
       }
     }
@@ -328,6 +384,7 @@ impl AudioMixer {
       adapter: BigBlockAdapter::new(graph),
       left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
       right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+      prev: None,
     };
 
     let mut slots = self.inner.slots.lock().unwrap();
@@ -374,23 +431,43 @@ impl AudioMixer {
     );
   }
 
-  /// Replace the graph at the given slot in-place.
+  /// Replace the graph at the given slot in-place, crossfading
+  /// from the old graph to the new one over `CROSSFADE_FRAMES`.
   pub fn replace(&self, id: usize, mut graph: Box<dyn AudioUnit>) {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
-    let slot = MixerSlot {
-      adapter: BigBlockAdapter::new(graph),
-      left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
-      right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
-    };
+    let new_adapter = BigBlockAdapter::new(graph);
 
     let mut slots = self.inner.slots.lock().unwrap();
     if id < slots.len() {
-      slots[id] = Some(slot);
+      if let Some(old_slot) = slots[id].take() {
+        slots[id] = Some(MixerSlot {
+          adapter: new_adapter,
+          left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          prev: Some(CrossfadeState {
+            adapter: old_slot.adapter,
+            left: old_slot.left,
+            right: old_slot.right,
+            remaining_frames: CROSSFADE_FRAMES,
+          }),
+        });
+      } else {
+        slots[id] = Some(MixerSlot {
+          adapter: new_adapter,
+          left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          prev: None,
+        });
+      }
     } else {
-      // Extend to accommodate the requested ID.
       slots.resize_with(id + 1, || None);
-      slots[id] = Some(slot);
+      slots[id] = Some(MixerSlot {
+        adapter: new_adapter,
+        left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+        right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+        prev: None,
+      });
     }
   }
 
@@ -419,6 +496,7 @@ impl MixerHandle {
       adapter: BigBlockAdapter::new(graph),
       left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
       right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+      prev: None,
     };
 
     let mut slots = self.inner.slots.lock().unwrap();
@@ -450,22 +528,43 @@ impl MixerHandle {
     tracing::info!(id, active, "MixerHandle: slot removed");
   }
 
-  /// Replace the graph at the given slot in-place.
+  /// Replace the graph at the given slot, crossfading from the old
+  /// graph to the new one over `CROSSFADE_FRAMES`.
   pub fn replace(&self, id: usize, mut graph: Box<dyn AudioUnit>) {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
-    let slot = MixerSlot {
-      adapter: BigBlockAdapter::new(graph),
-      left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
-      right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
-    };
+    let new_adapter = BigBlockAdapter::new(graph);
 
     let mut slots = self.inner.slots.lock().unwrap();
     if id < slots.len() {
-      slots[id] = Some(slot);
+      if let Some(old_slot) = slots[id].take() {
+        slots[id] = Some(MixerSlot {
+          adapter: new_adapter,
+          left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          prev: Some(CrossfadeState {
+            adapter: old_slot.adapter,
+            left: old_slot.left,
+            right: old_slot.right,
+            remaining_frames: CROSSFADE_FRAMES,
+          }),
+        });
+      } else {
+        slots[id] = Some(MixerSlot {
+          adapter: new_adapter,
+          left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+          prev: None,
+        });
+      }
     } else {
       slots.resize_with(id + 1, || None);
-      slots[id] = Some(slot);
+      slots[id] = Some(MixerSlot {
+        adapter: new_adapter,
+        left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+        right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
+        prev: None,
+      });
     }
   }
 }

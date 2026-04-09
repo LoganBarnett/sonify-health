@@ -70,6 +70,31 @@ pub fn heartbeat_duration(
   )
 }
 
+/// Content-only duration of a heartbeat phrase: attack ramps, boop
+/// bodies, and inter-boop gaps.  Excludes the release tail, echo
+/// decay, and safety margin.  Used for gap=0 drone looping so
+/// `replace()` fires while the last note is still sustaining,
+/// letting the crossfade overlap sound with sound.
+pub fn heartbeat_content_duration(
+  specs: &[BoopSpec],
+  attack_secs: f64,
+) -> Duration {
+  if specs.is_empty() {
+    return Duration::ZERO;
+  }
+
+  let max_dur = specs.iter().map(|s| s.duration).fold(0.0f64, f64::max);
+
+  let attack_total = attack_secs * specs.len() as f64;
+  let boop_sum: f64 = specs.iter().map(|s| s.duration).sum();
+  let gap_sum: f64 = specs
+    .windows(2)
+    .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
+    .sum();
+
+  Duration::from_secs_f64(attack_total + boop_sum + gap_sum)
+}
+
 /// Parameters for a single boop inside the heartbeat closure.
 #[derive(Clone)]
 struct BoopTiming {

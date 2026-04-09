@@ -31,10 +31,10 @@ pub struct Voice {
   #[voice_param(order = 3, range = 0.0..1.0)]
   pub saw_ratio: f64,
 
-  #[voice_param(order = 4, range = 1.0..500.0)]
+  #[voice_param(order = 4, range = 0.0..500.0)]
   pub attack_ms: f64,
 
-  #[voice_param(order = 5, range = 10.0..1000.0)]
+  #[voice_param(order = 5, range = 0.0..1000.0)]
   pub release_ms: f64,
 
   #[voice_param(order = 6, range = 0.5..4.0)]
@@ -476,8 +476,8 @@ mod tests {
       assert!((0.0..1.0).contains(&v.sine_ratio));
       assert!((0.0..1.0).contains(&v.tri_ratio));
       assert!((0.0..1.0).contains(&v.saw_ratio));
-      assert!((1.0..500.0).contains(&v.attack_ms));
-      assert!((10.0..1000.0).contains(&v.release_ms));
+      assert!((0.0..500.0).contains(&v.attack_ms));
+      assert!((0.0..1000.0).contains(&v.release_ms));
       assert!((0.5..4.0).contains(&v.chirp_ratio));
       assert!((-1.0..1.0).contains(&v.stereo_pan));
       assert!((0.0..1.0).contains(&v.reverb_mix));
