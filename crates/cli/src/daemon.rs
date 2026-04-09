@@ -2,7 +2,7 @@ use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  heartbeat, probe, Patch,
+  heartbeat, probe, seconds_until_next, Patch,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -115,6 +115,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     let phrase_gap = cfg.phrase_gap;
     let repeat_rate = cfg.repeat_rate;
     let cycle_secs = cfg.cycle_secs;
+    let cycle_offset = cfg.cycle_offset_secs;
     handles.push(thread::spawn(move || {
       let mut slot_id: Option<usize> = None;
       while play_running.load(Ordering::Relaxed) {
@@ -179,6 +180,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             play_mix.remove(sid);
             slot_id = None;
             sleep_checking(&play_running, Duration::from_secs_f64(gap));
+
+            // Align phrase restart to the wall-clock grid.
+            let wait = seconds_until_next(cycle_secs, cycle_offset);
+            if wait > 0.005 {
+              sleep_checking(&play_running, Duration::from_secs_f64(wait));
+            }
           }
         } else {
           // One-shot: play, then sleep for cycle_secs.
@@ -202,7 +209,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             continue;
           }
 
-          sleep_checking(&play_running, Duration::from_secs_f64(cycle_secs));
+          let wait = seconds_until_next(cycle_secs, cycle_offset);
+          sleep_checking(&play_running, Duration::from_secs_f64(wait));
         }
       }
     }));

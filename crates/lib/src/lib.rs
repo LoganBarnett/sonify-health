@@ -13,4 +13,5 @@ pub use library::{builtin_library, PatchLibrary};
 pub use logging::{LogFormat, LogLevel};
 pub use patch::{Patch, PatchOverrides, PatchParamMeta};
 pub use probe::ResultMode;
+pub use timing::seconds_until_next;
 pub use transition::Transition;

@@ -15,7 +15,7 @@ fn default_poll_interval() -> f64 {
 }
 
 fn default_cycle_secs() -> f64 {
-  14.0
+  15.0
 }
 
 /// A heartbeat joins a probe command with a transition that maps
@@ -53,4 +53,9 @@ pub struct HeartbeatConfig {
   /// Seconds between plays for one-shot heartbeats.
   #[serde(default = "default_cycle_secs")]
   pub cycle_secs: f64,
+
+  /// Offset within the cycle for wall-clock alignment, allowing
+  /// heartbeats to stagger their play times.
+  #[serde(default)]
+  pub cycle_offset_secs: f64,
 }

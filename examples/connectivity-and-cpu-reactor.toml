@@ -75,6 +75,8 @@ downsample = 0.03
 name = "gateway"
 command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
 result_mode = "exit-code-severity"
+cycle_secs = 15
+cycle_offset_secs = 0
 
 [heartbeats.transition]
 type = "discrete"
@@ -92,6 +94,8 @@ patch = "alarm"
 name = "internet"
 command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
 result_mode = "exit-code-severity"
+cycle_secs = 15
+cycle_offset_secs = 5
 
 [heartbeats.transition]
 type = "discrete"
@@ -112,6 +116,8 @@ result_mode = "stdout"
 continuous = true
 volume = 0.2
 poll_interval_secs = 5
+cycle_secs = 15
+cycle_offset_secs = 10
 
 [heartbeats.transition]
 type = "gradient"

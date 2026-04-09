@@ -1,85 +1,22 @@
-use serde::Deserialize;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Configuration for multi-machine time-slot coordination.
-///
-/// Multiple machines share a repeating cycle.  Each machine gets
-/// a fixed slot within the cycle, determined by wall-clock time
-/// modulo the cycle duration.  NTP synchronization provides the
-/// ~10 ms precision needed for second-level slots.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TimingConfig {
-  /// Total cycle duration covering all machines.
-  #[serde(default = "default_cycle_secs")]
-  pub cycle_duration_secs: f64,
+/// Seconds until the next play time on a wall-clock-anchored grid.
+/// The grid is epoch-aligned: play times fall at
+/// `offset + N * cycle` for integer N.
+pub fn seconds_until_next(cycle_secs: f64, offset_secs: f64) -> f64 {
+  let now = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_secs_f64();
+  let aligned = now - offset_secs;
+  let elapsed = aligned.rem_euclid(cycle_secs);
+  let remaining = cycle_secs - elapsed;
 
-  /// Time budget per machine within the cycle.
-  #[serde(default = "default_slot_secs")]
-  pub slot_duration_secs: f64,
-
-  /// This machine's zero-indexed position in the cycle.
-  #[serde(default)]
-  pub slot: u8,
-}
-
-fn default_cycle_secs() -> f64 {
-  16.0
-}
-
-fn default_slot_secs() -> f64 {
-  4.0
-}
-
-impl Default for TimingConfig {
-  fn default() -> Self {
-    Self {
-      cycle_duration_secs: default_cycle_secs(),
-      slot_duration_secs: default_slot_secs(),
-      slot: 0,
-    }
-  }
-}
-
-impl TimingConfig {
-  /// Seconds elapsed within the current cycle.
-  fn cycle_offset_secs(&self) -> f64 {
-    let now = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .unwrap_or_default()
-      .as_secs_f64();
-    now % self.cycle_duration_secs
-  }
-
-  /// Start offset of this machine's slot within a cycle.
-  fn slot_start(&self) -> f64 {
-    self.slot as f64 * self.slot_duration_secs
-  }
-
-  /// Whether the current wall-clock time falls within this
-  /// machine's slot.
-  pub fn is_in_slot(&self) -> bool {
-    let offset = self.cycle_offset_secs();
-    let start = self.slot_start();
-    let end = start + self.slot_duration_secs;
-    offset >= start && offset < end
-  }
-
-  /// Duration until the next occurrence of this machine's slot.
-  /// Returns zero if already inside the slot.
-  pub fn duration_until_next_slot(&self) -> Duration {
-    let offset = self.cycle_offset_secs();
-    let start = self.slot_start();
-
-    let wait = if offset < start {
-      start - offset
-    } else if offset < start + self.slot_duration_secs {
-      0.0
-    } else {
-      self.cycle_duration_secs - offset + start
-    };
-
-    Duration::from_secs_f64(wait)
+  // Snap to zero when we're essentially at the boundary.
+  if remaining < 0.005 || (cycle_secs - remaining) < 0.005 {
+    0.0
+  } else {
+    remaining
   }
 }
 
@@ -87,33 +24,60 @@ impl TimingConfig {
 mod tests {
   use super::*;
 
-  #[test]
-  fn default_config_values() {
-    let cfg = TimingConfig::default();
-    assert_eq!(cfg.cycle_duration_secs, 16.0);
-    assert_eq!(cfg.slot_duration_secs, 4.0);
-    assert_eq!(cfg.slot, 0);
-  }
-
-  #[test]
-  fn duration_until_slot_is_bounded() {
-    let cfg = TimingConfig {
-      cycle_duration_secs: 16.0,
-      slot_duration_secs: 4.0,
-      slot: 3,
-    };
-    let wait = cfg.duration_until_next_slot();
-    // Wait can never exceed a full cycle.
-    assert!(wait <= Duration::from_secs_f64(16.0));
-  }
-
-  #[test]
-  fn in_slot_and_wait_are_consistent() {
-    let cfg = TimingConfig::default();
-    if cfg.is_in_slot() {
-      assert_eq!(cfg.duration_until_next_slot(), Duration::ZERO);
+  /// Helper: compute seconds_until_next as if "now" were a given
+  /// epoch timestamp.  Mirrors the production logic but accepts a
+  /// synthetic clock value.
+  fn seconds_until_next_at(now: f64, cycle_secs: f64, offset_secs: f64) -> f64 {
+    let aligned = now - offset_secs;
+    let elapsed = aligned.rem_euclid(cycle_secs);
+    let remaining = cycle_secs - elapsed;
+    if remaining < 0.005 || (cycle_secs - remaining) < 0.005 {
+      0.0
     } else {
-      assert!(cfg.duration_until_next_slot() > Duration::ZERO);
+      remaining
     }
+  }
+
+  #[test]
+  fn mid_cycle_offset_zero() {
+    // 7.5 seconds into a 15-second cycle → 7.5 remaining.
+    let r = seconds_until_next_at(7.5, 15.0, 0.0);
+    assert!((r - 7.5).abs() < 1e-9);
+  }
+
+  #[test]
+  fn at_boundary_snaps_to_zero() {
+    // Exactly on a boundary.
+    let r = seconds_until_next_at(30.0, 15.0, 0.0);
+    assert_eq!(r, 0.0);
+  }
+
+  #[test]
+  fn near_boundary_snaps_to_zero() {
+    // Within 5 ms of boundary.
+    let r = seconds_until_next_at(29.998, 15.0, 0.0);
+    assert_eq!(r, 0.0);
+  }
+
+  #[test]
+  fn offset_shifts_grid() {
+    // Cycle 15, offset 5.  Grid points: 5, 20, 35, …
+    // now=12 → next at 20 → 8 remaining.
+    let r = seconds_until_next_at(12.0, 15.0, 5.0);
+    assert!((r - 8.0).abs() < 1e-9);
+  }
+
+  #[test]
+  fn offset_larger_than_cycle_wraps() {
+    // offset 20 with cycle 15 effectively means offset 5.
+    let r = seconds_until_next_at(12.0, 15.0, 20.0);
+    assert!((r - 8.0).abs() < 1e-9);
+  }
+
+  #[test]
+  fn live_result_is_bounded() {
+    let r = seconds_until_next(15.0, 0.0);
+    assert!(r >= 0.0);
+    assert!(r <= 15.0);
   }
 }
