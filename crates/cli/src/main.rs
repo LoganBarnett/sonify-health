@@ -537,6 +537,14 @@ fn run_drone_preview(
 
   let patch = patch_args.resolve_patch(config);
   let slot_secs = config.daemon.timing.slot_duration_secs;
+  // Pull playback defaults from the first drone metric, if any.
+  let first_drone = config.daemon.drone_metrics.first();
+  let base_phrase_gap = first_drone.and_then(|m| m.phrase_gap).unwrap_or(4.0);
+  let base_repeat_rate =
+    first_drone.and_then(|m| m.repeat_rate).unwrap_or(1.0) as f32;
+  let base_repeat_curve =
+    first_drone.and_then(|m| m.repeat_curve).unwrap_or(1.0) as f32;
+
   debug!(?patch, "Resolved patch");
   info!(
     base_freq = patch.base_freq,
@@ -571,7 +579,12 @@ fn run_drone_preview(
           break;
         }
 
-        let gap = drone::phrase_gap_secs(4.0, metric as f32, 1.0, 1.0);
+        let gap = drone::phrase_gap_secs(
+          base_phrase_gap,
+          metric as f32,
+          base_repeat_rate,
+          base_repeat_curve,
+        );
         let deadline = std::time::Instant::now() + Duration::from_secs_f64(gap);
         while std::time::Instant::now() < deadline
           && play_run.load(Ordering::Relaxed)
@@ -601,7 +614,12 @@ fn run_drone_preview(
         break;
       }
 
-      let gap = drone::phrase_gap_secs(4.0, metric as f32, 1.0, 1.0);
+      let gap = drone::phrase_gap_secs(
+        base_phrase_gap,
+        metric as f32,
+        base_repeat_rate,
+        base_repeat_curve,
+      );
       let gap_deadline =
         std::time::Instant::now() + Duration::from_secs_f64(gap);
       while std::time::Instant::now() < gap_deadline

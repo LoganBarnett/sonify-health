@@ -1,4 +1,4 @@
-use crate::preview_state::{self, PatchOwner, PreviewState};
+use crate::preview_state::{PatchOwner, PreviewState};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -8,7 +8,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::{NoteSpec, Severity};
+use sonify_health_lib::{NoteSpec, Patch, PatchOverrides, Severity};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -209,7 +209,7 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       {
         let mut patches = preview.patches.write().unwrap();
         let patch = patches.get_mut(&owner)?;
-        if !preview_state::set_patch_param(patch, param, value) {
+        if !patch.set_param(param, value) {
           return None;
         }
       }
@@ -539,7 +539,7 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
     "lock_param" => {
       let owner = parse_patch_owner(&msg)?;
       let param = msg.get("param").and_then(|v| v.as_str())?;
-      if !preview_state::PATCH_PARAMS.iter().any(|p| p.name == param) {
+      if !Patch::PARAMS.iter().any(|p| p.name == param) {
         return None;
       }
       preview
@@ -708,37 +708,7 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
   }
 }
 
-/// Intermediate structure for deserializing patch params from import.
-#[derive(Default, serde::Deserialize)]
-struct ImportPatch {
-  base_freq: Option<f64>,
-  sine_ratio: Option<f64>,
-  tri_ratio: Option<f64>,
-  saw_ratio: Option<f64>,
-  attack_ms: Option<f64>,
-  release_ms: Option<f64>,
-  chirp_ratio: Option<f64>,
-  stereo_pan: Option<f64>,
-  reverb_mix: Option<f64>,
-  note_seed: Option<f64>,
-  echo_delay: Option<f64>,
-  echo_mix: Option<f64>,
-  brightness: Option<f64>,
-  resonance: Option<f64>,
-  sub_octave: Option<f64>,
-  vibrato_rate: Option<f64>,
-  vibrato_depth: Option<f64>,
-  tremolo_rate: Option<f64>,
-  tremolo_depth: Option<f64>,
-  amplitude: Option<f64>,
-  square_ratio: Option<f64>,
-  drive: Option<f64>,
-  noise_mix: Option<f64>,
-  crush: Option<f64>,
-  fm_ratio: Option<f64>,
-  fm_depth: Option<f64>,
-  downsample: Option<f64>,
-}
+// Import uses the generated PatchOverrides for deserialization.
 
 #[derive(serde::Deserialize)]
 struct ImportBoop {
@@ -748,19 +718,19 @@ struct ImportBoop {
 
 #[derive(Default, serde::Deserialize)]
 struct ImportHeartbeatSection {
-  patch: Option<ImportPatch>,
+  patch: Option<PatchOverrides>,
   notes: Option<Vec<ImportBoop>>,
 }
 
 #[derive(Default, serde::Deserialize)]
 struct ImportDroneProfile {
-  lo: Option<ImportPatch>,
-  hi: Option<ImportPatch>,
+  lo: Option<PatchOverrides>,
+  hi: Option<PatchOverrides>,
 }
 
 #[derive(serde::Deserialize)]
 struct ImportToml {
-  patch: Option<ImportPatch>,
+  patch: Option<PatchOverrides>,
   heartbeat: Option<ImportHeartbeatSection>,
   drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
   drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
@@ -768,7 +738,7 @@ struct ImportToml {
 
 #[derive(serde::Deserialize)]
 struct ImportJson {
-  patch: Option<ImportPatch>,
+  patch: Option<PatchOverrides>,
   heartbeat: Option<ImportHeartbeatSection>,
   drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
   drone_notes: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
@@ -796,92 +766,6 @@ fn parse_import(text: &str) -> ImportResult {
   }
 }
 
-fn patch_fields(v: &ImportPatch) -> Vec<(&'static str, f64)> {
-  let mut out = Vec::new();
-  if let Some(x) = v.base_freq {
-    out.push(("base_freq", x));
-  }
-  if let Some(x) = v.sine_ratio {
-    out.push(("sine_ratio", x));
-  }
-  if let Some(x) = v.tri_ratio {
-    out.push(("tri_ratio", x));
-  }
-  if let Some(x) = v.saw_ratio {
-    out.push(("saw_ratio", x));
-  }
-  if let Some(x) = v.attack_ms {
-    out.push(("attack_ms", x));
-  }
-  if let Some(x) = v.release_ms {
-    out.push(("release_ms", x));
-  }
-  if let Some(x) = v.chirp_ratio {
-    out.push(("chirp_ratio", x));
-  }
-  if let Some(x) = v.stereo_pan {
-    out.push(("stereo_pan", x));
-  }
-  if let Some(x) = v.reverb_mix {
-    out.push(("reverb_mix", x));
-  }
-  if let Some(x) = v.note_seed {
-    out.push(("note_seed", x));
-  }
-  if let Some(x) = v.echo_delay {
-    out.push(("echo_delay", x));
-  }
-  if let Some(x) = v.echo_mix {
-    out.push(("echo_mix", x));
-  }
-  if let Some(x) = v.brightness {
-    out.push(("brightness", x));
-  }
-  if let Some(x) = v.resonance {
-    out.push(("resonance", x));
-  }
-  if let Some(x) = v.sub_octave {
-    out.push(("sub_octave", x));
-  }
-  if let Some(x) = v.vibrato_rate {
-    out.push(("vibrato_rate", x));
-  }
-  if let Some(x) = v.vibrato_depth {
-    out.push(("vibrato_depth", x));
-  }
-  if let Some(x) = v.tremolo_rate {
-    out.push(("tremolo_rate", x));
-  }
-  if let Some(x) = v.tremolo_depth {
-    out.push(("tremolo_depth", x));
-  }
-  if let Some(x) = v.amplitude {
-    out.push(("amplitude", x));
-  }
-  if let Some(x) = v.square_ratio {
-    out.push(("square_ratio", x));
-  }
-  if let Some(x) = v.drive {
-    out.push(("drive", x));
-  }
-  if let Some(x) = v.noise_mix {
-    out.push(("noise_mix", x));
-  }
-  if let Some(x) = v.crush {
-    out.push(("crush", x));
-  }
-  if let Some(x) = v.fm_ratio {
-    out.push(("fm_ratio", x));
-  }
-  if let Some(x) = v.fm_depth {
-    out.push(("fm_depth", x));
-  }
-  if let Some(x) = v.downsample {
-    out.push(("downsample", x));
-  }
-  out
-}
-
 fn boops_from_import(raw: &[ImportBoop]) -> Vec<NoteSpec> {
   raw
     .iter()
@@ -893,7 +777,7 @@ fn boops_from_import(raw: &[ImportBoop]) -> Vec<NoteSpec> {
 }
 
 fn build_import_data(
-  legacy_patch: Option<&ImportPatch>,
+  legacy_patch: Option<&PatchOverrides>,
   heartbeat: Option<ImportHeartbeatSection>,
   drone_profiles: Option<std::collections::HashMap<String, ImportDroneProfile>>,
   drone_notes_raw: Option<std::collections::HashMap<String, Vec<ImportBoop>>>,
@@ -904,7 +788,7 @@ fn build_import_data(
     .as_ref()
     .and_then(|hb| hb.patch.as_ref())
     .or(legacy_patch)
-    .map(patch_fields)
+    .map(|p| p.to_fields())
     .unwrap_or_default();
 
   let boops = heartbeat
@@ -917,13 +801,13 @@ fn build_import_data(
   let drone_lo_params = profiles
     .iter()
     .filter_map(|(name, p)| {
-      p.lo.as_ref().map(|v| (name.clone(), patch_fields(v)))
+      p.lo.as_ref().map(|v| (name.clone(), v.to_fields()))
     })
     .collect();
   let drone_hi_params = profiles
     .iter()
     .filter_map(|(name, p)| {
-      p.hi.as_ref().map(|v| (name.clone(), patch_fields(v)))
+      p.hi.as_ref().map(|v| (name.clone(), v.to_fields()))
     })
     .collect();
 
@@ -981,7 +865,7 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
     if let Some(patch) = patches.get_mut(&PatchOwner::Heartbeat) {
       for &(name, value) in &data.heartbeat_params {
         if !is_locked(&PatchOwner::Heartbeat, name) {
-          preview_state::set_patch_param(patch, name, value);
+          patch.set_param(name, value);
         }
       }
     }
@@ -994,7 +878,7 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
         if let Some(patch) = patches.get_mut(&owner) {
           for &(name, value) in params {
             if !is_locked(&owner, name) {
-              preview_state::set_patch_param(patch, name, value);
+              patch.set_param(name, value);
             }
           }
         }
@@ -1004,7 +888,7 @@ fn apply_import(preview: &PreviewState, data: &ImportData) {
         if let Some(patch) = patches.get_mut(&owner) {
           for &(name, value) in params {
             if !is_locked(&owner, name) {
-              preview_state::set_patch_param(patch, name, value);
+              patch.set_param(name, value);
             }
           }
         }

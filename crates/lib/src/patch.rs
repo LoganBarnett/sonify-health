@@ -1,10 +1,22 @@
 use rand::Rng;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256StarStar;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sonify_health_voice_derive::PatchGenerate;
 use std::fmt;
 use tracing::debug;
+
+/// Metadata for a single patch parameter, used by the UI and
+/// serialisation helpers.
+#[derive(Debug, Clone)]
+pub struct PatchParamMeta {
+  pub name: &'static str,
+  pub description: &'static str,
+  pub min: f64,
+  pub max: f64,
+  pub step: f64,
+}
 
 /// Patch parameters derived deterministically from a hostname.
 ///
@@ -17,95 +29,208 @@ use tracing::debug;
 /// - Contiguous 0..N order values (no gaps).
 /// - No duplicate order values.
 /// - All annotated fields must be `f64`.
-#[derive(Debug, Clone, PatchGenerate)]
+#[derive(Debug, Clone, Serialize, PatchGenerate)]
 pub struct Patch {
-  #[patch_param(order = 0, range = 100.0..12000.0)]
+  #[patch_param(
+    order = 0, range = 100.0..12000.0,
+    min = 100.0, max = 12000.0, step = 1.0,
+    description = "Root pitch in Hz. All boop notes derive from this frequency."
+  )]
   pub base_freq: f64,
 
-  #[patch_param(order = 1, range = 0.0..1.0)]
+  #[patch_param(
+    order = 1, range = 0.0..1.0,
+    min = 0.0, max = 3.0, step = 0.01,
+    description = "Relative weight of the sine oscillator. Smooth, pure tone."
+  )]
   pub sine_ratio: f64,
 
-  #[patch_param(order = 2, range = 0.0..1.0)]
+  #[patch_param(
+    order = 2, range = 0.0..1.0,
+    min = 0.0, max = 3.0, step = 0.01,
+    description = "Relative weight of the triangle oscillator. Hollow, flute-like."
+  )]
   pub tri_ratio: f64,
 
-  #[patch_param(order = 3, range = 0.0..1.0)]
+  #[patch_param(
+    order = 3, range = 0.0..1.0,
+    min = 0.0, max = 3.0, step = 0.01,
+    description = "Relative weight of the sawtooth oscillator. Bright, buzzy edge."
+  )]
   pub saw_ratio: f64,
 
-  #[patch_param(order = 4, range = 0.0..500.0)]
+  #[patch_param(
+    order = 4, range = 0.0..500.0,
+    min = 0.0, max = 500.0, step = 1.0,
+    description = "Fade-in time in milliseconds. Low = snappy click, high = soft swell."
+  )]
   pub attack_ms: f64,
 
-  #[patch_param(order = 5, range = 0.0..1000.0)]
+  #[patch_param(
+    order = 5, range = 0.0..1000.0,
+    min = 0.0, max = 1000.0, step = 1.0,
+    description = "Fade-out time in milliseconds. Low = staccato, high = lingering tail."
+  )]
   pub release_ms: f64,
 
-  #[patch_param(order = 6, range = 0.5..4.0)]
+  #[patch_param(
+    order = 6, range = 0.5..4.0,
+    min = 0.5, max = 4.0, step = 0.01,
+    description = "Pitch bend at note onset. 1.0 = none, <1 = downward, >1 = upward chirp."
+  )]
   pub chirp_ratio: f64,
 
-  #[patch_param(order = 7, range = -1.0..1.0)]
+  #[patch_param(
+    order = 7, range = -1.0..1.0,
+    min = -1.0, max = 1.0, step = 0.01,
+    description = "Left/right stereo position. -1 = full left, +1 = full right."
+  )]
   pub stereo_pan: f64,
 
-  #[patch_param(order = 8, range = 0.0..1.0)]
+  #[patch_param(
+    order = 8, range = 0.0..1.0,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Wet/dry reverb blend. 0 = fully dry, 1 = fully wet."
+  )]
   pub reverb_mix: f64,
 
-  #[patch_param(order = 9, range = 0.0..1.0)]
+  #[patch_param(
+    order = 9, range = 0.0..1.0,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Seed for boop duration selection."
+  )]
   pub note_seed: f64,
 
-  #[patch_param(order = 10, range = 0.01..1.0)]
+  #[patch_param(
+    order = 10, range = 0.01..1.0,
+    min = 0.01, max = 1.0, step = 0.01,
+    description = "Delay time in seconds. Short = slapback, long = distinct repeats."
+  )]
   pub echo_delay: f64,
 
-  #[patch_param(order = 11, range = 0.0..1.0)]
+  #[patch_param(
+    order = 11, range = 0.0..1.0,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Echo wet/dry blend. 0 = no echo, 1 = full echo."
+  )]
   pub echo_mix: f64,
 
-  #[patch_param(order = 12, range = 0.3..1.0)]
+  #[patch_param(
+    order = 12, range = 0.3..1.0,
+    min = 0.05, max = 2.0, step = 0.01,
+    description = "Lowpass cutoff scaler. 1.0 = full brightness, lower = darker tone."
+  )]
   pub brightness: f64,
 
-  #[patch_param(order = 13, range = 0.2..2.0)]
+  #[patch_param(
+    order = 13, range = 0.2..2.0,
+    min = 0.1, max = 5.0, step = 0.01,
+    description = "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak."
+  )]
   pub resonance: f64,
 
-  #[patch_param(order = 14, range = 0.0..0.6)]
+  #[patch_param(
+    order = 14, range = 0.0..0.6,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body."
+  )]
   pub sub_octave: f64,
 
-  #[patch_param(order = 15, range = 0.0..20.0)]
+  #[patch_param(
+    order = 15, range = 0.0..20.0,
+    min = 0.0, max = 200.0, step = 0.1,
+    description = "Vibrato speed (Hz). Above ~30 Hz becomes FM synthesis."
+  )]
   pub vibrato_rate: f64,
 
-  #[patch_param(order = 16, range = 0.0..1.0)]
+  #[patch_param(
+    order = 16, range = 0.0..1.0,
+    min = 0.0, max = 12.0, step = 0.01,
+    description = "Vibrato depth (semitones). Large values produce FM sidebands."
+  )]
   pub vibrato_depth: f64,
 
-  #[patch_param(order = 17, range = 0.0..20.0)]
+  #[patch_param(
+    order = 17, range = 0.0..20.0,
+    min = 0.0, max = 20.0, step = 0.1,
+    description = "Tremolo speed (Hz)"
+  )]
   pub tremolo_rate: f64,
 
-  #[patch_param(order = 18, range = 0.0..1.0)]
+  #[patch_param(
+    order = 18, range = 0.0..1.0,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Tremolo depth (fraction)"
+  )]
   pub tremolo_depth: f64,
 
-  #[patch_param(order = 19, range = 0.1..0.5)]
+  #[patch_param(
+    order = 19, range = 0.1..0.5,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Output amplitude. 0 = silent, 1 = full scale."
+  )]
   pub amplitude: f64,
 
-  #[patch_param(order = 20, range = 0.0..1.0)]
+  #[patch_param(
+    order = 20, range = 0.0..1.0,
+    min = 0.0, max = 3.0, step = 0.01,
+    description = "Relative weight of the square oscillator. Hollow, reedy tone."
+  )]
   pub square_ratio: f64,
 
-  #[patch_param(order = 21, range = 0.5..2.0)]
+  #[patch_param(
+    order = 21, range = 0.5..2.0,
+    min = 0.01, max = 20.0, step = 0.1,
+    description = "Pre-filter saturation. Low = clean, high = heavy distortion."
+  )]
   pub drive: f64,
 
-  #[patch_param(order = 22, range = 0.0..0.03)]
+  #[patch_param(
+    order = 22, range = 0.0..0.03,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Pink noise mixed before the filter for texture and breath."
+  )]
   pub noise_mix: f64,
 
-  #[patch_param(order = 23, range = 0.0..0.01)]
+  #[patch_param(
+    order = 23, range = 0.0..0.01,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Bitcrush intensity. 0 = clean, higher = grungier."
+  )]
   pub crush: f64,
 
-  #[patch_param(order = 24, range = 0.0..0.1)]
+  #[patch_param(
+    order = 24, range = 0.0..0.1,
+    min = 0.0, max = 8.0, step = 0.01,
+    description = "FM modulator frequency as a ratio of the carrier. 1.0 = unison, 2.0 = octave."
+  )]
   pub fm_ratio: f64,
 
-  #[patch_param(order = 25, range = 0.0..0.1)]
+  #[patch_param(
+    order = 25, range = 0.0..0.1,
+    min = 0.0, max = 10.0, step = 0.1,
+    description = "FM modulation index. 0 = clean, higher = richer metallic warble."
+  )]
   pub fm_depth: f64,
 
-  #[patch_param(order = 26, range = 0.0..0.01)]
+  #[patch_param(
+    order = 26, range = 0.0..0.01,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier."
+  )]
   pub downsample: f64,
 
-  #[patch_param(order = 27, range = 0.0..1.0)]
+  #[patch_param(
+    order = 27, range = 0.0..1.0,
+    min = 0.0, max = 1.0, step = 0.01,
+    description = "Body amplitude after attack. 1.0 = full level, lower = quieter sustain."
+  )]
   pub sustain: f64,
 
   /// Per-note duration in seconds.  Not a `#[patch_param]` — set
   /// by `with_note()` or `heartbeat_notes()`/`drone_notes()`,
   /// defaulting to 0.0 from `from_hostname`.
+  #[serde(skip)]
   pub duration: f64,
 }
 
@@ -127,39 +252,14 @@ impl Patch {
   /// and 1.0 yields `hi`.
   pub fn lerp(lo: &Patch, hi: &Patch, t: f64) -> Patch {
     let t = t.clamp(0.0, 1.0);
-    Patch {
-      base_freq: lo.base_freq + (hi.base_freq - lo.base_freq) * t,
-      sine_ratio: lo.sine_ratio + (hi.sine_ratio - lo.sine_ratio) * t,
-      tri_ratio: lo.tri_ratio + (hi.tri_ratio - lo.tri_ratio) * t,
-      saw_ratio: lo.saw_ratio + (hi.saw_ratio - lo.saw_ratio) * t,
-      attack_ms: lo.attack_ms + (hi.attack_ms - lo.attack_ms) * t,
-      release_ms: lo.release_ms + (hi.release_ms - lo.release_ms) * t,
-      chirp_ratio: lo.chirp_ratio + (hi.chirp_ratio - lo.chirp_ratio) * t,
-      stereo_pan: lo.stereo_pan + (hi.stereo_pan - lo.stereo_pan) * t,
-      reverb_mix: lo.reverb_mix + (hi.reverb_mix - lo.reverb_mix) * t,
-      note_seed: lo.note_seed + (hi.note_seed - lo.note_seed) * t,
-      echo_delay: lo.echo_delay + (hi.echo_delay - lo.echo_delay) * t,
-      echo_mix: lo.echo_mix + (hi.echo_mix - lo.echo_mix) * t,
-      brightness: lo.brightness + (hi.brightness - lo.brightness) * t,
-      resonance: lo.resonance + (hi.resonance - lo.resonance) * t,
-      sub_octave: lo.sub_octave + (hi.sub_octave - lo.sub_octave) * t,
-      vibrato_rate: lo.vibrato_rate + (hi.vibrato_rate - lo.vibrato_rate) * t,
-      vibrato_depth: lo.vibrato_depth
-        + (hi.vibrato_depth - lo.vibrato_depth) * t,
-      tremolo_rate: lo.tremolo_rate + (hi.tremolo_rate - lo.tremolo_rate) * t,
-      tremolo_depth: lo.tremolo_depth
-        + (hi.tremolo_depth - lo.tremolo_depth) * t,
-      amplitude: lo.amplitude + (hi.amplitude - lo.amplitude) * t,
-      square_ratio: lo.square_ratio + (hi.square_ratio - lo.square_ratio) * t,
-      drive: lo.drive + (hi.drive - lo.drive) * t,
-      noise_mix: lo.noise_mix + (hi.noise_mix - lo.noise_mix) * t,
-      crush: lo.crush + (hi.crush - lo.crush) * t,
-      fm_ratio: lo.fm_ratio + (hi.fm_ratio - lo.fm_ratio) * t,
-      fm_depth: lo.fm_depth + (hi.fm_depth - lo.fm_depth) * t,
-      downsample: lo.downsample + (hi.downsample - lo.downsample) * t,
-      sustain: lo.sustain + (hi.sustain - lo.sustain) * t,
-      duration: 0.0,
+    let mut result = lo.clone();
+    for meta in Self::PARAMS {
+      let lo_val = lo.get_param(meta.name).unwrap_or(0.0);
+      let hi_val = hi.get_param(meta.name).unwrap_or(0.0);
+      result.set_param(meta.name, lo_val + (hi_val - lo_val) * t);
     }
+    result.duration = 0.0;
+    result
   }
 
   /// Return a lightweight note spec for serialisation.
@@ -174,95 +274,6 @@ impl Patch {
   pub fn with_note(mut self, freq: f64, duration: f64) -> Self {
     self.base_freq = freq;
     self.duration = duration;
-    self
-  }
-
-  /// Apply overrides, replacing only the specified fields.
-  pub fn with_overrides(mut self, o: &PatchOverrides) -> Self {
-    if let Some(v) = o.base_freq {
-      self.base_freq = v;
-    }
-    if let Some(v) = o.sine_ratio {
-      self.sine_ratio = v;
-    }
-    if let Some(v) = o.tri_ratio {
-      self.tri_ratio = v;
-    }
-    if let Some(v) = o.saw_ratio {
-      self.saw_ratio = v;
-    }
-    if let Some(v) = o.attack_ms {
-      self.attack_ms = v;
-    }
-    if let Some(v) = o.release_ms {
-      self.release_ms = v;
-    }
-    if let Some(v) = o.chirp_ratio {
-      self.chirp_ratio = v;
-    }
-    if let Some(v) = o.stereo_pan {
-      self.stereo_pan = v;
-    }
-    if let Some(v) = o.reverb_mix {
-      self.reverb_mix = v;
-    }
-    if let Some(v) = o.note_seed {
-      self.note_seed = v;
-    }
-    if let Some(v) = o.echo_delay {
-      self.echo_delay = v;
-    }
-    if let Some(v) = o.echo_mix {
-      self.echo_mix = v;
-    }
-    if let Some(v) = o.brightness {
-      self.brightness = v;
-    }
-    if let Some(v) = o.resonance {
-      self.resonance = v;
-    }
-    if let Some(v) = o.sub_octave {
-      self.sub_octave = v;
-    }
-    if let Some(v) = o.vibrato_rate {
-      self.vibrato_rate = v;
-    }
-    if let Some(v) = o.vibrato_depth {
-      self.vibrato_depth = v;
-    }
-    if let Some(v) = o.tremolo_rate {
-      self.tremolo_rate = v;
-    }
-    if let Some(v) = o.tremolo_depth {
-      self.tremolo_depth = v;
-    }
-    if let Some(v) = o.amplitude {
-      self.amplitude = v;
-    }
-    if let Some(v) = o.square_ratio {
-      self.square_ratio = v;
-    }
-    if let Some(v) = o.drive {
-      self.drive = v;
-    }
-    if let Some(v) = o.noise_mix {
-      self.noise_mix = v;
-    }
-    if let Some(v) = o.crush {
-      self.crush = v;
-    }
-    if let Some(v) = o.fm_ratio {
-      self.fm_ratio = v;
-    }
-    if let Some(v) = o.fm_depth {
-      self.fm_depth = v;
-    }
-    if let Some(v) = o.downsample {
-      self.downsample = v;
-    }
-    if let Some(v) = o.sustain {
-      self.sustain = v;
-    }
     self
   }
 
@@ -343,15 +354,6 @@ impl Patch {
   /// `duration` set from PRNG.  A fitting loop downshifts the
   /// longest notes until the total fits one bar
   /// (`BEATS_PER_BAR`), flooring at `MIN_NOTE_VALUE`.
-  /// Generate note patches for heartbeat boops using a musical
-  /// beat grid.  Each check gets its own sub-PRNG seeded from
-  /// `note_seed + "boop" + check_index`, so adding boops to one
-  /// check never shifts another check's note sequence.
-  ///
-  /// Each returned patch is a clone of `self` with per-note
-  /// `duration` set from PRNG.  A fitting loop downshifts the
-  /// longest notes until the total fits one bar
-  /// (`BEATS_PER_BAR`), flooring at `MIN_NOTE_VALUE`.
   pub fn heartbeat_notes(
     &self,
     check_count: usize,
@@ -408,68 +410,16 @@ impl Patch {
   }
 }
 
-/// Optional overrides for patch parameters from configuration.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct PatchOverrides {
-  pub base_freq: Option<f64>,
-  pub sine_ratio: Option<f64>,
-  pub tri_ratio: Option<f64>,
-  pub saw_ratio: Option<f64>,
-  pub attack_ms: Option<f64>,
-  pub release_ms: Option<f64>,
-  pub chirp_ratio: Option<f64>,
-  pub stereo_pan: Option<f64>,
-  pub reverb_mix: Option<f64>,
-  pub note_seed: Option<f64>,
-  pub echo_delay: Option<f64>,
-  pub echo_mix: Option<f64>,
-  pub brightness: Option<f64>,
-  pub resonance: Option<f64>,
-  pub sub_octave: Option<f64>,
-  pub vibrato_rate: Option<f64>,
-  pub vibrato_depth: Option<f64>,
-  pub tremolo_rate: Option<f64>,
-  pub tremolo_depth: Option<f64>,
-  pub amplitude: Option<f64>,
-  pub square_ratio: Option<f64>,
-  pub drive: Option<f64>,
-  pub noise_mix: Option<f64>,
-  pub crush: Option<f64>,
-  pub fm_ratio: Option<f64>,
-  pub fm_depth: Option<f64>,
-  pub downsample: Option<f64>,
-  pub sustain: Option<f64>,
-}
-
 impl fmt::Display for Patch {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    writeln!(f, "base_freq:    {:.1} Hz", self.base_freq)?;
-    writeln!(f, "sine_ratio:   {:.3}", self.sine_ratio)?;
-    writeln!(f, "tri_ratio:    {:.3}", self.tri_ratio)?;
-    writeln!(f, "saw_ratio:    {:.3}", self.saw_ratio)?;
-    writeln!(f, "attack_ms:    {:.1} ms", self.attack_ms)?;
-    writeln!(f, "release_ms:   {:.1} ms", self.release_ms)?;
-    writeln!(f, "chirp_ratio:  {:.3}", self.chirp_ratio)?;
-    writeln!(f, "stereo_pan:   {:.3}", self.stereo_pan)?;
-    writeln!(f, "reverb_mix:   {:.3}", self.reverb_mix)?;
-    writeln!(f, "echo_delay:   {:.3} s", self.echo_delay)?;
-    writeln!(f, "echo_mix:     {:.3}", self.echo_mix)?;
-    writeln!(f, "brightness:   {:.3}", self.brightness)?;
-    writeln!(f, "resonance:    {:.3}", self.resonance)?;
-    writeln!(f, "sub_octave:   {:.3}", self.sub_octave)?;
-    writeln!(f, "vibrato_rate: {:.3} Hz", self.vibrato_rate)?;
-    writeln!(f, "vibrato_depth:{:.3} st", self.vibrato_depth)?;
-    writeln!(f, "tremolo_rate: {:.3} Hz", self.tremolo_rate)?;
-    writeln!(f, "tremolo_depth:{:.3}", self.tremolo_depth)?;
-    writeln!(f, "amplitude:    {:.3}", self.amplitude)?;
-    writeln!(f, "square_ratio: {:.3}", self.square_ratio)?;
-    writeln!(f, "drive:        {:.3}", self.drive)?;
-    writeln!(f, "noise_mix:    {:.3}", self.noise_mix)?;
-    writeln!(f, "crush:        {:.3}", self.crush)?;
-    writeln!(f, "fm_ratio:     {:.3}", self.fm_ratio)?;
-    writeln!(f, "fm_depth:     {:.3}", self.fm_depth)?;
-    writeln!(f, "downsample:   {:.3}", self.downsample)?;
-    write!(f, "sustain:      {:.3}", self.sustain)
+    for (i, meta) in Self::PARAMS.iter().enumerate() {
+      let val = self.get_param(meta.name).unwrap_or(0.0);
+      if i > 0 {
+        writeln!(f)?;
+      }
+      write!(f, "{:14}{:.3}", format!("{}:", meta.name), val)?;
+    }
+    Ok(())
   }
 }
 
@@ -687,5 +637,47 @@ mod tests {
     let derived = Patch::from_hostname("silicon");
     assert_eq!(derived.base_freq, expected_base_freq);
     assert_eq!(derived.sine_ratio, expected_sine_ratio);
+  }
+
+  #[test]
+  fn params_metadata_covers_all_fields() {
+    // Every patch_param field should be in PARAMS.
+    let patch = Patch::from_hostname("test");
+    for meta in Patch::PARAMS {
+      assert!(
+        patch.get_param(meta.name).is_some(),
+        "PARAMS entry '{}' not accessible via get_param",
+        meta.name
+      );
+    }
+    assert_eq!(Patch::PARAMS.len(), 28);
+  }
+
+  #[test]
+  fn set_param_round_trips() {
+    let mut patch = Patch::from_hostname("test");
+    patch.set_param("base_freq", 999.0);
+    assert_eq!(patch.get_param("base_freq"), Some(999.0));
+  }
+
+  #[test]
+  fn serialize_skips_duration() {
+    let patch = Patch::from_hostname("test");
+    let json = serde_json::to_value(&patch).unwrap();
+    assert!(json.get("duration").is_none());
+    assert!(json.get("base_freq").is_some());
+  }
+
+  #[test]
+  fn patch_overrides_to_fields() {
+    let o = PatchOverrides {
+      base_freq: Some(440.0),
+      amplitude: Some(0.5),
+      ..Default::default()
+    };
+    let fields = o.to_fields();
+    assert!(fields.iter().any(|(n, v)| *n == "base_freq" && *v == 440.0));
+    assert!(fields.iter().any(|(n, v)| *n == "amplitude" && *v == 0.5));
+    assert_eq!(fields.len(), 2);
   }
 }

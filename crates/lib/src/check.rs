@@ -15,6 +15,7 @@ pub enum ResultMode {
 
 /// Configuration for a single heartbeat check (one boop).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatCheckConfig {
   pub name: String,
   pub command: String,
@@ -23,12 +24,23 @@ pub struct HeartbeatCheckConfig {
 
 /// Configuration for a single drone metric poll.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DroneMetricConfig {
   pub name: String,
   pub command: String,
   pub result_mode: ResultMode,
   /// Number of boops per drone phrase.
   pub boops: Option<usize>,
+  /// Base gap in seconds between drone phrases.
+  pub phrase_gap: Option<f64>,
+  /// Speed multiplier on phrase repetition.
+  pub repeat_rate: Option<f64>,
+  /// Power-curve exponent for gap range reshaping.
+  pub repeat_curve: Option<f64>,
+  /// Power-curve exponent for lo/hi patch interpolation.
+  pub interp_curve: Option<f64>,
+  /// Per-metric volume (0.0–1.0).
+  pub volume: Option<f64>,
 }
 
 #[derive(Debug, Error)]
@@ -162,6 +174,11 @@ mod tests {
       command: "echo 0.75".into(),
       result_mode: ResultMode::Stdout,
       boops: None,
+      phrase_gap: None,
+      repeat_rate: None,
+      repeat_curve: None,
+      interp_curve: None,
+      volume: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
     assert!((val - 0.75).abs() < 0.001);
@@ -187,6 +204,11 @@ mod tests {
       command: "echo 5.0".into(),
       result_mode: ResultMode::Stdout,
       boops: None,
+      phrase_gap: None,
+      repeat_rate: None,
+      repeat_curve: None,
+      interp_curve: None,
+      volume: None,
     };
     let val = run_drone_poll(&cfg).unwrap();
     assert!(val <= 1.0);

@@ -55,6 +55,7 @@ pub struct OidcConfig {
 /// `[drone_profiles.<name>]`, containing `lo` and `hi` patch
 /// overrides for metric-driven interpolation.
 #[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DroneProfileRaw {
   #[serde(default)]
   pub lo: PatchOverrides,
@@ -63,6 +64,7 @@ pub(crate) struct DroneProfileRaw {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ConfigFileRaw {
   log_level: Option<String>,
   log_format: Option<String>,
@@ -78,6 +80,7 @@ pub(crate) struct ConfigFileRaw {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct OidcSectionRaw {
   base_url: Option<String>,
   issuer: Option<String>,
@@ -86,9 +89,11 @@ struct OidcSectionRaw {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct HeartbeatSectionRaw {
-  #[serde(flatten)]
-  timing: Option<TimingConfig>,
+  cycle_duration_secs: Option<f64>,
+  slot_duration_secs: Option<f64>,
+  slot: Option<u8>,
   #[serde(default)]
   checks: Vec<HeartbeatCheckConfig>,
   #[serde(default)]
@@ -99,12 +104,14 @@ struct HeartbeatSectionRaw {
 /// A note specification as it appears in the config file under
 /// `[[heartbeat.notes]]` or `[[drone_notes.<name>]]`.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 struct RawNoteSpec {
   freq: f64,
   duration: f64,
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct DroneSectionRaw {
   poll_interval_secs: Option<f64>,
   #[serde(default)]
@@ -269,7 +276,11 @@ impl Config {
           })
           .collect();
         DaemonConfig {
-          timing: hb.timing.unwrap_or_default(),
+          timing: TimingConfig {
+            cycle_duration_secs: hb.cycle_duration_secs.unwrap_or(16.0),
+            slot_duration_secs: hb.slot_duration_secs.unwrap_or(4.0),
+            slot: hb.slot.unwrap_or(0),
+          },
           heartbeat_checks: hb.checks,
           heartbeat_notes,
           drone_poll_interval_secs,
@@ -410,6 +421,31 @@ mod tests {
     assert_eq!(drone.metrics[0].name, "gpu");
     assert_eq!(drone.metrics[1].name, "mem");
     assert_eq!(drone.metrics[0].boops, None);
+  }
+
+  #[test]
+  fn drone_playback_defaults_parse() {
+    let toml = r#"
+      [drone]
+      [[drone.metrics]]
+      name = "cpu"
+      command = "echo 0.5"
+      result_mode = "stdout"
+      phrase_gap = 0.0
+      repeat_rate = 2.0
+      repeat_curve = 0.5
+      interp_curve = 2.0
+      volume = 0.8
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let drone = raw.drone.unwrap();
+    let m = &drone.metrics[0];
+    assert_eq!(m.phrase_gap, Some(0.0));
+    assert_eq!(m.repeat_rate, Some(2.0));
+    assert_eq!(m.repeat_curve, Some(0.5));
+    assert_eq!(m.interp_curve, Some(2.0));
+    assert_eq!(m.volume, Some(0.8));
   }
 
   #[test]

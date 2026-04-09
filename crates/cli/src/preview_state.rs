@@ -14,235 +14,21 @@ use std::sync::{
 };
 use tokio::sync::broadcast;
 
-/// Patch parameter metadata matching `#[voice_param]` ranges.
-pub struct PatchParamMeta {
-  pub name: &'static str,
-  pub description: &'static str,
-  pub min: f64,
-  pub max: f64,
-  pub step: f64,
-}
-
-pub const PATCH_PARAMS: &[PatchParamMeta] = &[
-  PatchParamMeta {
-    name: "base_freq",
-    description: "Root pitch in Hz. All boop notes derive from this frequency.",
-    min: 100.0,
-    max: 12000.0,
-    step: 1.0,
-  },
-  PatchParamMeta {
-    name: "sine_ratio",
-    description: "Relative weight of the sine oscillator. Smooth, pure tone.",
-    min: 0.0,
-    max: 3.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "tri_ratio",
-    description:
-      "Relative weight of the triangle oscillator. Hollow, flute-like.",
-    min: 0.0,
-    max: 3.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "saw_ratio",
-    description:
-      "Relative weight of the sawtooth oscillator. Bright, buzzy edge.",
-    min: 0.0,
-    max: 3.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "attack_ms",
-    description:
-      "Fade-in time in milliseconds. Low = snappy click, high = soft swell.",
-    min: 0.0,
-    max: 500.0,
-    step: 1.0,
-  },
-  PatchParamMeta {
-    name: "release_ms",
-    description:
-      "Fade-out time in milliseconds. Low = staccato, high = lingering tail.",
-    min: 0.0,
-    max: 1000.0,
-    step: 1.0,
-  },
-  PatchParamMeta {
-    name: "chirp_ratio",
-    description:
-      "Pitch bend at note onset. 1.0 = none, <1 = downward, >1 = upward chirp.",
-    min: 0.5,
-    max: 4.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "stereo_pan",
-    description: "Left/right stereo position. -1 = full left, +1 = full right.",
-    min: -1.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "reverb_mix",
-    description: "Wet/dry reverb blend. 0 = fully dry, 1 = fully wet.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "note_seed",
-    description: "Seed for boop duration selection.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "echo_delay",
-    description:
-      "Delay time in seconds. Short = slapback, long = distinct repeats.",
-    min: 0.01,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "echo_mix",
-    description: "Echo wet/dry blend. 0 = no echo, 1 = full echo.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "brightness",
-    description:
-      "Lowpass cutoff scaler. 1.0 = full brightness, lower = darker tone.",
-    min: 0.05,
-    max: 2.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "resonance",
-    description:
-      "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak.",
-    min: 0.1,
-    max: 5.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "sub_octave",
-    description:
-      "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "vibrato_rate",
-    description: "Vibrato speed (Hz). Above ~30 Hz becomes FM synthesis.",
-    min: 0.0,
-    max: 200.0,
-    step: 0.1,
-  },
-  PatchParamMeta {
-    name: "vibrato_depth",
-    description: "Vibrato depth (semitones). Large values produce FM sidebands.",
-    min: 0.0,
-    max: 12.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "tremolo_rate",
-    description: "Tremolo speed (Hz)",
-    min: 0.0,
-    max: 20.0,
-    step: 0.1,
-  },
-  PatchParamMeta {
-    name: "tremolo_depth",
-    description: "Tremolo depth (fraction)",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "amplitude",
-    description: "Output amplitude. 0 = silent, 1 = full scale.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "square_ratio",
-    description:
-      "Relative weight of the square oscillator. Hollow, reedy tone.",
-    min: 0.0,
-    max: 3.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "drive",
-    description:
-      "Pre-filter saturation. Low = clean, high = heavy distortion.",
-    min: 0.01,
-    max: 20.0,
-    step: 0.1,
-  },
-  PatchParamMeta {
-    name: "noise_mix",
-    description:
-      "Pink noise mixed before the filter for texture and breath.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "crush",
-    description: "Bitcrush intensity. 0 = clean, higher = grungier.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "fm_ratio",
-    description:
-      "FM modulator frequency as a ratio of the carrier. 1.0 = unison, 2.0 = octave.",
-    min: 0.0,
-    max: 8.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "fm_depth",
-    description:
-      "FM modulation index. 0 = clean, higher = richer metallic warble.",
-    min: 0.0,
-    max: 10.0,
-    step: 0.1,
-  },
-  PatchParamMeta {
-    name: "downsample",
-    description:
-      "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-  PatchParamMeta {
-    name: "sustain",
-    description:
-      "Body amplitude after attack. 1.0 = full level, lower = quieter sustain.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-  },
-];
-
 /// Metadata for a configured drone metric.
 #[derive(Clone)]
 pub struct DroneMetricInfo {
   pub name: String,
   pub boops: usize,
+}
+
+/// Per-drone startup defaults, read from config.
+#[derive(Clone)]
+struct DronePlaybackDefaults {
+  volume: f32,
+  repeat_rate: f32,
+  repeat_curve: f32,
+  phrase_gap: f32,
+  interp_curve: f32,
 }
 
 /// Identifies which sound-producing entity owns a patch.
@@ -313,6 +99,7 @@ pub struct PreviewState {
   pub drone_boop_specs: RwLock<Vec<Vec<NoteSpec>>>,
   pub drone_boop_pins: RwLock<Vec<Vec<bool>>>,
   original_drone_boop_specs: Vec<Vec<NoteSpec>>,
+  drone_defaults: Vec<DronePlaybackDefaults>,
   pub slot_secs: f64,
 }
 
@@ -330,18 +117,37 @@ impl PreviewState {
     let drone_count = drone_metrics.len();
     let check_count = heartbeat_checks.len();
 
+    let drone_defaults: Vec<DronePlaybackDefaults> = drone_metrics
+      .iter()
+      .map(|m| DronePlaybackDefaults {
+        volume: m.volume.unwrap_or(1.0) as f32,
+        repeat_rate: m.repeat_rate.unwrap_or(1.0) as f32,
+        repeat_curve: m.repeat_curve.unwrap_or(1.0) as f32,
+        phrase_gap: m.phrase_gap.unwrap_or(4.0) as f32,
+        interp_curve: m.interp_curve.unwrap_or(1.0) as f32,
+      })
+      .collect();
+
     let drone_volumes: Vec<Shared> =
-      (0..drone_count).map(|_| shared(1.0)).collect();
-    let drone_repeat_rates: Vec<Shared> =
-      (0..drone_count).map(|_| shared(1.0)).collect();
-    let drone_repeat_curves: Vec<Shared> =
-      (0..drone_count).map(|_| shared(1.0)).collect();
-    let drone_phrase_gaps: Vec<Shared> =
-      (0..drone_count).map(|_| shared(4.0)).collect();
-    let drone_interp_curves: Vec<Shared> =
-      (0..drone_count).map(|_| shared(1.0)).collect();
+      drone_defaults.iter().map(|d| shared(d.volume)).collect();
+    let drone_repeat_rates: Vec<Shared> = drone_defaults
+      .iter()
+      .map(|d| shared(d.repeat_rate))
+      .collect();
+    let drone_repeat_curves: Vec<Shared> = drone_defaults
+      .iter()
+      .map(|d| shared(d.repeat_curve))
+      .collect();
+    let drone_phrase_gaps: Vec<Shared> = drone_defaults
+      .iter()
+      .map(|d| shared(d.phrase_gap))
+      .collect();
+    let drone_interp_curves: Vec<Shared> = drone_defaults
+      .iter()
+      .map(|d| shared(d.interp_curve))
+      .collect();
     let combined_volumes: Vec<Shared> =
-      (0..drone_count).map(|_| shared(1.0)).collect();
+      drone_defaults.iter().map(|d| shared(d.volume)).collect();
 
     let (broadcast_tx, _) = broadcast::channel(256);
     let (check_log_tx, _) = broadcast::channel(256);
@@ -447,6 +253,7 @@ impl PreviewState {
       original_drone_boop_specs: drone_specs_init.clone(),
       drone_boop_specs: RwLock::new(drone_specs_init),
       drone_boop_pins: RwLock::new(drone_pins_init),
+      drone_defaults,
       slot_secs,
     }
   }
@@ -606,14 +413,15 @@ impl PreviewState {
     let specs = self.boop_specs.read().unwrap();
     let pins = self.boop_pins.read().unwrap();
 
-    let heartbeat_voice_json = patch_to_json(heartbeat_voice);
+    let heartbeat_voice_json =
+      serde_json::to_value(heartbeat_voice).unwrap_or_default();
 
     let heartbeat_locked: Vec<_> = locked
       .get(&PatchOwner::Heartbeat)
       .map(|s| s.iter().map(|p| json!(p)).collect())
       .unwrap_or_default();
 
-    let voice_params_json: Vec<_> = PATCH_PARAMS
+    let voice_params_json: Vec<_> = Patch::PARAMS
       .iter()
       .map(|p| {
         json!({
@@ -641,8 +449,10 @@ impl PreviewState {
       })
       .collect();
 
-    let base_freq_meta =
-      PATCH_PARAMS.iter().find(|p| p.name == "base_freq").unwrap();
+    let base_freq_meta = Patch::PARAMS
+      .iter()
+      .find(|p| p.name == "base_freq")
+      .unwrap();
 
     let drone_specs = self.drone_boop_specs.read().unwrap();
     let drone_pins = self.drone_boop_pins.read().unwrap();
@@ -653,11 +463,11 @@ impl PreviewState {
       .map(|(i, info)| {
         let voice_lo = patches
           .get(&PatchOwner::DroneLo(i))
-          .map(patch_to_json)
+          .and_then(|p| serde_json::to_value(p).ok())
           .unwrap_or(json!({}));
         let voice_hi = patches
           .get(&PatchOwner::DroneHi(i))
-          .map(patch_to_json)
+          .and_then(|p| serde_json::to_value(p).ok())
           .unwrap_or(json!({}));
         let lo_locked: Vec<_> = locked
           .get(&PatchOwner::DroneLo(i))
@@ -854,7 +664,7 @@ impl PreviewState {
               params
                 .iter()
                 .filter_map(|name| {
-                  get_voice_param(voice, name).map(|v| (name.clone(), v))
+                  voice.get_param(name).map(|v| (name.clone(), v))
                 })
                 .collect()
             })
@@ -902,7 +712,7 @@ impl PreviewState {
       for (owner, vals) in &locked_values {
         if let Some(voice) = patches.get_mut(owner) {
           for (name, value) in vals {
-            set_patch_param(voice, name, *value);
+            voice.set_param(name, *value);
           }
         }
       }
@@ -910,20 +720,22 @@ impl PreviewState {
 
     *self.drone_infos.write().unwrap() = self.original_drone_infos.clone();
 
-    for dv in &self.drone_volumes {
-      dv.set_value(1.0);
-    }
-    for rr in &self.drone_repeat_rates {
-      rr.set_value(1.0);
-    }
-    for rc in &self.drone_repeat_curves {
-      rc.set_value(1.0);
-    }
-    for pg in &self.drone_phrase_gaps {
-      pg.set_value(4.0);
-    }
-    for ic in &self.drone_interp_curves {
-      ic.set_value(1.0);
+    for (i, d) in self.drone_defaults.iter().enumerate() {
+      if let Some(dv) = self.drone_volumes.get(i) {
+        dv.set_value(d.volume);
+      }
+      if let Some(rr) = self.drone_repeat_rates.get(i) {
+        rr.set_value(d.repeat_rate);
+      }
+      if let Some(rc) = self.drone_repeat_curves.get(i) {
+        rc.set_value(d.repeat_curve);
+      }
+      if let Some(pg) = self.drone_phrase_gaps.get(i) {
+        pg.set_value(d.phrase_gap);
+      }
+      if let Some(ic) = self.drone_interp_curves.get(i) {
+        ic.set_value(d.interp_curve);
+      }
     }
 
     // Restore locked drone settings.
@@ -990,108 +802,6 @@ impl PreviewState {
 }
 
 // -- Helpers -----------------------------------------------------------------
-
-pub fn get_voice_param(voice: &Patch, param: &str) -> Option<f64> {
-  match param {
-    "base_freq" => Some(voice.base_freq),
-    "sine_ratio" => Some(voice.sine_ratio),
-    "tri_ratio" => Some(voice.tri_ratio),
-    "saw_ratio" => Some(voice.saw_ratio),
-    "attack_ms" => Some(voice.attack_ms),
-    "release_ms" => Some(voice.release_ms),
-    "chirp_ratio" => Some(voice.chirp_ratio),
-    "stereo_pan" => Some(voice.stereo_pan),
-    "reverb_mix" => Some(voice.reverb_mix),
-    "note_seed" => Some(voice.note_seed),
-    "echo_delay" => Some(voice.echo_delay),
-    "echo_mix" => Some(voice.echo_mix),
-    "brightness" => Some(voice.brightness),
-    "resonance" => Some(voice.resonance),
-    "sub_octave" => Some(voice.sub_octave),
-    "vibrato_rate" => Some(voice.vibrato_rate),
-    "vibrato_depth" => Some(voice.vibrato_depth),
-    "tremolo_rate" => Some(voice.tremolo_rate),
-    "tremolo_depth" => Some(voice.tremolo_depth),
-    "amplitude" => Some(voice.amplitude),
-    "square_ratio" => Some(voice.square_ratio),
-    "drive" => Some(voice.drive),
-    "noise_mix" => Some(voice.noise_mix),
-    "crush" => Some(voice.crush),
-    "fm_ratio" => Some(voice.fm_ratio),
-    "fm_depth" => Some(voice.fm_depth),
-    "downsample" => Some(voice.downsample),
-    "sustain" => Some(voice.sustain),
-    _ => None,
-  }
-}
-
-pub fn set_patch_param(voice: &mut Patch, param: &str, value: f64) -> bool {
-  match param {
-    "base_freq" => voice.base_freq = value,
-    "sine_ratio" => voice.sine_ratio = value,
-    "tri_ratio" => voice.tri_ratio = value,
-    "saw_ratio" => voice.saw_ratio = value,
-    "attack_ms" => voice.attack_ms = value,
-    "release_ms" => voice.release_ms = value,
-    "chirp_ratio" => voice.chirp_ratio = value,
-    "stereo_pan" => voice.stereo_pan = value,
-    "reverb_mix" => voice.reverb_mix = value,
-    "note_seed" => voice.note_seed = value,
-    "echo_delay" => voice.echo_delay = value,
-    "echo_mix" => voice.echo_mix = value,
-    "brightness" => voice.brightness = value,
-    "resonance" => voice.resonance = value,
-    "sub_octave" => voice.sub_octave = value,
-    "vibrato_rate" => voice.vibrato_rate = value,
-    "vibrato_depth" => voice.vibrato_depth = value,
-    "tremolo_rate" => voice.tremolo_rate = value,
-    "tremolo_depth" => voice.tremolo_depth = value,
-    "amplitude" => voice.amplitude = value,
-    "square_ratio" => voice.square_ratio = value,
-    "drive" => voice.drive = value,
-    "noise_mix" => voice.noise_mix = value,
-    "crush" => voice.crush = value,
-    "fm_ratio" => voice.fm_ratio = value,
-    "fm_depth" => voice.fm_depth = value,
-    "downsample" => voice.downsample = value,
-    "sustain" => voice.sustain = value,
-    _ => return false,
-  }
-  true
-}
-
-fn patch_to_json(voice: &Patch) -> serde_json::Value {
-  json!({
-    "base_freq": voice.base_freq,
-    "sine_ratio": voice.sine_ratio,
-    "tri_ratio": voice.tri_ratio,
-    "saw_ratio": voice.saw_ratio,
-    "attack_ms": voice.attack_ms,
-    "release_ms": voice.release_ms,
-    "chirp_ratio": voice.chirp_ratio,
-    "stereo_pan": voice.stereo_pan,
-    "reverb_mix": voice.reverb_mix,
-    "note_seed": voice.note_seed,
-    "echo_delay": voice.echo_delay,
-    "echo_mix": voice.echo_mix,
-    "brightness": voice.brightness,
-    "resonance": voice.resonance,
-    "sub_octave": voice.sub_octave,
-    "vibrato_rate": voice.vibrato_rate,
-    "vibrato_depth": voice.vibrato_depth,
-    "tremolo_rate": voice.tremolo_rate,
-    "tremolo_depth": voice.tremolo_depth,
-    "amplitude": voice.amplitude,
-    "square_ratio": voice.square_ratio,
-    "drive": voice.drive,
-    "noise_mix": voice.noise_mix,
-    "crush": voice.crush,
-    "fm_ratio": voice.fm_ratio,
-    "fm_depth": voice.fm_depth,
-    "downsample": voice.downsample,
-    "sustain": voice.sustain,
-  })
-}
 
 pub fn severity_from_shared(value: f32) -> Severity {
   match value.round() as u8 {
@@ -1211,6 +921,11 @@ mod tests {
       command: "echo 0.5".to_string(),
       result_mode: ResultMode::Stdout,
       boops: Some(2),
+      phrase_gap: None,
+      repeat_rate: None,
+      repeat_curve: None,
+      interp_curve: None,
+      volume: None,
     }];
     PreviewState::new(
       voice,
@@ -1272,7 +987,7 @@ mod tests {
     {
       let mut patches = preview.patches.write().unwrap();
       let hb = patches.get_mut(&PatchOwner::Heartbeat).unwrap();
-      set_patch_param(hb, "base_freq", 999.0);
+      hb.set_param("base_freq", 999.0);
     }
     let patches = preview.patches.read().unwrap();
     assert!(
@@ -1294,7 +1009,7 @@ mod tests {
     {
       let mut patches = preview.patches.write().unwrap();
       let drone = patches.get_mut(&PatchOwner::DroneLo(0)).unwrap();
-      set_patch_param(drone, "base_freq", 777.0);
+      drone.set_param("base_freq", 777.0);
     }
     let patches = preview.patches.read().unwrap();
     assert!(
@@ -1313,7 +1028,7 @@ mod tests {
     {
       let mut patches = preview.patches.write().unwrap();
       let hb = patches.get_mut(&PatchOwner::Heartbeat).unwrap();
-      set_patch_param(hb, "base_freq", 555.0);
+      hb.set_param("base_freq", 555.0);
     }
     preview
       .locked_params
@@ -1338,21 +1053,18 @@ mod tests {
     // Set heartbeat and drone lo/hi to different values.
     {
       let mut patches = preview.patches.write().unwrap();
-      set_patch_param(
-        patches.get_mut(&PatchOwner::Heartbeat).unwrap(),
-        "base_freq",
-        111.0,
-      );
-      set_patch_param(
-        patches.get_mut(&PatchOwner::DroneLo(0)).unwrap(),
-        "base_freq",
-        222.0,
-      );
-      set_patch_param(
-        patches.get_mut(&PatchOwner::DroneHi(0)).unwrap(),
-        "base_freq",
-        333.0,
-      );
+      patches
+        .get_mut(&PatchOwner::Heartbeat)
+        .unwrap()
+        .set_param("base_freq", 111.0);
+      patches
+        .get_mut(&PatchOwner::DroneLo(0))
+        .unwrap()
+        .set_param("base_freq", 222.0);
+      patches
+        .get_mut(&PatchOwner::DroneHi(0))
+        .unwrap()
+        .set_param("base_freq", 333.0);
     }
     let json = preview.state_snapshot();
     let state: StateContract =
