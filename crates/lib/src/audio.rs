@@ -204,6 +204,64 @@ pub struct MixerHandle {
   sample_rate: f64,
 }
 
+/// Build the mixer audio callback for the given shared state and
+/// channel count.
+fn mixer_callback(
+  inner: Arc<MixerInner>,
+  channels: usize,
+) -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) {
+  move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+    let start = std::time::Instant::now();
+
+    // Zero the output buffer.
+    for sample in data.iter_mut() {
+      *sample = 0.0;
+    }
+
+    // If the main thread holds the lock (graph add/remove),
+    // output silence for this buffer rather than blocking the
+    // audio thread.
+    let Ok(mut slots) = inner.slots.try_lock() else {
+      inner.lock_failures.fetch_add(1, Ordering::Relaxed);
+      return;
+    };
+
+    let frames = data.len() / channels;
+    for slot in slots.iter_mut().flatten() {
+      slot.left.resize(frames, 0.0);
+      slot.right.resize(frames, 0.0);
+      slot.adapter.process_big(
+        frames,
+        &[],
+        &mut [&mut slot.left, &mut slot.right],
+      );
+
+      // Guard against NaN/Inf from any graph — a single
+      // non-finite sample would corrupt the entire summed
+      // output and macOS renders NaN as silence.
+      let finite = slot
+        .left
+        .iter()
+        .chain(slot.right.iter())
+        .all(|s| s.is_finite());
+      if !finite {
+        inner.nan_frames.fetch_add(1, Ordering::Relaxed);
+        continue;
+      }
+
+      for (i, frame) in data.chunks_mut(channels).enumerate() {
+        frame[0] += slot.left[i];
+        if channels > 1 {
+          frame[1] += slot.right[i];
+        }
+      }
+    }
+
+    let elapsed = start.elapsed().as_micros() as u64;
+    inner.peak_callback_us.fetch_max(elapsed, Ordering::Relaxed);
+  }
+}
+
 impl AudioMixer {
   /// Open one cpal output stream on the given device.  All graphs
   /// added via `add` are mixed together in the audio callback.
@@ -225,66 +283,32 @@ impl AudioMixer {
       nan_frames: AtomicU64::new(0),
       peak_callback_us: AtomicU64::new(0),
     });
-    let callback_inner = Arc::clone(&inner);
 
+    let err_cb = |err| tracing::error!("Audio mixer stream error: {}", err);
+
+    // Try fixed buffer size first; fall back to the device default
+    // if the hardware rejects it.
     let stream = device
       .build_output_stream(
         &stream_config,
-        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-          let start = std::time::Instant::now();
-
-          // Zero the output buffer.
-          for sample in data.iter_mut() {
-            *sample = 0.0;
-          }
-
-          // If the main thread holds the lock (graph add/remove),
-          // output silence for this buffer rather than blocking the
-          // audio thread.
-          let Ok(mut slots) = callback_inner.slots.try_lock() else {
-            callback_inner.lock_failures.fetch_add(1, Ordering::Relaxed);
-            return;
-          };
-
-          let frames = data.len() / channels;
-          for slot in slots.iter_mut().flatten() {
-            slot.left.resize(frames, 0.0);
-            slot.right.resize(frames, 0.0);
-            slot.adapter.process_big(
-              frames,
-              &[],
-              &mut [&mut slot.left, &mut slot.right],
-            );
-
-            // Guard against NaN/Inf from any graph — a single
-            // non-finite sample would corrupt the entire summed
-            // output and macOS renders NaN as silence.
-            let finite = slot
-              .left
-              .iter()
-              .chain(slot.right.iter())
-              .all(|s| s.is_finite());
-            if !finite {
-              callback_inner.nan_frames.fetch_add(1, Ordering::Relaxed);
-              continue;
-            }
-
-            for (i, frame) in data.chunks_mut(channels).enumerate() {
-              frame[0] += slot.left[i];
-              if channels > 1 {
-                frame[1] += slot.right[i];
-              }
-            }
-          }
-
-          let elapsed = start.elapsed().as_micros() as u64;
-          callback_inner
-            .peak_callback_us
-            .fetch_max(elapsed, Ordering::Relaxed);
-        },
-        |err| tracing::error!("Audio mixer stream error: {}", err),
+        mixer_callback(Arc::clone(&inner), channels),
+        err_cb,
         None,
       )
+      .or_else(|e| {
+        tracing::warn!(
+          error = %e,
+          buffer_frames = MIXER_BUFFER_FRAMES,
+          "Fixed buffer size rejected, falling back to device default"
+        );
+        stream_config.buffer_size = cpal::BufferSize::Default;
+        device.build_output_stream(
+          &stream_config,
+          mixer_callback(Arc::clone(&inner), channels),
+          |err| tracing::error!("Audio mixer stream error: {}", err),
+          None,
+        )
+      })
       .map_err(AudioError::StreamBuildFailed)?;
 
     stream.play().map_err(AudioError::PlaybackStartFailed)?;

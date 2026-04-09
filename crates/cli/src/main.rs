@@ -362,16 +362,29 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   });
 
   let running_signal = Arc::clone(&running);
-  axum::serve(listener, app.into_make_service())
-    .with_graceful_shutdown(shutdown_signal(running_signal))
-    .await
-    .map_err(ApplicationError::ServerRuntime)?;
+  let server = axum::serve(listener, app.into_make_service())
+    .with_graceful_shutdown(shutdown_signal(running_signal));
 
-  info!("Web server shut down, waiting for daemon loop");
-  daemon_handle
-    .await
-    .expect("Daemon task panicked")
-    .map_err(ApplicationError::Daemon)?;
+  // Race the web server against the daemon.  If the daemon exits
+  // early (e.g., audio device failure), shut the program down
+  // immediately rather than hanging with a headless web server.
+  let mut daemon_handle = daemon_handle;
+  tokio::select! {
+    result = server => {
+      result.map_err(ApplicationError::ServerRuntime)?;
+      info!("Web server shut down, waiting for daemon loop");
+      daemon_handle
+        .await
+        .expect("Daemon task panicked")
+        .map_err(ApplicationError::Daemon)?;
+    }
+    result = &mut daemon_handle => {
+      running.store(false, Ordering::Relaxed);
+      result
+        .expect("Daemon task panicked")
+        .map_err(ApplicationError::Daemon)?;
+    }
+  }
 
   info!("Shutdown complete");
   Ok(())
