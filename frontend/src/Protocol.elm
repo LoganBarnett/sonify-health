@@ -2,6 +2,7 @@ module Protocol exposing
     ( HeartbeatInfo
     , LerpStrategy(..)
     , NoteInfo
+    , OverrideInfo
     , PatchParamMeta
     , ProbeLogEntry
     , ServerMsg(..)
@@ -11,12 +12,15 @@ module Protocol exposing
     , decodeServerMsg
     , encodeAddNote
     , encodeClearOverride
+    , encodeCreateOverride
     , encodeExportConfig
     , encodeGetState
     , encodeImportConfig
     , encodeLerpStrategy
     , encodeOverrideHeartbeat
     , encodeRemoveNote
+    , encodeRenamePatch
+    , encodeResetOverrideParam
     , encodeRevertAll
     , encodeSetCycleOffset
     , encodeSetHeartbeatLoop
@@ -97,6 +101,10 @@ type alias SliderRanges =
     }
 
 
+type alias OverrideInfo =
+    { base : String, delta : Dict String Float }
+
+
 
 -- Server messages (incoming)
 
@@ -110,6 +118,7 @@ type ServerMsg
         , heartbeatLoop : Bool
         , heartbeats : List HeartbeatInfo
         , sliderRanges : SliderRanges
+        , overrides : Dict String OverrideInfo
         }
     | PatchParamChanged String String Float
     | MuteChanged Bool
@@ -118,13 +127,14 @@ type ServerMsg
     | OverrideChanged Int (Maybe Float) Bool
     | HeartbeatLoopChanged Bool
     | LibraryChanged (Dict String (Dict String Float))
+    | OverridesChanged (Dict String OverrideInfo)
     | CycleOffsetChanged Int Float
     | NoteVolumeChanged Int Int Float
     | NoteOffsetChanged Int Int Float
     | NoteTransitionChanged Int Int TransitionInfo
     | NotesChanged Int (List NoteInfo)
     | ProbeLog ProbeLogEntry
-    | ConfigExport (Dict String (Dict String Float))
+    | ConfigExport (Dict String (Dict String Float)) (Dict String OverrideInfo)
     | ImportError String
     | Connected
     | Disconnected
@@ -165,6 +175,9 @@ serverMsgDecoder =
 
                     "library_changed" ->
                         libraryChangedDecoder
+
+                    "overrides_changed" ->
+                        overridesChangedDecoder
 
                     "cycle_offset_changed" ->
                         cycleOffsetChangedDecoder
@@ -209,7 +222,7 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map6
         (\pp lib muted mv hbLoop hbs ->
-            \sr ->
+            \sr ovr ->
                 StateMsg
                     { patchParams = pp
                     , library = lib
@@ -218,6 +231,7 @@ stateDecoder =
                     , heartbeatLoop = hbLoop
                     , heartbeats = hbs
                     , sliderRanges = sr
+                    , overrides = ovr
                     }
         )
         (D.field "patch_params" (D.list patchParamMetaDecoder))
@@ -228,8 +242,9 @@ stateDecoder =
         (D.field "heartbeats" (D.list heartbeatInfoDecoder))
         |> D.andThen
             (\buildState ->
-                D.map buildState
+                D.map2 buildState
                     (D.field "slider_ranges" sliderRangesDecoder)
+                    (D.field "overrides" overridesDecoder)
             )
 
 
@@ -432,6 +447,23 @@ libraryChangedDecoder =
     D.map LibraryChanged (D.field "library" libraryDecoder)
 
 
+overrideInfoDecoder : D.Decoder OverrideInfo
+overrideInfoDecoder =
+    D.map2 OverrideInfo
+        (D.field "base" D.string)
+        (D.field "delta" (D.dict D.float))
+
+
+overridesDecoder : D.Decoder (Dict String OverrideInfo)
+overridesDecoder =
+    D.dict overrideInfoDecoder
+
+
+overridesChangedDecoder : D.Decoder ServerMsg
+overridesChangedDecoder =
+    D.map OverridesChanged (D.field "overrides" overridesDecoder)
+
+
 cycleOffsetChangedDecoder : D.Decoder ServerMsg
 cycleOffsetChangedDecoder =
     D.map2 CycleOffsetChanged
@@ -489,7 +521,13 @@ probeLogDecoder =
 
 configExportDecoder : D.Decoder ServerMsg
 configExportDecoder =
-    D.map ConfigExport (D.field "library" libraryDecoder)
+    D.map2 ConfigExport
+        (D.field "library" libraryDecoder)
+        (D.oneOf
+            [ D.field "overrides" overridesDecoder
+            , D.succeed Dict.empty
+            ]
+        )
 
 
 importErrorDecoder : D.Decoder ServerMsg
@@ -711,3 +749,33 @@ encodeTransition trans =
                 , ( "patches", E.list E.string info.patches )
                 , ( "segments", E.list encodeLerpStrategy info.segments )
                 ]
+
+
+encodeCreateOverride : String -> String -> String
+encodeCreateOverride base name =
+    E.object
+        [ ( "type", E.string "create_override" )
+        , ( "base", E.string base )
+        , ( "name", E.string name )
+        ]
+        |> E.encode 0
+
+
+encodeRenamePatch : String -> String -> String
+encodeRenamePatch oldName newName =
+    E.object
+        [ ( "type", E.string "rename_patch" )
+        , ( "old_name", E.string oldName )
+        , ( "new_name", E.string newName )
+        ]
+        |> E.encode 0
+
+
+encodeResetOverrideParam : String -> String -> String
+encodeResetOverrideParam patchName param =
+    E.object
+        [ ( "type", E.string "reset_override_param" )
+        , ( "patch_name", E.string patchName )
+        , ( "param", E.string param )
+        ]
+        |> E.encode 0

@@ -459,6 +459,75 @@ a:hover {
   color: #ffffff;
 }
 
+.patch-item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.patch-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patch-item-base {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+}
+
+.patch-item-actions {
+  display: flex;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.patch-action-btn {
+  padding: 0 var(--space-xs);
+  font-size: var(--font-xs);
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.patch-action-btn:hover {
+  color: var(--color-accent);
+}
+
+.rename-input {
+  font-size: var(--font-base);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  width: 100%;
+}
+
+.override-header {
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-sm);
+}
+
+.param-inherited {
+  opacity: 0.5;
+}
+
+.param-reset-btn {
+  padding: 0 var(--space-xs);
+  font-size: var(--font-sm);
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.param-reset-btn:hover {
+  color: var(--color-error);
+}
+
 /* Patch editor */
 
 .patch-editor {

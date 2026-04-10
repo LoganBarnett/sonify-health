@@ -58,6 +58,7 @@ type alias Model =
     , connected : Bool
     , patchParamMeta : List PatchParamMeta
     , library : Dict String (Dict String Float)
+    , overrides : Dict String OverrideInfo
     , selectedPatch : Maybe String
     , heartbeats : List HeartbeatInfo
     , muted : Bool
@@ -71,6 +72,8 @@ type alias Model =
     , importError : Maybe String
     , protocolError : Maybe String
     , sliderRanges : SliderRanges
+    , renamingPatch : Maybe String
+    , renameInput : String
     }
 
 
@@ -111,6 +114,12 @@ type Msg
     | SubmitImport
     | SetCycleOffset Int String
     | CycleOffsetDebounce Int Int Float
+    | CreateOverride String
+    | StartRename String
+    | SetRenameInput String
+    | ConfirmRename String
+    | CancelRename
+    | ResetOverrideParam String String
     | DismissProtocolError
     | NoOp
 
@@ -140,6 +149,7 @@ init _ url key =
       , connected = False
       , patchParamMeta = []
       , library = Dict.empty
+      , overrides = Dict.empty
       , selectedPatch = Nothing
       , heartbeats = []
       , muted = False
@@ -153,6 +163,8 @@ init _ url key =
       , importError = Nothing
       , protocolError = Nothing
       , sliderRanges = defaultSliderRanges
+      , renamingPatch = Nothing
+      , renameInput = ""
       }
     , cmdForRoute route
     )
@@ -655,6 +667,67 @@ update msg model =
             else
                 ( model, Cmd.none )
 
+        CreateOverride base ->
+            let
+                candidate =
+                    base ++ "-override"
+
+                name =
+                    if Dict.member candidate model.library then
+                        findUniqueName candidate 2 model.library
+
+                    else
+                        candidate
+            in
+            ( model
+            , Ports.websocketSend (encodeCreateOverride base name)
+            )
+
+        StartRename name ->
+            ( { model | renamingPatch = Just name, renameInput = name }
+            , Cmd.none
+            )
+
+        SetRenameInput txt ->
+            ( { model | renameInput = txt }, Cmd.none )
+
+        ConfirmRename oldName ->
+            let
+                newName =
+                    String.trim model.renameInput
+
+                cmd =
+                    if not (String.isEmpty newName) && newName /= oldName then
+                        Ports.websocketSend (encodeRenamePatch oldName newName)
+
+                    else
+                        Cmd.none
+
+                updatedSelection =
+                    if model.selectedPatch == Just oldName && newName /= oldName && not (String.isEmpty newName) then
+                        Just newName
+
+                    else
+                        model.selectedPatch
+            in
+            ( { model
+                | renamingPatch = Nothing
+                , renameInput = ""
+                , selectedPatch = updatedSelection
+              }
+            , cmd
+            )
+
+        CancelRename ->
+            ( { model | renamingPatch = Nothing, renameInput = "" }
+            , Cmd.none
+            )
+
+        ResetOverrideParam patchName param ->
+            ( model
+            , Ports.websocketSend (encodeResetOverrideParam patchName param)
+            )
+
         DismissProtocolError ->
             ( { model | protocolError = Nothing }, Cmd.none )
 
@@ -669,6 +742,7 @@ handleServerMsg msg model =
             ( { model
                 | patchParamMeta = state.patchParams
                 , library = state.library
+                , overrides = state.overrides
                 , muted = state.muted
                 , masterVolume = state.masterVolume
                 , heartbeatLoop = state.heartbeatLoop
@@ -735,6 +809,9 @@ handleServerMsg msg model =
 
         LibraryChanged lib ->
             ( { model | library = lib }, Cmd.none )
+
+        OverridesChanged ovr ->
+            ( { model | overrides = ovr }, Cmd.none )
 
         CycleOffsetChanged index value ->
             ( { model
@@ -812,7 +889,7 @@ handleServerMsg msg model =
             , Cmd.none
             )
 
-        ConfigExport lib ->
+        ConfigExport lib _ ->
             ( { model | exportData = Just lib }, Cmd.none )
 
         ImportError err ->
@@ -838,6 +915,49 @@ updateAt index fn list =
                 item
         )
         list
+
+
+onEnter : Msg -> Html.Attribute Msg
+onEnter msg =
+    Html.Events.on "keydown"
+        (Decode.field "key" Decode.string
+            |> Decode.andThen
+                (\key ->
+                    if key == "Enter" then
+                        Decode.succeed msg
+
+                    else
+                        Decode.fail "not enter"
+                )
+        )
+
+
+onEsc : Msg -> Html.Attribute Msg
+onEsc msg =
+    Html.Events.on "keydown"
+        (Decode.field "key" Decode.string
+            |> Decode.andThen
+                (\key ->
+                    if key == "Escape" then
+                        Decode.succeed msg
+
+                    else
+                        Decode.fail "not escape"
+                )
+        )
+
+
+findUniqueName : String -> Int -> Dict String a -> String
+findUniqueName base n library =
+    let
+        candidate =
+            base ++ "-" ++ String.fromInt n
+    in
+    if Dict.member candidate library then
+        findUniqueName base (n + 1) library
+
+    else
+        candidate
 
 
 unique : List comparable -> List comparable
@@ -1838,9 +1958,28 @@ viewPatchList model =
 
 viewPatchItem : Model -> String -> Html Msg
 viewPatchItem model name =
+    let
+        isSelected =
+            model.selectedPatch == Just name
+
+        isRenaming =
+            model.renamingPatch == Just name
+
+        overrideLabel =
+            case Dict.get name model.overrides of
+                Just info ->
+                    span [ class "patch-item-base" ]
+                        [ text (" ← " ++ info.base) ]
+
+                Nothing ->
+                    text ""
+
+        isOverride =
+            Dict.member name model.overrides
+    in
     div
         [ class
-            (if model.selectedPatch == Just name then
+            (if isSelected then
                 "patch-item selected"
 
              else
@@ -1848,7 +1987,62 @@ viewPatchItem model name =
             )
         , onClick (SelectPatch name)
         ]
-        [ text name ]
+        [ div [ class "patch-item-row" ]
+            [ if isRenaming then
+                input
+                    [ type_ "text"
+                    , class "rename-input"
+                    , value model.renameInput
+                    , onInput SetRenameInput
+                    , Html.Events.stopPropagationOn "click"
+                        (Decode.succeed ( NoOp, True ))
+                    , onEnter (ConfirmRename name)
+                    , onEsc CancelRename
+                    ]
+                    []
+
+              else
+                span [ class "patch-item-name" ]
+                    [ text name, overrideLabel ]
+            , div [ class "patch-item-actions" ]
+                (if isRenaming then
+                    [ button
+                        [ class "patch-action-btn"
+                        , onClick (ConfirmRename name)
+                        , title "Confirm rename"
+                        ]
+                        [ text "✓" ]
+                    , button
+                        [ class "patch-action-btn"
+                        , onClick CancelRename
+                        , title "Cancel rename"
+                        ]
+                        [ text "✗" ]
+                    ]
+
+                 else
+                    [ button
+                        [ class "patch-action-btn"
+                        , Html.Events.stopPropagationOn "click"
+                            (Decode.succeed ( StartRename name, True ))
+                        , title "Rename"
+                        ]
+                        [ text "✎" ]
+                    , if not isOverride then
+                        button
+                            [ class "patch-action-btn"
+                            , Html.Events.stopPropagationOn "click"
+                                (Decode.succeed ( CreateOverride name, True ))
+                            , title "Create override"
+                            ]
+                            [ text "+▶" ]
+
+                      else
+                        text ""
+                    ]
+                )
+            ]
+        ]
 
 
 transitionPatchNames : HeartbeatInfo -> List String
@@ -1880,11 +2074,25 @@ viewPatchEditor model =
                         [ text ("Patch not found: " ++ patchName) ]
 
                 Just patchValues ->
+                    let
+                        maybeOverride =
+                            Dict.get patchName model.overrides
+
+                        headerExtra =
+                            case maybeOverride of
+                                Just info ->
+                                    div [ class "override-header" ]
+                                        [ text ("overrides: " ++ info.base) ]
+
+                                Nothing ->
+                                    text ""
+                    in
                     div [ class "section patch-editor" ]
                         [ h2 [] [ text patchName ]
+                        , headerExtra
                         , div [ class "param-grid" ]
                             (List.map
-                                (viewParamSlider patchName patchValues)
+                                (viewParamSlider patchName patchValues maybeOverride)
                                 model.patchParamMeta
                             )
                         ]
@@ -1893,15 +2101,43 @@ viewPatchEditor model =
 viewParamSlider :
     String
     -> Dict String Float
+    -> Maybe OverrideInfo
     -> PatchParamMeta
     -> Html Msg
-viewParamSlider patchName patchValues meta =
+viewParamSlider patchName patchValues maybeOverride meta =
     let
         val =
             Dict.get meta.name patchValues
                 |> Maybe.withDefault 0.0
+
+        ( inherited, resetBtn ) =
+            case maybeOverride of
+                Just info ->
+                    if Dict.member meta.name info.delta then
+                        ( False
+                        , button
+                            [ class "param-reset-btn"
+                            , onClick (ResetOverrideParam patchName meta.name)
+                            , title "Reset to inherited value"
+                            ]
+                            [ text "×" ]
+                        )
+
+                    else
+                        ( True, text "" )
+
+                Nothing ->
+                    ( False, text "" )
     in
-    div [ class "param-slider" ]
+    div
+        [ class
+            (if inherited then
+                "param-slider param-inherited"
+
+             else
+                "param-slider"
+            )
+        ]
         [ label [ class "param-label", title meta.description ]
             [ text meta.name ]
         , input
@@ -1923,6 +2159,7 @@ viewParamSlider patchName patchValues meta =
             , onInput (SetPatchParam patchName meta.name)
             ]
             []
+        , resetBtn
         ]
 
 

@@ -1,3 +1,4 @@
+use crate::config::OverrideInfo;
 use crate::preview_state::PreviewState;
 use axum::{
   extract::{
@@ -10,6 +11,7 @@ use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use sonify_health_lib::heartbeat_config::default_volume;
 use sonify_health_lib::{NoteConfig, Patch, Transition};
+use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
 
@@ -115,7 +117,21 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
         })
         .to_string(),
       );
+
+      // If the target is an override patch, record in its delta.
+      {
+        let mut ovr = preview.overrides.write().unwrap();
+        if let Some(info) = ovr.get_mut(patch_name) {
+          info.delta.insert(param.to_string(), value);
+        }
+      }
+
+      // If the target is a base patch, propagate to dependents
+      // whose delta does not override this param.
+      propagate_base_change(preview, patch_name, param, value);
+
       broadcast_library(preview);
+      broadcast_overrides(preview);
       None
     }
 
@@ -354,11 +370,15 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     "export_config" => {
       let lib = preview.library.read().unwrap();
+      let ovr = preview.overrides.read().unwrap();
       let lib_json = serde_json::to_value(&*lib).unwrap_or_default();
+      let ovr_json = preview.overrides_json();
+      drop(ovr);
       Some(
         json!({
           "type": "config_export",
           "library": lib_json,
+          "overrides": ovr_json,
         })
         .to_string(),
       )
@@ -386,6 +406,129 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           .to_string(),
         ),
       }
+    }
+
+    "create_override" => {
+      let base = msg.get("base").and_then(|v| v.as_str())?;
+      let name = msg.get("name").and_then(|v| v.as_str())?;
+      {
+        let lib = preview.library.read().unwrap();
+        // Name must not be taken.
+        if lib.contains_key(name) {
+          return None;
+        }
+        // Base must exist.
+        if !lib.contains_key(base) {
+          return None;
+        }
+      }
+      // Base must not itself be an override.
+      {
+        let ovr = preview.overrides.read().unwrap();
+        if ovr.contains_key(base) {
+          return None;
+        }
+      }
+      // Clone the base into the library and register the override.
+      {
+        let mut lib = preview.library.write().unwrap();
+        let cloned = lib[base].clone();
+        lib.insert(name.to_string(), cloned);
+      }
+      {
+        let mut ovr = preview.overrides.write().unwrap();
+        ovr.insert(
+          name.to_string(),
+          OverrideInfo {
+            base: base.to_string(),
+            delta: HashMap::new(),
+          },
+        );
+      }
+      let snapshot = preview.state_snapshot();
+      let _ = preview.broadcast_tx.send(snapshot);
+      None
+    }
+
+    "rename_patch" => {
+      let old_name = msg.get("old_name").and_then(|v| v.as_str())?;
+      let new_name = msg.get("new_name").and_then(|v| v.as_str())?;
+      if old_name == new_name || new_name.is_empty() {
+        return None;
+      }
+      {
+        let lib = preview.library.read().unwrap();
+        if !lib.contains_key(old_name) || lib.contains_key(new_name) {
+          return None;
+        }
+      }
+      // Rename in library.
+      {
+        let mut lib = preview.library.write().unwrap();
+        if let Some(patch) = lib.remove(old_name) {
+          lib.insert(new_name.to_string(), patch);
+        }
+      }
+      // Update heartbeat configs: transition patch references.
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        for cfg in configs.iter_mut() {
+          for note in &mut cfg.notes {
+            rename_in_transition(&mut note.transition, old_name, new_name);
+          }
+        }
+      }
+      // Update overrides map.
+      {
+        let mut ovr = preview.overrides.write().unwrap();
+        // If any override has old_name as its base, update it.
+        for info in ovr.values_mut() {
+          if info.base == old_name {
+            info.base = new_name.to_string();
+          }
+        }
+        // If the override itself was renamed, move the key.
+        if let Some(info) = ovr.remove(old_name) {
+          ovr.insert(new_name.to_string(), info);
+        }
+      }
+      let snapshot = preview.state_snapshot();
+      let _ = preview.broadcast_tx.send(snapshot);
+      None
+    }
+
+    "reset_override_param" => {
+      let patch_name = msg.get("patch_name").and_then(|v| v.as_str())?;
+      let param = msg.get("param").and_then(|v| v.as_str())?;
+      let base_name;
+      {
+        let mut ovr = preview.overrides.write().unwrap();
+        let info = ovr.get_mut(patch_name)?;
+        info.delta.remove(param);
+        base_name = info.base.clone();
+      }
+      // Copy the base's current value for this param into the
+      // resolved override patch.
+      {
+        let mut lib = preview.library.write().unwrap();
+        let base_val = lib.get(&base_name)?.get_param(param)?;
+        lib.get_mut(patch_name)?.set_param(param, base_val);
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "patch_param_changed",
+          "patch_name": patch_name,
+          "param": param,
+          "value": preview.library.read().unwrap()
+            .get(patch_name)
+            .and_then(|p| p.get_param(param))
+            .unwrap_or(0.0),
+        })
+        .to_string(),
+      );
+      broadcast_library(preview);
+      broadcast_overrides(preview);
+      None
     }
 
     _ => None,
@@ -422,6 +565,87 @@ fn broadcast_library(preview: &PreviewState) {
     })
     .to_string(),
   );
+}
+
+/// Broadcast the overrides map to all connected clients.
+fn broadcast_overrides(preview: &PreviewState) {
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": "overrides_changed",
+      "overrides": preview.overrides_json(),
+    })
+    .to_string(),
+  );
+}
+
+/// When a base patch parameter changes, propagate it to override
+/// patches that have not overridden that specific parameter.
+fn propagate_base_change(
+  preview: &PreviewState,
+  base_name: &str,
+  param: &str,
+  value: f64,
+) {
+  let ovr = preview.overrides.read().unwrap();
+  let dependents: Vec<String> = ovr
+    .iter()
+    .filter(|(_, info)| {
+      info.base == base_name && !info.delta.contains_key(param)
+    })
+    .map(|(name, _)| name.clone())
+    .collect();
+  drop(ovr);
+
+  if dependents.is_empty() {
+    return;
+  }
+
+  let mut lib = preview.library.write().unwrap();
+  for dep_name in &dependents {
+    if let Some(patch) = lib.get_mut(dep_name) {
+      patch.set_param(param, value);
+    }
+  }
+  drop(lib);
+
+  for dep_name in &dependents {
+    let _ = preview.broadcast_tx.send(
+      json!({
+        "type": "patch_param_changed",
+        "patch_name": dep_name,
+        "param": param,
+        "value": value,
+      })
+      .to_string(),
+    );
+  }
+}
+
+/// Rename a patch reference inside a transition.
+fn rename_in_transition(
+  transition: &mut Transition,
+  old_name: &str,
+  new_name: &str,
+) {
+  match transition {
+    Transition::Gradient {
+      patches,
+      segments: _,
+    } => {
+      for p in patches.iter_mut() {
+        if p == old_name {
+          *p = new_name.to_string();
+        }
+      }
+    }
+    Transition::Discrete { states } => {
+      for s in states.iter_mut() {
+        if s.patch == old_name {
+          s.patch = new_name.to_string();
+        }
+      }
+    }
+  }
 }
 
 /// Auto-detect format and parse patches from imported text.

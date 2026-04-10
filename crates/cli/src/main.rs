@@ -273,6 +273,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
 
   let preview = Arc::new(preview_state::PreviewState::new(
     config.library.clone(),
+    config.overrides.clone(),
     config.heartbeats.clone(),
     Arc::clone(&muted),
     config.slider_ranges.clone(),

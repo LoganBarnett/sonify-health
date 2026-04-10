@@ -1,8 +1,9 @@
-use crate::config::SliderRanges;
+use crate::config::{OverrideInfo, SliderRanges};
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{HeartbeatConfig, Patch, PatchLibrary};
+use std::collections::HashMap;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
   Arc, RwLock,
@@ -23,6 +24,8 @@ pub struct HeartbeatState {
 pub struct PreviewState {
   pub library: RwLock<PatchLibrary>,
   original_library: PatchLibrary,
+  pub overrides: RwLock<HashMap<String, OverrideInfo>>,
+  original_overrides: HashMap<String, OverrideInfo>,
   pub heartbeat_configs: RwLock<Vec<HeartbeatConfig>>,
   original_heartbeat_configs: Vec<HeartbeatConfig>,
   pub heartbeats: Vec<HeartbeatState>,
@@ -38,6 +41,7 @@ pub struct PreviewState {
 impl PreviewState {
   pub fn new(
     library: PatchLibrary,
+    overrides: HashMap<String, OverrideInfo>,
     heartbeat_configs: Vec<HeartbeatConfig>,
     muted: Arc<AtomicBool>,
     slider_ranges: SliderRanges,
@@ -57,6 +61,8 @@ impl PreviewState {
     Self {
       original_library: library.clone(),
       library: RwLock::new(library),
+      original_overrides: overrides.clone(),
+      overrides: RwLock::new(overrides),
       original_heartbeat_configs: heartbeat_configs.clone(),
       heartbeat_configs: RwLock::new(heartbeat_configs),
       heartbeats,
@@ -96,6 +102,7 @@ impl PreviewState {
   /// original state.
   pub fn revert(&self) {
     *self.library.write().unwrap() = self.original_library.clone();
+    *self.overrides.write().unwrap() = self.original_overrides.clone();
     *self.heartbeat_configs.write().unwrap() =
       self.original_heartbeat_configs.clone();
     for hb in &self.heartbeats {
@@ -157,6 +164,8 @@ impl PreviewState {
       })
       .collect();
 
+    let overrides_json = self.overrides_json();
+
     json!({
       "type": "state",
       "patch_params": param_metas,
@@ -166,8 +175,26 @@ impl PreviewState {
       "heartbeat_loop": self.heartbeat_loop.load(Ordering::Relaxed),
       "heartbeats": heartbeats_json,
       "slider_ranges": serde_json::to_value(&self.slider_ranges).unwrap_or_default(),
+      "overrides": overrides_json,
     })
     .to_string()
+  }
+
+  /// Serialize the overrides map to a JSON value.
+  pub fn overrides_json(&self) -> serde_json::Value {
+    let ovr = self.overrides.read().unwrap();
+    let map: serde_json::Map<String, serde_json::Value> = ovr
+      .iter()
+      .map(|(name, info)| {
+        let delta: serde_json::Map<String, serde_json::Value> = info
+          .delta
+          .iter()
+          .map(|(k, v)| (k.clone(), json!(v)))
+          .collect();
+        (name.clone(), json!({ "base": info.base, "delta": delta }))
+      })
+      .collect();
+    serde_json::Value::Object(map)
   }
 }
 

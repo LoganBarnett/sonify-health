@@ -1,11 +1,21 @@
 use serde::{Deserialize, Serialize};
 use sonify_health_lib::{
   builtin_library, HeartbeatConfig, LogFormat, LogLevel, Patch, PatchLibrary,
+  PatchOverrides,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio_listener::ListenerAddress;
+
+/// Tracks which patches are overrides (derived from a base patch with
+/// a sparse delta) so the UI can display inherited vs overridden
+/// parameters and exports can emit the compact form.
+#[derive(Debug, Clone)]
+pub struct OverrideInfo {
+  pub base: String,
+  pub delta: HashMap<String, f64>,
+}
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -55,6 +65,25 @@ pub enum ConfigError {
   )]
   ExtraPatchesParse {
     path: PathBuf,
+    #[source]
+    source: toml::de::Error,
+  },
+
+  #[error(
+    "Override patch {name:?} references unknown base \
+     patch {base:?}"
+  )]
+  OverrideBaseMissing { name: String, base: String },
+
+  #[error(
+    "Override patch {name:?} references another override \
+     {base:?} (chained overrides are not supported)"
+  )]
+  OverrideChained { name: String, base: String },
+
+  #[error("Failed to parse patch {name:?}: {source}")]
+  PatchParse {
+    name: String,
     #[source]
     source: toml::de::Error,
   },
@@ -146,7 +175,7 @@ pub(crate) struct ConfigFileRaw {
   frontend_path: Option<PathBuf>,
   extra_patches_file: Option<PathBuf>,
   #[serde(default)]
-  patches: HashMap<String, Patch>,
+  patches: HashMap<String, toml::Value>,
   #[serde(default)]
   heartbeats: Vec<HeartbeatConfig>,
   #[serde(default)]
@@ -187,6 +216,7 @@ pub struct Config {
   pub audio_device: Option<String>,
   pub frontend_path: PathBuf,
   pub library: PatchLibrary,
+  pub overrides: HashMap<String, OverrideInfo>,
   pub heartbeats: Vec<HeartbeatConfig>,
   pub slider_ranges: SliderRanges,
   pub oidc: Option<OidcConfig>,
@@ -244,10 +274,32 @@ impl Config {
       .unwrap_or_else(|| PathBuf::from("frontend/public"));
 
     // Build patch library: builtins, then config patches, then extra
-    // file patches (each layer wins on collision).
+    // file patches (each layer wins on collision).  Two-pass: first
+    // standalone patches, then override patches that reference them.
     let mut library = builtin_library();
-    for (name, patch) in &file.patches {
-      library.insert(name.clone(), patch.clone());
+    let mut override_entries: Vec<(String, String, toml::Value)> = Vec::new();
+
+    for (name, mut table) in file.patches {
+      if let Some(base_val) =
+        table.as_table_mut().and_then(|t| t.remove("overrides"))
+      {
+        let base = base_val
+          .as_str()
+          .ok_or_else(|| {
+            ConfigError::Validation(format!(
+              "patch {name:?}: 'overrides' must be a string"
+            ))
+          })?
+          .to_string();
+        override_entries.push((name, base, table));
+      } else {
+        let patch: Patch =
+          table.try_into().map_err(|source| ConfigError::PatchParse {
+            name: name.clone(),
+            source,
+          })?;
+        library.insert(name, patch);
+      }
     }
 
     // Extra patches file (CLI flag or config).
@@ -271,6 +323,30 @@ impl Config {
       for (name, patch) in extra {
         library.insert(name, patch);
       }
+    }
+
+    // Second pass: resolve override patches.
+    let mut overrides = HashMap::new();
+    for (name, base, table) in override_entries {
+      if !library.contains_key(&base) {
+        return Err(ConfigError::OverrideBaseMissing { name, base });
+      }
+      if overrides.contains_key(&base) {
+        return Err(ConfigError::OverrideChained { name, base });
+      }
+      let parsed: PatchOverrides =
+        table.try_into().map_err(|source| ConfigError::PatchParse {
+          name: name.clone(),
+          source,
+        })?;
+      let delta: HashMap<String, f64> = parsed
+        .to_fields()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+      let resolved = library[&base].clone().with_overrides(&parsed);
+      library.insert(name.clone(), resolved);
+      overrides.insert(name, OverrideInfo { base, delta });
     }
 
     // OIDC.
@@ -342,6 +418,7 @@ impl Config {
       audio_device: file.audio_device,
       frontend_path,
       library,
+      overrides,
       heartbeats: file.heartbeats,
       slider_ranges: file.slider_ranges,
       oidc,
@@ -414,7 +491,7 @@ mod tests {
 
   #[test]
   fn patches_section_parses() {
-    let toml = r#"
+    let toml_str = r#"
       [patches.my-tone]
       freq = 523.0
       duration = 0.4
@@ -422,15 +499,56 @@ mod tests {
       sine_ratio = 0.0
     "#;
 
-    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
+    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
     assert_eq!(raw.patches.len(), 1);
-    let p = &raw.patches["my-tone"];
+    let p: Patch = raw.patches["my-tone"].clone().try_into().unwrap();
     assert_eq!(p.freq, 523.0);
     assert_eq!(p.duration, 0.4);
     assert_eq!(p.saw_ratio, 1.0);
     assert_eq!(p.sine_ratio, 0.0);
     // Unspecified fields use defaults.
     assert_eq!(p.amplitude, 0.3);
+  }
+
+  #[test]
+  fn override_patch_resolves() {
+    let toml_str = r#"
+      [patches.base-tone]
+      freq = 440.0
+      duration = 0.5
+
+      [patches.hi-tone]
+      overrides = "base-tone"
+      freq = 880.0
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
+    assert_eq!(raw.patches.len(), 2);
+
+    // Verify via full config parsing that the override resolves.
+    let cfg_path = std::env::temp_dir().join("sonify_test_override.toml");
+    std::fs::write(&cfg_path, toml_str).unwrap();
+    let config = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(cfg_path.as_path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+    std::fs::remove_file(&cfg_path).ok();
+    let hi = &config.library["hi-tone"];
+    assert_eq!(hi.freq, 880.0);
+    // Inherited from base.
+    assert_eq!(hi.duration, 0.5);
+    assert!(config.overrides.contains_key("hi-tone"));
+    assert_eq!(config.overrides["hi-tone"].base, "base-tone");
+    assert!(config.overrides["hi-tone"].delta.contains_key("freq"));
   }
 
   #[test]
