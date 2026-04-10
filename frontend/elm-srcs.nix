@@ -24,6 +24,11 @@
     version = "1.1.3";
   };
 
+  "elm/svg" = {
+    sha256 = "1cwcj73p61q45wqwgqvrvz3aypjyy3fw732xyxdyj6s256hwkn0k";
+    version = "1.0.1";
+  };
+
   "elm/url" = {
     sha256 = "0av8x5syid40sgpl5vd7pry2rq0q4pga28b4yykn9gd9v12rs3l4";
     version = "1.0.0";

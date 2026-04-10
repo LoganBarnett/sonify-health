@@ -11,6 +11,8 @@ import Json.Decode as Decode
 import Ports
 import Process
 import Protocol exposing (..)
+import Svg
+import Svg.Attributes as SA
 import Task
 import Url exposing (Url)
 import Url.Parser exposing (Parser)
@@ -90,7 +92,9 @@ type Msg
     | SetNoteTransitionThreshold Int Int Int String
     | AddNoteTransitionState Int Int
     | RemoveNoteTransitionState Int Int Int
-    | SetNoteTransitionCurve Int Int String
+    | SwitchTransitionType Int Int String
+    | SetSegmentStrategy Int Int Int String
+    | SetSegmentIntensity Int Int Int String
     | AddNoteGradientPatch Int Int
     | RemoveNoteGradientPatch Int Int Int
     | AddNote Int
@@ -161,8 +165,9 @@ defaultSliderRanges =
     , overrideMetric = { min = 0, max = 1, step = 0.01 }
     , noteVolume = { min = 0, max = 1, step = 0.01 }
     , noteOffset = { min = 0, max = 60, step = 0.1 }
-    , gradientCurve = { min = 0.1, max = 10, step = 0.1 }
+    , segmentIntensity = { min = 0.1, max = 10, step = 0.1 }
     , discreteThreshold = { min = 0, max = 1, step = 0.01 }
+    , stepPosition = { min = 0, max = 1, step = 0.01 }
     }
 
 
@@ -471,14 +476,46 @@ update msg model =
                 |> Maybe.withDefault Cmd.none
             )
 
-        SetNoteTransitionCurve hbIdx noteIdx rawVal ->
+        SwitchTransitionType hbIdx noteIdx typeName ->
+            let
+                newTrans =
+                    switchTransitionType model typeName
+
+                newHeartbeats =
+                    updateNoteTransition hbIdx
+                        noteIdx
+                        (\_ -> newTrans)
+                        model.heartbeats
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , Ports.websocketSend (encodeSetNoteTransition hbIdx noteIdx newTrans)
+            )
+
+        SetSegmentStrategy hbIdx noteIdx segIdx rawName ->
+            let
+                newHeartbeats =
+                    updateNoteTransition hbIdx
+                        noteIdx
+                        (changeStrategy segIdx rawName)
+                        model.heartbeats
+
+                newTrans =
+                    getNoteTransition hbIdx noteIdx newHeartbeats
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , newTrans
+                |> Maybe.map (\t -> Ports.websocketSend (encodeSetNoteTransition hbIdx noteIdx t))
+                |> Maybe.withDefault Cmd.none
+            )
+
+        SetSegmentIntensity hbIdx noteIdx segIdx rawVal ->
             case String.toFloat rawVal of
                 Just val ->
                     let
                         newHeartbeats =
                             updateNoteTransition hbIdx
                                 noteIdx
-                                (setGradientCurve val)
+                                (changeIntensity segIdx val)
                                 model.heartbeats
 
                         newTrans =
@@ -934,14 +971,186 @@ removeDiscreteState stateIdx trans =
             Gradient info
 
 
-setGradientCurve : Float -> TransitionInfo -> TransitionInfo
-setGradientCurve val trans =
+switchTransitionType : Model -> String -> TransitionInfo
+switchTransitionType model typeName =
+    let
+        defaultPatch =
+            Dict.keys model.library
+                |> List.head
+                |> Maybe.withDefault "sine"
+    in
+    case typeName of
+        "gradient" ->
+            Gradient { patches = [ defaultPatch, defaultPatch ], segments = [ Linear 2.0 ] }
+
+        _ ->
+            Discrete [ { threshold = 1.0, patch = defaultPatch } ]
+
+
+changeStrategy : Int -> String -> TransitionInfo -> TransitionInfo
+changeStrategy segIdx rawName trans =
     case trans of
         Gradient info ->
-            Gradient { info | curve = val }
+            let
+                newSegments =
+                    List.indexedMap
+                        (\i seg ->
+                            if i == segIdx then
+                                let
+                                    oldIntensity =
+                                        strategyIntensity seg
+                                in
+                                case rawName of
+                                    "ease-in" ->
+                                        EaseIn oldIntensity
 
-        Discrete states ->
-            Discrete states
+                                    "ease-out" ->
+                                        EaseOut oldIntensity
+
+                                    "ease-in-out" ->
+                                        EaseInOut oldIntensity
+
+                                    "step" ->
+                                        Step 0.5
+
+                                    _ ->
+                                        Linear oldIntensity
+
+                            else
+                                seg
+                        )
+                        info.segments
+            in
+            Gradient { info | segments = newSegments }
+
+        Discrete _ ->
+            trans
+
+
+changeIntensity : Int -> Float -> TransitionInfo -> TransitionInfo
+changeIntensity segIdx val trans =
+    case trans of
+        Gradient info ->
+            let
+                newSegments =
+                    List.indexedMap
+                        (\i seg ->
+                            if i == segIdx then
+                                setStrategyIntensity val seg
+
+                            else
+                                seg
+                        )
+                        info.segments
+            in
+            Gradient { info | segments = newSegments }
+
+        Discrete _ ->
+            trans
+
+
+strategyIntensity : LerpStrategy -> Float
+strategyIntensity strat =
+    case strat of
+        Linear i ->
+            i
+
+        EaseIn i ->
+            i
+
+        EaseOut i ->
+            i
+
+        EaseInOut i ->
+            i
+
+        Step i ->
+            i
+
+
+setStrategyIntensity : Float -> LerpStrategy -> LerpStrategy
+setStrategyIntensity val strat =
+    case strat of
+        Linear _ ->
+            Linear val
+
+        EaseIn _ ->
+            EaseIn val
+
+        EaseOut _ ->
+            EaseOut val
+
+        EaseInOut _ ->
+            EaseInOut val
+
+        Step _ ->
+            Step val
+
+
+strategyName : LerpStrategy -> String
+strategyName strat =
+    case strat of
+        Linear _ ->
+            "linear"
+
+        EaseIn _ ->
+            "ease-in"
+
+        EaseOut _ ->
+            "ease-out"
+
+        EaseInOut _ ->
+            "ease-in-out"
+
+        Step _ ->
+            "step"
+
+
+applyStrategy : LerpStrategy -> Float -> Float
+applyStrategy strat t =
+    let
+        tc =
+            clamp 0 1 t
+    in
+    case strat of
+        Linear _ ->
+            tc
+
+        EaseIn intensity ->
+            tc ^ intensity
+
+        EaseOut intensity ->
+            1 - (1 - tc) ^ intensity
+
+        EaseInOut intensity ->
+            if tc < 0.5 then
+                0.5 * (2 * tc) ^ intensity
+
+            else
+                1 - 0.5 * (2 - 2 * tc) ^ intensity
+
+        Step intensity ->
+            if tc < intensity then
+                0
+
+            else
+                1
+
+
+syncSegments : List LerpStrategy -> Int -> List LerpStrategy
+syncSegments segments patchCount =
+    let
+        needed =
+            Basics.max 0 (patchCount - 1)
+
+        current =
+            List.length segments
+    in
+    if current >= needed then
+        List.take needed segments
+
+    else
+        segments ++ List.repeat (needed - current) (Linear 2.0)
 
 
 addGradientPatch : Model -> TransitionInfo -> TransitionInfo
@@ -953,8 +1162,14 @@ addGradientPatch model trans =
                     Dict.keys model.library
                         |> List.head
                         |> Maybe.withDefault "sine"
+
+                newPatches =
+                    info.patches ++ [ defaultPatch ]
             in
-            Gradient { info | patches = info.patches ++ [ defaultPatch ] }
+            Gradient
+                { patches = newPatches
+                , segments = syncSegments info.segments (List.length newPatches)
+                }
 
         Discrete states ->
             Discrete states
@@ -965,18 +1180,35 @@ removeGradientPatch patchIdx trans =
     case trans of
         Gradient info ->
             if List.length info.patches > 1 then
-                Gradient
-                    { info
-                        | patches =
-                            List.indexedMap Tuple.pair info.patches
-                                |> List.filterMap
-                                    (\( i, p ) ->
-                                        if i == patchIdx then
-                                            Nothing
+                let
+                    newPatches =
+                        List.indexedMap Tuple.pair info.patches
+                            |> List.filterMap
+                                (\( i, p ) ->
+                                    if i == patchIdx then
+                                        Nothing
 
-                                        else
-                                            Just p
-                                    )
+                                    else
+                                        Just p
+                                )
+
+                    segIdxToRemove =
+                        Basics.max 0 (patchIdx - 1)
+
+                    newSegments =
+                        List.indexedMap Tuple.pair info.segments
+                            |> List.filterMap
+                                (\( i, s ) ->
+                                    if i == segIdxToRemove then
+                                        Nothing
+
+                                    else
+                                        Just s
+                                )
+                in
+                Gradient
+                    { patches = newPatches
+                    , segments = syncSegments newSegments (List.length newPatches)
                     }
 
             else
@@ -1228,10 +1460,30 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
 
 viewNoteTransitionEdit : SliderRanges -> List String -> Int -> Int -> TransitionInfo -> Html Msg
 viewNoteTransitionEdit ranges patchNames hbIdx noteIdx trans =
+    let
+        currentType =
+            case trans of
+                Discrete _ ->
+                    "discrete"
+
+                Gradient _ ->
+                    "gradient"
+
+        typeSwitcher =
+            div [ class "transition-header" ]
+                [ select
+                    [ class "transition-select"
+                    , onInput (SwitchTransitionType hbIdx noteIdx)
+                    ]
+                    [ option [ value "discrete", selected (currentType == "discrete") ] [ text "Discrete" ]
+                    , option [ value "gradient", selected (currentType == "gradient") ] [ text "Gradient" ]
+                    ]
+                ]
+    in
     case trans of
         Discrete states ->
             div [ class "transition-edit" ]
-                [ div [ class "transition-label" ] [ text "Discrete" ]
+                [ typeSwitcher
                 , div []
                     (List.indexedMap
                         (viewNoteDiscreteRow ranges patchNames hbIdx noteIdx)
@@ -1245,32 +1497,23 @@ viewNoteTransitionEdit ranges patchNames hbIdx noteIdx trans =
                 ]
 
         Gradient info ->
+            let
+                segments =
+                    syncSegments info.segments (List.length info.patches)
+
+                interleaved =
+                    interleave patchNames hbIdx noteIdx ranges info.patches segments
+            in
             div [ class "transition-edit" ]
-                [ div [ class "transition-label" ] [ text "Gradient" ]
-                , div []
-                    (List.indexedMap
-                        (viewNoteGradientRow patchNames hbIdx noteIdx)
-                        info.patches
-                    )
-                , button
-                    [ class "btn btn-sm"
-                    , onClick (AddNoteGradientPatch hbIdx noteIdx)
-                    ]
-                    [ text "+" ]
-                , label [ class "transition-row" ]
-                    [ text "curve "
-                    , input
-                        [ type_ "number"
-                        , class "transition-input"
-                        , Html.Attributes.min (String.fromFloat ranges.gradientCurve.min)
-                        , Html.Attributes.max (String.fromFloat ranges.gradientCurve.max)
-                        , step (String.fromFloat ranges.gradientCurve.step)
-                        , value (String.fromFloat info.curve)
-                        , onInput (SetNoteTransitionCurve hbIdx noteIdx)
-                        ]
-                        []
-                    ]
-                ]
+                (typeSwitcher
+                    :: interleaved
+                    ++ [ button
+                            [ class "btn btn-sm"
+                            , onClick (AddNoteGradientPatch hbIdx noteIdx)
+                            ]
+                            [ text "+" ]
+                       ]
+                )
 
 
 viewNoteDiscreteRow : SliderRanges -> List String -> Int -> Int -> Int -> { threshold : Float, patch : String } -> Html Msg
@@ -1331,6 +1574,172 @@ viewNoteGradientRow patchNames hbIdx noteIdx patchIdx patchName =
             , onClick (RemoveNoteGradientPatch hbIdx noteIdx patchIdx)
             ]
             [ text "×" ]
+        ]
+
+
+interleave : List String -> Int -> Int -> SliderRanges -> List String -> List LerpStrategy -> List (Html Msg)
+interleave patchNames hbIdx noteIdx ranges patches segments =
+    let
+        patchRows =
+            List.indexedMap (viewNoteGradientRow patchNames hbIdx noteIdx) patches
+
+        segRows =
+            List.indexedMap (viewSegmentEditor ranges hbIdx noteIdx) segments
+    in
+    List.concatMap identity
+        (List.indexedMap
+            (\i pRow ->
+                if i < List.length segRows then
+                    case getAt i segRows of
+                        Just sRow ->
+                            [ pRow, sRow ]
+
+                        Nothing ->
+                            [ pRow ]
+
+                else
+                    [ pRow ]
+            )
+            patchRows
+        )
+
+
+viewSegmentEditor : SliderRanges -> Int -> Int -> Int -> LerpStrategy -> Html Msg
+viewSegmentEditor ranges hbIdx noteIdx segIdx strat =
+    let
+        currentName =
+            strategyName strat
+
+        currentIntensity =
+            strategyIntensity strat
+
+        isStep =
+            case strat of
+                Step _ ->
+                    True
+
+                _ ->
+                    False
+
+        intensityRange =
+            if isStep then
+                ranges.stepPosition
+
+            else
+                ranges.segmentIntensity
+    in
+    div [ class "segment-editor" ]
+        [ div [ class "segment-controls" ]
+            [ select
+                [ class "transition-select"
+                , onInput (SetSegmentStrategy hbIdx noteIdx segIdx)
+                ]
+                [ option [ value "linear", selected (currentName == "linear") ] [ text "Linear" ]
+                , option [ value "ease-in", selected (currentName == "ease-in") ] [ text "Ease In" ]
+                , option [ value "ease-out", selected (currentName == "ease-out") ] [ text "Ease Out" ]
+                , option [ value "ease-in-out", selected (currentName == "ease-in-out") ] [ text "Ease In/Out" ]
+                , option [ value "step", selected (currentName == "step") ] [ text "Step" ]
+                ]
+            , input
+                [ type_ "range"
+                , class "segment-intensity-slider"
+                , Html.Attributes.min (String.fromFloat intensityRange.min)
+                , Html.Attributes.max (String.fromFloat intensityRange.max)
+                , step (String.fromFloat intensityRange.step)
+                , value (String.fromFloat currentIntensity)
+                , onInput (SetSegmentIntensity hbIdx noteIdx segIdx)
+                ]
+                []
+            , input
+                [ type_ "number"
+                , class "transition-input"
+                , Html.Attributes.min (String.fromFloat intensityRange.min)
+                , Html.Attributes.max (String.fromFloat intensityRange.max)
+                , step (String.fromFloat intensityRange.step)
+                , value (String.fromFloat currentIntensity)
+                , onInput (SetSegmentIntensity hbIdx noteIdx segIdx)
+                ]
+                []
+            ]
+        , viewStrategySvg strat
+        ]
+
+
+viewStrategySvg : LerpStrategy -> Html msg
+viewStrategySvg strat =
+    let
+        padding =
+            2.0
+
+        w =
+            60.0
+
+        h =
+            40.0
+
+        innerW =
+            w - 2 * padding
+
+        innerH =
+            h - 2 * padding
+
+        samples =
+            20
+
+        points =
+            List.map
+                (\i ->
+                    let
+                        t =
+                            toFloat i / toFloat samples
+
+                        y =
+                            applyStrategy strat t
+
+                        px =
+                            padding + t * innerW
+
+                        py =
+                            padding + (1 - y) * innerH
+                    in
+                    String.fromFloat px ++ "," ++ String.fromFloat py
+                )
+                (List.range 0 samples)
+
+        polylinePoints =
+            String.join " " points
+    in
+    Svg.svg
+        [ SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
+        , SA.width "60"
+        , SA.height "40"
+        , SA.class "segment-svg"
+        ]
+        [ Svg.line
+            [ SA.x1 (String.fromFloat padding)
+            , SA.y1 (String.fromFloat padding)
+            , SA.x2 (String.fromFloat padding)
+            , SA.y2 (String.fromFloat (h - padding))
+            , SA.stroke "var(--color-border)"
+            , SA.strokeWidth "1"
+            ]
+            []
+        , Svg.line
+            [ SA.x1 (String.fromFloat padding)
+            , SA.y1 (String.fromFloat (h - padding))
+            , SA.x2 (String.fromFloat (w - padding))
+            , SA.y2 (String.fromFloat (h - padding))
+            , SA.stroke "var(--color-border)"
+            , SA.strokeWidth "1"
+            ]
+            []
+        , Svg.polyline
+            [ SA.points polylinePoints
+            , SA.fill "none"
+            , SA.stroke "var(--color-accent)"
+            , SA.strokeWidth "1.5"
+            ]
+            []
         ]
 
 

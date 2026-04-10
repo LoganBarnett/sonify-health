@@ -116,7 +116,14 @@
           Transition mapping from probe metric to patches.  Either:
             { type = "discrete"; states = [{ threshold = 0.5; patch = "sine"; } ...]; }
           or:
-            { type = "gradient"; patches = ["warm" "sharp" "alarm"]; curve = 2.0; }
+            { type = "gradient"; patches = ["warm" "sharp" "alarm"];
+              segments = [
+                { strategy = "ease-in"; intensity = 2.0; }
+                { strategy = "linear"; intensity = 2.0; }
+              ];
+            }
+          Each segment controls the interpolation curve between a pair of
+          adjacent patches.  Omit segments for all-linear interpolation.
         '';
       };
 
@@ -320,7 +327,8 @@ in {
       description = ''
         Override slider ranges for the web UI.  Each key is a slider
         name (master_volume, cycle_offset, override_metric,
-        note_volume, note_offset, gradient_curve, discrete_threshold)
+        note_volume, note_offset, segment_intensity, discrete_threshold,
+        step_position)
         and must provide min, max, and step.  Omitted sliders keep
         their built-in defaults.
       '';
@@ -358,7 +366,10 @@ in {
                 transition = {
                   type = "gradient";
                   patches = ["warm" "sharp" "alarm"];
-                  curve = 2.0;
+                  segments = [
+                    { strategy = "ease-in"; intensity = 2.0; }
+                    { strategy = "linear"; intensity = 2.0; }
+                  ];
                 };
               }
             ];

@@ -128,4 +128,7 @@ volume = 0.2
 [heartbeats.notes.transition]
 type = "gradient"
 patches = ["reactor-cpu", "alarm"]
-curve = 2.0
+
+[[heartbeats.notes.transition.segments]]
+strategy = "ease-in"
+intensity = 2.0

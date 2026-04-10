@@ -1,5 +1,6 @@
 module Protocol exposing
     ( HeartbeatInfo
+    , LerpStrategy(..)
     , NoteInfo
     , PatchParamMeta
     , ProbeLogEntry
@@ -13,6 +14,7 @@ module Protocol exposing
     , encodeExportConfig
     , encodeGetState
     , encodeImportConfig
+    , encodeLerpStrategy
     , encodeOverrideHeartbeat
     , encodeRemoveNote
     , encodeRevertAll
@@ -58,9 +60,17 @@ type alias HeartbeatInfo =
     }
 
 
+type LerpStrategy
+    = Linear Float
+    | EaseIn Float
+    | EaseOut Float
+    | EaseInOut Float
+    | Step Float
+
+
 type TransitionInfo
     = Discrete (List { threshold : Float, patch : String })
-    | Gradient { patches : List String, curve : Float }
+    | Gradient { patches : List String, segments : List LerpStrategy }
 
 
 type alias ProbeLogEntry =
@@ -81,8 +91,9 @@ type alias SliderRanges =
     , overrideMetric : SliderRange
     , noteVolume : SliderRange
     , noteOffset : SliderRange
-    , gradientCurve : SliderRange
+    , segmentIntensity : SliderRange
     , discreteThreshold : SliderRange
+    , stepPosition : SliderRange
     }
 
 
@@ -275,20 +286,72 @@ sliderRangeDecoder =
 sliderRangesDecoder : D.Decoder SliderRanges
 sliderRangesDecoder =
     D.map6
-        (\mv co om nv no gc ->
-            \dt ->
-                SliderRanges mv co om nv no gc dt
+        (\mv co om nv no si ->
+            \dt sp ->
+                SliderRanges mv co om nv no si dt sp
         )
         (D.field "master_volume" sliderRangeDecoder)
         (D.field "cycle_offset" sliderRangeDecoder)
         (D.field "override_metric" sliderRangeDecoder)
         (D.field "note_volume" sliderRangeDecoder)
         (D.field "note_offset" sliderRangeDecoder)
-        (D.field "gradient_curve" sliderRangeDecoder)
+        (D.field "segment_intensity" sliderRangeDecoder)
         |> D.andThen
-            (\buildRanges ->
-                D.map buildRanges
+            (\build ->
+                D.map2 build
                     (D.field "discrete_threshold" sliderRangeDecoder)
+                    (D.field "step_position" sliderRangeDecoder)
+            )
+
+
+lerpStrategyDecoder : D.Decoder LerpStrategy
+lerpStrategyDecoder =
+    D.field "strategy" D.string
+        |> D.andThen
+            (\s ->
+                case s of
+                    "linear" ->
+                        D.map Linear
+                            (D.oneOf
+                                [ D.field "intensity" D.float
+                                , D.succeed 2.0
+                                ]
+                            )
+
+                    "ease-in" ->
+                        D.map EaseIn
+                            (D.oneOf
+                                [ D.field "intensity" D.float
+                                , D.succeed 2.0
+                                ]
+                            )
+
+                    "ease-out" ->
+                        D.map EaseOut
+                            (D.oneOf
+                                [ D.field "intensity" D.float
+                                , D.succeed 2.0
+                                ]
+                            )
+
+                    "ease-in-out" ->
+                        D.map EaseInOut
+                            (D.oneOf
+                                [ D.field "intensity" D.float
+                                , D.succeed 2.0
+                                ]
+                            )
+
+                    "step" ->
+                        D.map Step
+                            (D.oneOf
+                                [ D.field "intensity" D.float
+                                , D.succeed 0.5
+                                ]
+                            )
+
+                    _ ->
+                        D.fail ("Unknown lerp strategy: " ++ s)
             )
 
 
@@ -310,9 +373,13 @@ transitionDecoder =
                             )
 
                     "gradient" ->
-                        D.map2 (\ps c -> Gradient { patches = ps, curve = c })
+                        D.map2 (\ps segs -> Gradient { patches = ps, segments = segs })
                             (D.field "patches" (D.list D.string))
-                            (D.field "curve" D.float)
+                            (D.oneOf
+                                [ D.field "segments" (D.list lerpStrategyDecoder)
+                                , D.succeed []
+                                ]
+                            )
 
                     _ ->
                         D.fail ("Unknown transition type: " ++ t)
@@ -586,6 +653,40 @@ encodeSetCycleOffset index value =
         |> E.encode 0
 
 
+encodeLerpStrategy : LerpStrategy -> E.Value
+encodeLerpStrategy strat =
+    case strat of
+        Linear intensity ->
+            E.object
+                [ ( "strategy", E.string "linear" )
+                , ( "intensity", E.float intensity )
+                ]
+
+        EaseIn intensity ->
+            E.object
+                [ ( "strategy", E.string "ease-in" )
+                , ( "intensity", E.float intensity )
+                ]
+
+        EaseOut intensity ->
+            E.object
+                [ ( "strategy", E.string "ease-out" )
+                , ( "intensity", E.float intensity )
+                ]
+
+        EaseInOut intensity ->
+            E.object
+                [ ( "strategy", E.string "ease-in-out" )
+                , ( "intensity", E.float intensity )
+                ]
+
+        Step intensity ->
+            E.object
+                [ ( "strategy", E.string "step" )
+                , ( "intensity", E.float intensity )
+                ]
+
+
 encodeTransition : TransitionInfo -> E.Value
 encodeTransition trans =
     case trans of
@@ -608,5 +709,5 @@ encodeTransition trans =
             E.object
                 [ ( "type", E.string "gradient" )
                 , ( "patches", E.list E.string info.patches )
-                , ( "curve", E.float info.curve )
+                , ( "segments", E.list encodeLerpStrategy info.segments )
                 ]

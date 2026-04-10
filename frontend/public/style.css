@@ -351,6 +351,10 @@ a:hover {
 
 /* Transition editing */
 
+.transition-header {
+  margin-bottom: var(--space-sm);
+}
+
 .transition-edit {
   padding-top: var(--space-sm);
 }
@@ -397,6 +401,38 @@ a:hover {
   padding: 0 var(--space-sm);
   line-height: 1.2;
   font-size: var(--font-md);
+}
+
+.segment-editor {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: var(--space-xs) 0;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--color-border);
+}
+
+.segment-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+}
+
+.segment-intensity-slider {
+  width: 80px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--color-accent);
+}
+
+.segment-svg {
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
 }
 
 /* Patch list */

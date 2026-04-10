@@ -84,8 +84,9 @@ pub struct SliderRanges {
   pub override_metric: SliderRange,
   pub note_volume: SliderRange,
   pub note_offset: SliderRange,
-  pub gradient_curve: SliderRange,
+  pub segment_intensity: SliderRange,
   pub discrete_threshold: SliderRange,
+  pub step_position: SliderRange,
 }
 
 impl Default for SliderRanges {
@@ -116,12 +117,17 @@ impl Default for SliderRanges {
         max: 60.0,
         step: 0.1,
       },
-      gradient_curve: SliderRange {
+      segment_intensity: SliderRange {
         min: 0.1,
         max: 10.0,
         step: 0.1,
       },
       discrete_threshold: SliderRange {
+        min: 0.0,
+        max: 1.0,
+        step: 0.01,
+      },
+      step_position: SliderRange {
         min: 0.0,
         max: 1.0,
         step: 0.01,
