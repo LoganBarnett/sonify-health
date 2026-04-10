@@ -1,3 +1,4 @@
+use crate::config::SliderRanges;
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use serde_json::json;
@@ -29,6 +30,7 @@ pub struct PreviewState {
   pub master_volume: Shared,
   pub heartbeat_loop: AtomicBool,
   pub heartbeat_trigger: AtomicBool,
+  pub slider_ranges: SliderRanges,
   pub broadcast_tx: broadcast::Sender<String>,
   pub probe_log_tx: broadcast::Sender<String>,
 }
@@ -38,6 +40,7 @@ impl PreviewState {
     library: PatchLibrary,
     heartbeat_configs: Vec<HeartbeatConfig>,
     muted: Arc<AtomicBool>,
+    slider_ranges: SliderRanges,
   ) -> Self {
     let (broadcast_tx, _) = broadcast::channel(256);
     let (probe_log_tx, _) = broadcast::channel(256);
@@ -58,6 +61,7 @@ impl PreviewState {
       heartbeat_configs: RwLock::new(heartbeat_configs),
       heartbeats,
       muted,
+      slider_ranges,
       master_volume: shared(1.0),
       heartbeat_loop: AtomicBool::new(false),
       heartbeat_trigger: AtomicBool::new(false),
@@ -161,6 +165,7 @@ impl PreviewState {
       "master_volume": self.master_volume.value(),
       "heartbeat_loop": self.heartbeat_loop.load(Ordering::Relaxed),
       "heartbeats": heartbeats_json,
+      "slider_ranges": serde_json::to_value(&self.slider_ranges).unwrap_or_default(),
     })
     .to_string()
   }

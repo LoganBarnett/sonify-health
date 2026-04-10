@@ -275,6 +275,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     config.library.clone(),
     config.heartbeats.clone(),
     Arc::clone(&muted),
+    config.slider_ranges.clone(),
   ));
 
   // Perform OIDC provider discovery when configured.

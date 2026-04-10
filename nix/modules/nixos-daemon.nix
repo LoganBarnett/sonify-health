@@ -69,6 +69,9 @@
     // lib.optionalAttrs (cfg.patches != {}) {
       patches = cfg.patches;
     }
+    // lib.optionalAttrs (cfg.sliderRanges != {}) {
+      slider_ranges = cfg.sliderRanges;
+    }
     // lib.optionalAttrs (cfg.heartbeats != []) {
       heartbeats = map (hb:
         {
@@ -286,6 +289,40 @@ in {
         overrides; unspecified fields use Patch::default().  Built-in
         patches (sine, bell, warm, sharp, etc.) are always available
         and can be overridden here.
+      '';
+    };
+
+    sliderRanges = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          min = lib.mkOption {
+            type = lib.types.number;
+            description = "Minimum slider value.";
+          };
+          max = lib.mkOption {
+            type = lib.types.number;
+            description = "Maximum slider value.";
+          };
+          step = lib.mkOption {
+            type = lib.types.number;
+            description = "Slider step increment.";
+          };
+        };
+      });
+      default = {};
+      example = {
+        cycle_offset = {
+          min = 0.0;
+          max = 120.0;
+          step = 0.1;
+        };
+      };
+      description = ''
+        Override slider ranges for the web UI.  Each key is a slider
+        name (master_volume, cycle_offset, override_metric,
+        note_volume, note_offset, gradient_curve, discrete_threshold)
+        and must provide min, max, and step.  Omitted sliders keep
+        their built-in defaults.
       '';
     };
 

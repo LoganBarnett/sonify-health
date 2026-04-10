@@ -4,6 +4,8 @@ module Protocol exposing
     , PatchParamMeta
     , ProbeLogEntry
     , ServerMsg(..)
+    , SliderRange
+    , SliderRanges
     , TransitionInfo(..)
     , decodeServerMsg
     , encodeAddNote
@@ -69,6 +71,21 @@ type alias ProbeLogEntry =
     }
 
 
+type alias SliderRange =
+    { min : Float, max : Float, step : Float }
+
+
+type alias SliderRanges =
+    { masterVolume : SliderRange
+    , cycleOffset : SliderRange
+    , overrideMetric : SliderRange
+    , noteVolume : SliderRange
+    , noteOffset : SliderRange
+    , gradientCurve : SliderRange
+    , discreteThreshold : SliderRange
+    }
+
+
 
 -- Server messages (incoming)
 
@@ -81,6 +98,7 @@ type ServerMsg
         , masterVolume : Float
         , heartbeatLoop : Bool
         , heartbeats : List HeartbeatInfo
+        , sliderRanges : SliderRanges
         }
     | PatchParamChanged String String Float
     | MuteChanged Bool
@@ -180,14 +198,16 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map6
         (\pp lib muted mv hbLoop hbs ->
-            StateMsg
-                { patchParams = pp
-                , library = lib
-                , muted = muted
-                , masterVolume = mv
-                , heartbeatLoop = hbLoop
-                , heartbeats = hbs
-                }
+            \sr ->
+                StateMsg
+                    { patchParams = pp
+                    , library = lib
+                    , muted = muted
+                    , masterVolume = mv
+                    , heartbeatLoop = hbLoop
+                    , heartbeats = hbs
+                    , sliderRanges = sr
+                    }
         )
         (D.field "patch_params" (D.list patchParamMetaDecoder))
         (D.field "library" libraryDecoder)
@@ -195,6 +215,11 @@ stateDecoder =
         (D.field "master_volume" D.float)
         (D.field "heartbeat_loop" D.bool)
         (D.field "heartbeats" (D.list heartbeatInfoDecoder))
+        |> D.andThen
+            (\buildState ->
+                D.map buildState
+                    (D.field "slider_ranges" sliderRangesDecoder)
+            )
 
 
 patchParamMetaDecoder : D.Decoder PatchParamMeta
@@ -237,6 +262,34 @@ heartbeatInfoDecoder =
         (D.field "overridden" D.bool)
         (D.field "cycle_offset_secs" D.float)
         (D.field "notes" (D.list noteInfoDecoder))
+
+
+sliderRangeDecoder : D.Decoder SliderRange
+sliderRangeDecoder =
+    D.map3 SliderRange
+        (D.field "min" D.float)
+        (D.field "max" D.float)
+        (D.field "step" D.float)
+
+
+sliderRangesDecoder : D.Decoder SliderRanges
+sliderRangesDecoder =
+    D.map6
+        (\mv co om nv no gc ->
+            \dt ->
+                SliderRanges mv co om nv no gc dt
+        )
+        (D.field "master_volume" sliderRangeDecoder)
+        (D.field "cycle_offset" sliderRangeDecoder)
+        (D.field "override_metric" sliderRangeDecoder)
+        (D.field "note_volume" sliderRangeDecoder)
+        (D.field "note_offset" sliderRangeDecoder)
+        (D.field "gradient_curve" sliderRangeDecoder)
+        |> D.andThen
+            (\buildRanges ->
+                D.map buildRanges
+                    (D.field "discrete_threshold" sliderRangeDecoder)
+            )
 
 
 transitionDecoder : D.Decoder TransitionInfo

@@ -68,6 +68,7 @@ type alias Model =
     , importText : String
     , importError : Maybe String
     , protocolError : Maybe String
+    , sliderRanges : SliderRanges
     }
 
 
@@ -147,9 +148,22 @@ init _ url key =
       , importText = ""
       , importError = Nothing
       , protocolError = Nothing
+      , sliderRanges = defaultSliderRanges
       }
     , cmdForRoute route
     )
+
+
+defaultSliderRanges : SliderRanges
+defaultSliderRanges =
+    { masterVolume = { min = 0, max = 1, step = 0.01 }
+    , cycleOffset = { min = 0, max = 60, step = 0.1 }
+    , overrideMetric = { min = 0, max = 1, step = 0.01 }
+    , noteVolume = { min = 0, max = 1, step = 0.01 }
+    , noteOffset = { min = 0, max = 60, step = 0.1 }
+    , gradientCurve = { min = 0.1, max = 10, step = 0.1 }
+    , discreteThreshold = { min = 0, max = 1, step = 0.01 }
+    }
 
 
 cmdForRoute : Route -> Cmd Msg
@@ -622,6 +636,7 @@ handleServerMsg msg model =
                 , masterVolume = state.masterVolume
                 , heartbeatLoop = state.heartbeatLoop
                 , heartbeats = state.heartbeats
+                , sliderRanges = state.sliderRanges
                 , selectedPatch =
                     case model.selectedPatch of
                         Nothing ->
@@ -1073,7 +1088,7 @@ viewToolbar model =
                     "Mute"
                 )
             ]
-        , viewSlider "Master" 0 1 0.01 model.masterVolume SetMasterVolume
+        , viewSlider "Master" model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
         , button [ class "btn", onClick TriggerHeartbeat ]
             [ text "Trigger" ]
         , button
@@ -1162,8 +1177,8 @@ viewHeartbeatCard model index hb =
                 text ""
             ]
         , div [ class "card-body" ]
-            [ viewSlider "Offset" 0 60 0.1 hb.cycleOffsetSecs (SetCycleOffset index)
-            , viewSlider "Override" 0 1 0.01 hb.metric (OverrideHeartbeat index)
+            [ viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetCycleOffset index)
+            , viewSlider "Override" model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
             , if hb.overridden then
                 button
                     [ class "btn btn-sm"
@@ -1205,21 +1220,21 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
               else
                 text ""
             ]
-        , viewSlider "Volume" 0 1 0.01 note.volume (SetNoteVolume hbIdx noteIdx)
-        , viewSlider "Offset" 0 60 0.1 note.offset (SetNoteOffset hbIdx noteIdx)
-        , viewNoteTransitionEdit patchNames hbIdx noteIdx note.transition
+        , viewSlider "Volume" model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteVolume hbIdx noteIdx)
+        , viewSlider "Offset" model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteOffset hbIdx noteIdx)
+        , viewNoteTransitionEdit model.sliderRanges patchNames hbIdx noteIdx note.transition
         ]
 
 
-viewNoteTransitionEdit : List String -> Int -> Int -> TransitionInfo -> Html Msg
-viewNoteTransitionEdit patchNames hbIdx noteIdx trans =
+viewNoteTransitionEdit : SliderRanges -> List String -> Int -> Int -> TransitionInfo -> Html Msg
+viewNoteTransitionEdit ranges patchNames hbIdx noteIdx trans =
     case trans of
         Discrete states ->
             div [ class "transition-edit" ]
                 [ div [ class "transition-label" ] [ text "Discrete" ]
                 , div []
                     (List.indexedMap
-                        (viewNoteDiscreteRow patchNames hbIdx noteIdx)
+                        (viewNoteDiscreteRow ranges patchNames hbIdx noteIdx)
                         states
                     )
                 , button
@@ -1247,9 +1262,9 @@ viewNoteTransitionEdit patchNames hbIdx noteIdx trans =
                     , input
                         [ type_ "number"
                         , class "transition-input"
-                        , Html.Attributes.min "0.1"
-                        , Html.Attributes.max "10"
-                        , step "0.1"
+                        , Html.Attributes.min (String.fromFloat ranges.gradientCurve.min)
+                        , Html.Attributes.max (String.fromFloat ranges.gradientCurve.max)
+                        , step (String.fromFloat ranges.gradientCurve.step)
                         , value (String.fromFloat info.curve)
                         , onInput (SetNoteTransitionCurve hbIdx noteIdx)
                         ]
@@ -1258,8 +1273,8 @@ viewNoteTransitionEdit patchNames hbIdx noteIdx trans =
                 ]
 
 
-viewNoteDiscreteRow : List String -> Int -> Int -> Int -> { threshold : Float, patch : String } -> Html Msg
-viewNoteDiscreteRow patchNames hbIdx noteIdx stateIdx state =
+viewNoteDiscreteRow : SliderRanges -> List String -> Int -> Int -> Int -> { threshold : Float, patch : String } -> Html Msg
+viewNoteDiscreteRow ranges patchNames hbIdx noteIdx stateIdx state =
     div [ class "transition-row" ]
         [ select
             [ class "transition-select"
@@ -1279,9 +1294,9 @@ viewNoteDiscreteRow patchNames hbIdx noteIdx stateIdx state =
         , input
             [ type_ "number"
             , class "transition-input"
-            , Html.Attributes.min "0"
-            , Html.Attributes.max "1"
-            , step "0.01"
+            , Html.Attributes.min (String.fromFloat ranges.discreteThreshold.min)
+            , Html.Attributes.max (String.fromFloat ranges.discreteThreshold.max)
+            , step (String.fromFloat ranges.discreteThreshold.step)
             , value (String.fromFloat state.threshold)
             , onInput (SetNoteTransitionThreshold hbIdx noteIdx stateIdx)
             ]

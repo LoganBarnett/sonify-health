@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sonify_health_lib::{
   builtin_library, HeartbeatConfig, LogFormat, LogLevel, Patch, PatchLibrary,
 };
@@ -69,6 +69,67 @@ pub struct OidcConfig {
   pub client_secret: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SliderRange {
+  pub min: f64,
+  pub max: f64,
+  pub step: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SliderRanges {
+  pub master_volume: SliderRange,
+  pub cycle_offset: SliderRange,
+  pub override_metric: SliderRange,
+  pub note_volume: SliderRange,
+  pub note_offset: SliderRange,
+  pub gradient_curve: SliderRange,
+  pub discrete_threshold: SliderRange,
+}
+
+impl Default for SliderRanges {
+  fn default() -> Self {
+    Self {
+      master_volume: SliderRange {
+        min: 0.0,
+        max: 1.0,
+        step: 0.01,
+      },
+      cycle_offset: SliderRange {
+        min: 0.0,
+        max: 60.0,
+        step: 0.1,
+      },
+      override_metric: SliderRange {
+        min: 0.0,
+        max: 1.0,
+        step: 0.01,
+      },
+      note_volume: SliderRange {
+        min: 0.0,
+        max: 1.0,
+        step: 0.01,
+      },
+      note_offset: SliderRange {
+        min: 0.0,
+        max: 60.0,
+        step: 0.1,
+      },
+      gradient_curve: SliderRange {
+        min: 0.1,
+        max: 10.0,
+        step: 0.1,
+      },
+      discrete_threshold: SliderRange {
+        min: 0.0,
+        max: 1.0,
+        step: 0.01,
+      },
+    }
+  }
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConfigFileRaw {
@@ -82,6 +143,8 @@ pub(crate) struct ConfigFileRaw {
   patches: HashMap<String, Patch>,
   #[serde(default)]
   heartbeats: Vec<HeartbeatConfig>,
+  #[serde(default)]
+  slider_ranges: SliderRanges,
   oidc: Option<OidcSectionRaw>,
 }
 
@@ -119,6 +182,7 @@ pub struct Config {
   pub frontend_path: PathBuf,
   pub library: PatchLibrary,
   pub heartbeats: Vec<HeartbeatConfig>,
+  pub slider_ranges: SliderRanges,
   pub oidc: Option<OidcConfig>,
 }
 
@@ -273,6 +337,7 @@ impl Config {
       frontend_path,
       library,
       heartbeats: file.heartbeats,
+      slider_ranges: file.slider_ranges,
       oidc,
     })
   }
