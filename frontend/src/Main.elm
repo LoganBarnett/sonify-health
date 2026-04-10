@@ -254,8 +254,16 @@ update msg model =
                     let
                         key =
                             "pp:" ++ patchName ++ ":" ++ param
+
+                        updated =
+                            { model
+                                | library =
+                                    Dict.update patchName
+                                        (Maybe.map (Dict.insert param val))
+                                        model.library
+                            }
                     in
-                    debounce key val model (PatchParamDebounce patchName param)
+                    debounce key val updated (PatchParamDebounce patchName param)
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -282,7 +290,7 @@ update msg model =
         SetMasterVolume rawVal ->
             case String.toFloat rawVal of
                 Just val ->
-                    debounce "master_vol" val model MasterVolDebounce
+                    debounce "master_vol" val { model | masterVolume = val } MasterVolDebounce
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -302,8 +310,23 @@ update msg model =
                     let
                         key =
                             "nv:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx
+
+                        updated =
+                            { model
+                                | heartbeats =
+                                    updateAt hbIdx
+                                        (\hb ->
+                                            { hb
+                                                | notes =
+                                                    updateAt noteIdx
+                                                        (\n -> { n | volume = val })
+                                                        hb.notes
+                                            }
+                                        )
+                                        model.heartbeats
+                            }
                     in
-                    debounce key val model (NoteVolDebounce hbIdx noteIdx)
+                    debounce key val updated (NoteVolDebounce hbIdx noteIdx)
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -327,8 +350,23 @@ update msg model =
                     let
                         key =
                             "no:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx
+
+                        updated =
+                            { model
+                                | heartbeats =
+                                    updateAt hbIdx
+                                        (\hb ->
+                                            { hb
+                                                | notes =
+                                                    updateAt noteIdx
+                                                        (\n -> { n | offset = val })
+                                                        hb.notes
+                                            }
+                                        )
+                                        model.heartbeats
+                            }
                     in
-                    debounce key val model (NoteOffsetDebounce hbIdx noteIdx)
+                    debounce key val updated (NoteOffsetDebounce hbIdx noteIdx)
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -539,8 +577,16 @@ update msg model =
                     let
                         key =
                             "hb_offset:" ++ String.fromInt index
+
+                        updated =
+                            { model
+                                | heartbeats =
+                                    updateAt index
+                                        (\hb -> { hb | cycleOffsetSecs = val })
+                                        model.heartbeats
+                            }
                     in
-                    debounce key val model (CycleOffsetDebounce index)
+                    debounce key val updated (CycleOffsetDebounce index)
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1027,19 +1073,7 @@ viewToolbar model =
                     "Mute"
                 )
             ]
-        , label [ class "toolbar-slider" ]
-            [ text "Master "
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "1"
-                , step "0.01"
-                , value (String.fromFloat model.masterVolume)
-                , onInput SetMasterVolume
-                ]
-                []
-            , text (String.left 4 (String.fromFloat model.masterVolume))
-            ]
+        , viewSlider "Master" 0 1 0.01 model.masterVolume SetMasterVolume
         , button [ class "btn", onClick TriggerHeartbeat ]
             [ text "Trigger" ]
         , button
@@ -1064,6 +1098,36 @@ viewToolbar model =
             [ text "Revert" ]
         , button [ class "btn", onClick Export ]
             [ text "Export" ]
+        ]
+
+
+
+-- Shared slider + number input component.
+
+
+viewSlider : String -> Float -> Float -> Float -> Float -> (String -> Msg) -> Html Msg
+viewSlider name min_ max_ step_ val toMsg =
+    label [ class "slider-row" ]
+        [ text (name ++ " ")
+        , input
+            [ type_ "range"
+            , Html.Attributes.min (String.fromFloat min_)
+            , Html.Attributes.max (String.fromFloat max_)
+            , step (String.fromFloat step_)
+            , value (String.fromFloat val)
+            , onInput toMsg
+            ]
+            []
+        , input
+            [ type_ "number"
+            , class "num-input"
+            , Html.Attributes.min (String.fromFloat min_)
+            , Html.Attributes.max (String.fromFloat max_)
+            , step (String.fromFloat step_)
+            , value (String.fromFloat val)
+            , onInput toMsg
+            ]
+            []
         ]
 
 
@@ -1098,41 +1162,17 @@ viewHeartbeatCard model index hb =
                 text ""
             ]
         , div [ class "card-body" ]
-            [ label [ class "slider-row" ]
-                [ text "Offset "
-                , input
-                    [ type_ "range"
-                    , Html.Attributes.min "0"
-                    , Html.Attributes.max "60"
-                    , step "0.1"
-                    , value (String.fromFloat hb.cycleOffsetSecs)
-                    , onInput (SetCycleOffset index)
+            [ viewSlider "Offset" 0 60 0.1 hb.cycleOffsetSecs (SetCycleOffset index)
+            , viewSlider "Override" 0 1 0.01 hb.metric (OverrideHeartbeat index)
+            , if hb.overridden then
+                button
+                    [ class "btn btn-sm"
+                    , onClick (ClearOverride index)
                     ]
-                    []
-                , text (String.left 4 (String.fromFloat hb.cycleOffsetSecs))
-                ]
-            , label [ class "slider-row" ]
-                [ text "Override "
-                , input
-                    [ type_ "range"
-                    , Html.Attributes.min "0"
-                    , Html.Attributes.max "1"
-                    , step "0.01"
-                    , value (String.fromFloat hb.metric)
-                    , onInput (OverrideHeartbeat index)
-                    ]
-                    []
-                , text (String.left 5 (String.fromFloat hb.metric))
-                , if hb.overridden then
-                    button
-                        [ class "btn btn-sm"
-                        , onClick (ClearOverride index)
-                        ]
-                        [ text "Live" ]
+                    [ text "Live" ]
 
-                  else
-                    text ""
-                ]
+              else
+                text ""
             , div [ class "notes-section" ]
                 (List.indexedMap (viewNoteEditor model index (List.length hb.notes)) hb.notes
                     ++ [ button
@@ -1165,32 +1205,8 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
               else
                 text ""
             ]
-        , label [ class "slider-row" ]
-            [ text "Volume "
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "1"
-                , step "0.01"
-                , value (String.fromFloat note.volume)
-                , onInput (SetNoteVolume hbIdx noteIdx)
-                ]
-                []
-            , text (String.left 4 (String.fromFloat note.volume))
-            ]
-        , label [ class "slider-row" ]
-            [ text "Offset "
-            , input
-                [ type_ "range"
-                , Html.Attributes.min "0"
-                , Html.Attributes.max "60"
-                , step "0.1"
-                , value (String.fromFloat note.offset)
-                , onInput (SetNoteOffset hbIdx noteIdx)
-                ]
-                []
-            , text (String.left 4 (String.fromFloat note.offset))
-            ]
+        , viewSlider "Volume" 0 1 0.01 note.volume (SetNoteVolume hbIdx noteIdx)
+        , viewSlider "Offset" 0 60 0.1 note.offset (SetNoteOffset hbIdx noteIdx)
         , viewNoteTransitionEdit patchNames hbIdx noteIdx note.transition
         ]
 
@@ -1473,22 +1489,17 @@ viewParamSlider patchName patchValues meta =
             , onInput (SetPatchParam patchName meta.name)
             ]
             []
-        , span [ class "param-value" ]
-            [ text (formatParamValue val) ]
+        , input
+            [ type_ "number"
+            , class "num-input"
+            , Html.Attributes.min (String.fromFloat meta.min)
+            , Html.Attributes.max (String.fromFloat meta.max)
+            , step (String.fromFloat meta.step)
+            , value (String.fromFloat val)
+            , onInput (SetPatchParam patchName meta.name)
+            ]
+            []
         ]
-
-
-formatParamValue : Float -> String
-formatParamValue v =
-    let
-        s =
-            String.fromFloat v
-    in
-    if String.length s > 6 then
-        String.left 6 s
-
-    else
-        s
 
 
 
