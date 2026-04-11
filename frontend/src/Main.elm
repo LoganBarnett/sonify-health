@@ -1793,7 +1793,7 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
         patchNames =
             Dict.keys model.library |> List.sort
     in
-    div [ class "note-editor" ]
+    div [ class "note-panel" ]
         [ div [ class "note-header" ]
             [ span [] [ text ("Note " ++ String.fromInt (noteIdx + 1)) ]
             , if noteCount > 1 then

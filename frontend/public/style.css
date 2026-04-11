@@ -270,6 +270,25 @@ a:hover {
   gap: var(--space-sm);
 }
 
+/* Note sub-panels */
+
+.note-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  margin-bottom: var(--space-sm);
+  background: var(--color-surface);
+}
+
+.note-panel .note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+  font-weight: 600;
+  font-size: var(--font-md);
+}
+
 /* Metrics */
 
 .metric {

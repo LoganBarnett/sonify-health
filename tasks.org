@@ -97,7 +97,7 @@ interpolated voice's =freq= at play time.  Remove
 =Voice= to something more accurate (=Patch=, =Tone=, =SoundGraph=, =Profile=,
 etc.) since it is really a synthesis recipe, not a vocal identity.
 
-* IN-PROGRESS Full config round-trip export with integration tests
+* DONE Full config round-trip export with integration tests
 Currently =export_config= only exports the =PatchLibrary= (patch
 definitions).  The full config — heartbeats, timing, notes, transitions,
 slider ranges, log level, etc. — is not included in the export.
@@ -122,7 +122,7 @@ invariant.  Feed several materially different configs (discrete
 transitions, gradient transitions, multiple heartbeats, custom patches,
 non-default slider ranges) to cover the space.
 
-* TODO Render each note in its own sub-panel
+* DONE Render each note in its own sub-panel
 Notes inside a heartbeat card are hard to visually distinguish from one
 another.  Wrap each note (=viewNoteEditor=) in its own bordered
 sub-panel within the heartbeat card so the boundary between notes is
