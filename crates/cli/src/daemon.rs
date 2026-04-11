@@ -57,6 +57,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     let poll_interval = Duration::from_secs_f64(cfg.poll_interval_secs);
     let poll_running = Arc::clone(&running);
     let poll_preview = Arc::clone(&preview);
+    let poll_counter = metrics.probes_completed.with_label_values(&[&cfg.name]);
     handles.push(thread::spawn(move || {
       while poll_running.load(Ordering::Relaxed) {
         let overridden = poll_preview.heartbeats[i]
@@ -75,6 +76,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             &format!("{metric:.3}"),
             true,
           );
+          poll_counter.inc();
         } else {
           match probe::run_probe(&poll_cfg_name, &poll_command, &poll_mode) {
             Ok(metric) => {
@@ -86,6 +88,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
               );
               poll_preview.heartbeats[i].metric.set_value(metric);
               send_probe_log(&poll_preview, &poll_cfg_name, label, false);
+              poll_counter.inc();
             }
             Err(e) => {
               warn!(

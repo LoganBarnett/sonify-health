@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct Metrics {
   pub registry: Arc<Registry>,
   pub heartbeats_played: IntCounterVec,
+  pub probes_completed: IntCounterVec,
   pub muted: IntGauge,
 }
 
@@ -31,6 +32,15 @@ impl Metrics {
     )
     .expect("Failed to create heartbeats_played counter");
 
+    let probes_completed = IntCounterVec::new(
+      Opts::new(
+        "sonify_health_probes_completed_total",
+        "Total probe executions completed per heartbeat.",
+      ),
+      &["heartbeat"],
+    )
+    .expect("Failed to create probes_completed counter");
+
     let muted = IntGauge::new(
       "sonify_health_muted",
       "Whether audio output is currently muted (1=muted, 0=unmuted).",
@@ -41,12 +51,16 @@ impl Metrics {
       .register(Box::new(heartbeats_played.clone()))
       .expect("Failed to register heartbeats_played");
     registry
+      .register(Box::new(probes_completed.clone()))
+      .expect("Failed to register probes_completed");
+    registry
       .register(Box::new(muted.clone()))
       .expect("Failed to register muted");
 
     Self {
       registry: Arc::new(registry),
       heartbeats_played,
+      probes_completed,
       muted,
     }
   }
