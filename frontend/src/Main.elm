@@ -79,6 +79,7 @@ type alias Model =
     , saveStatus : Maybe String
     , expandedDescriptions : Set String
     , playOnChange : Set String
+    , metricHistory : Dict Int (List Float)
     }
 
 
@@ -186,6 +187,7 @@ init _ url key =
       , saveStatus = Nothing
       , expandedDescriptions = Set.empty
       , playOnChange = Set.empty
+      , metricHistory = Dict.empty
       }
     , cmdForRoute route
     )
@@ -1012,11 +1014,20 @@ handleServerMsg msg model =
                     ( model, Cmd.none )
 
         MetricChanged index value ->
+            let
+                existing =
+                    Dict.get index model.metricHistory
+                        |> Maybe.withDefault []
+
+                updated =
+                    List.take 99 (existing ++ [ value ])
+            in
             ( { model
                 | heartbeats =
                     updateAt index
                         (\hb -> { hb | metric = value })
                         model.heartbeats
+                , metricHistory = Dict.insert index updated model.metricHistory
               }
             , Cmd.none
             )
@@ -1935,6 +1946,7 @@ viewHeartbeatCard model index hb =
                 ]
                 []
             , metricBadge hb.metric hb.tiers
+            , viewSparkline (Dict.get index model.metricHistory |> Maybe.withDefault [])
             , if hb.playback /= "clock" then
                 span [ class "badge" ] [ text hb.playback ]
 
@@ -2394,6 +2406,46 @@ viewStrategySvg strat =
             ]
             []
         ]
+
+
+viewSparkline : List Float -> Html msg
+viewSparkline values =
+    if List.length values < 2 then
+        text ""
+
+    else
+        let
+            w =
+                toFloat (List.length values) * 3.0
+
+            h =
+                20.0
+
+            points =
+                values
+                    |> List.indexedMap
+                        (\i v ->
+                            String.fromFloat (toFloat i * 3.0)
+                                ++ ","
+                                ++ String.fromFloat (h - v * h)
+                        )
+                    |> String.join " "
+        in
+        Svg.svg
+            [ SA.width (String.fromFloat w)
+            , SA.height (String.fromFloat h)
+            , SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
+            , Html.Attributes.style "vertical-align" "middle"
+            , Html.Attributes.style "margin-left" "var(--space-sm)"
+            ]
+            [ Svg.polyline
+                [ SA.points points
+                , SA.fill "none"
+                , SA.stroke "var(--color-accent)"
+                , SA.strokeWidth "1.5"
+                ]
+                []
+            ]
 
 
 resolveTier : Float -> List TierInfo -> Maybe TierInfo

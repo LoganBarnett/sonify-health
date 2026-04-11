@@ -166,7 +166,7 @@ user rename the heartbeat inline, and the remaining fields should
 appear as appropriate inputs (text, number, select, toggle) within
 the card body.
 
-* TODO Inline sparkline graph in heartbeat card header
+* DONE Inline sparkline graph in heartbeat card header
 Show a small sparkline graph in the heartbeat card header, to the
 right of the label and status badge.  It plots the probe value over
 time using only data the frontend has observed since page load — no
