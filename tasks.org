@@ -101,3 +101,176 @@ interpolated voice's =freq= at play time.  Remove
 =DroneMetricConfig.freq= override (lo/hi profiles replace it).  Rename
 =Voice= to something more accurate (=Patch=, =Tone=, =SoundGraph=, =Profile=,
 etc.) since it is really a synthesis recipe, not a vocal identity.
+
+* TODO Full config round-trip export with integration tests
+Currently =export_config= only exports the =PatchLibrary= (patch
+definitions).  The full config — heartbeats, timing, notes, transitions,
+slider ranges, log level, etc. — is not included in the export.
+
+Change the export so the user can hit export and receive the *entire*
+configuration as valid TOML that can be pasted into a config file and
+loaded verbatim.  Local patch overrides are fine to keep; the exported
+config should include them alongside everything else.
+
+Write property-style integration tests that prove the round-trip:
+1. Load a config file.
+2. Confirm the resulting runtime config looks correct.
+3. Make programmatic tweaks (change values, add/remove notes, etc.).
+4. Export the full config.
+5. Write the export to a file, reload the program from that file.
+6. Assert that *every* value in the reloaded config matches the
+   tweaked config exactly.
+
+The tests should not assert individual fields one by one; treat it as a
+property test where equality of the entire config struct is the
+invariant.  Feed several materially different configs (discrete
+transitions, gradient transitions, multiple heartbeats, custom patches,
+non-default slider ranges) to cover the space.
+
+* TODO Render each note in its own sub-panel
+Notes inside a heartbeat card are hard to visually distinguish from one
+another.  Wrap each note (=viewNoteEditor=) in its own bordered
+sub-panel within the heartbeat card so the boundary between notes is
+immediately obvious.  Maintain the existing styling language (CSS
+variables, spacing, radius conventions already in =style.css=).
+
+* TODO Configurable labels and colors for metric tiers
+The metric status labels (=healthy=, =degraded=, =down=) and their
+thresholds are hardcoded in both the backend (=metric_label= in
+=preview_state.rs=) and the frontend (=metricClass= / =metricLabel= in
+=Main.elm=).  The CSS correctly uses =text-transform: uppercase= for
+a11y, so the display is fine — but the label strings and tier boundaries
+are not user-configurable and the system supports arbitrary severity
+ranges.
+
+Labels are *independent of transitions*.  A heartbeat (or note) can
+define labeled tiers at arbitrary severity thresholds regardless of
+whether the transition is discrete or gradient.  For gradient
+transitions this means labels need not align with the keyframe
+patches — you can label any point along the 0–1 range.
+
+Each tier needs:
+- A label (arbitrary string, displayed via CSS =text-transform:
+  uppercase=).  Default: ={{value}}= — just displays the raw metric
+  value, so users who do not care about labels get a sensible
+  fallback without extra configuration.
+- A color (used for the badge background / accent).
+- A threshold defining the upper bound of the tier's range.
+
+The UI must allow editing labels, picking colors, and setting
+thresholds for each tier.  Labels and colors must round-trip through
+the config file.  If no custom tiers are configured, fall back to
+displaying ={{value}}=.
+
+* TODO Full heartbeat editing in the UI
+Allow editing all heartbeat-level fields directly in the web editor:
+name, command, result mode, continuous flag, poll interval, cycle
+duration, cycle offset, phrase gap, repeat rate — everything that
+=HeartbeatConfig= carries.  The heartbeat card header should let the
+user rename the heartbeat inline, and the remaining fields should
+appear as appropriate inputs (text, number, select, toggle) within
+the card body.
+
+* TODO Inline sparkline graph in heartbeat card header
+Show a small sparkline graph in the heartbeat card header, to the
+right of the label and status badge.  It plots the probe value over
+time using only data the frontend has observed since page load — no
+server-side history needed.  Append each incoming metric value to a
+per-heartbeat list in the Elm model.
+
+The time axis should be roughly 3px per poll interval.  The value
+axis spans 0–1 (the severity range).  Use an inline SVG or canvas
+element that fits naturally in the header row.  The graph should
+remain visible when the heartbeat card is collapsed.
+
+* TODO Timestamps in probe log with browser timezone
+Add a timestamp to each probe log entry, formatted in the browser's
+local timezone.  Display the timezone abbreviation and UTC offset (e.g., =CST
+(UTC−06:00)=) in the probe log header line so the user knows which
+zone the timestamps refer to.
+
+* TODO Collapsible heartbeat cards
+Allow heartbeat cards to be collapsed.  When collapsed, still show
+the heartbeat name and its current metric state (the colored status
+badge).  Heartbeats should be expanded by default.  A simple
+chevron or toggle in the card header is sufficient.
+
+* TODO Eliminate all modals — inline-expand UI pattern
+Do not use modals anywhere in the UI.  Replace every modal with an
+inline expansion that keeps surrounding context visible.
+
+Design principles:
+- The UI never obscures content the user might need while making a
+  decision.
+- No backdrop divs, no tab-index trapping, no z-index layering.
+- Every piece of revealed UI lives in the normal document flow.
+
+Specific patterns to apply:
+- *Export*: clicking the export button slides the action bar down
+  and reveals the export text below it, inline.
+- *Destructive confirmations*: replace the triggering button in-place
+  with a "Confirm delete?  Yes / No" label and two buttons.  When
+  the user decides (or clicks elsewhere), restore the original
+  button.
+- *Any future progressive disclosure*: expand a section in-place
+  rather than overlaying.
+
+Backport the existing export modal to this inline pattern.
+
+Document this philosophy and the concrete examples in the
+contributing guide (=CONTRIBUTING.org= or equivalent).  Also
+backport the guideline to the Rust template repository so all
+future projects inherit it.
+
+The core argument: modals mark the boundary where the UI ran out of
+answers.  As the interface matures, the probability of needing a
+modal inside a modal trends to 1.  They block the UI — which may
+contain information relevant to the decision at hand — and they are
+an accessibility nightmare.  Powerful UIs do not use modals.
+
+* TODO Allow creating new patches from the UI
+Add a control (button or similar) in the patch library section that
+lets the user create a new patch.  The user should be able to name
+it and then edit its parameters with the existing patch editor.
+The new patch must persist in the runtime library and round-trip
+through export/save.
+
+* TODO Allow creating new heartbeats from the UI
+Add a control in the heartbeats section that lets the user create a
+new heartbeat.  It should start probing immediately with a dummy
+command (=echo 0= / =exit 0=) so it always returns a value.  Use a
+neutral beep patch for severity 0 and alarm for severity 1 as
+defaults.  The new heartbeat must be fully editable immediately
+after creation and must round-trip through export/save.
+
+* TODO Save button (write config back to source file)
+Add a save button that writes the current full configuration back
+to the config file the program was launched with.  Only show the
+save button when the config file is writable — check file
+permissions on startup and expose the result to the frontend.  If
+the file is not writable, do not show the button (or show it
+disabled with a tooltip explaining why).
+
+* TODO Replace =extra_patches_file= with repeatable =--patch-library=
+Remove the =extra_patches_file= config key.  Instead, allow
+=--patch-library= to be specified multiple times on the CLI, each
+pointing to a patch file.  Last-in wins for overlapping patch
+names.  The config file itself always wins over CLI-supplied patch
+libraries.  When saving, new patches and patch modifications are
+written into the main config file.
+
+* TODO Export in JSON and Nix formats
+The export currently emits TOML only.  Add JSON and Nix as
+additional export format options.  The Nix output should assume it
+is already inside the =sonify-health= config section (i.e., produce
+the attribute set body, not a top-level module wrapper).  Reuse or
+extend the existing =print= subcommand's format logic (=print.rs=
+already supports TOML, Nix, and CLI flags for the patch library) to
+cover the full config.  Provide a format selector in the export UI
+(inline, not a modal).
+
+* TODO Copy button in the export UI
+Add a clipboard-copy button next to the exported config text.  Use
+the Clipboard API (=navigator.clipboard.writeText=).  Provide
+brief visual feedback on success (e.g., the button text changes to
+"Copied!" for a moment).
