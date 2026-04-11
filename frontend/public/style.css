@@ -289,6 +289,65 @@ a:hover {
   font-size: var(--font-md);
 }
 
+/* Tier editor */
+
+.tier-section {
+  margin-top: var(--space-md);
+}
+
+.tier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-sm);
+}
+
+.tier-title {
+  font-weight: 600;
+  font-size: var(--font-md);
+}
+
+.tier-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.tier-color-input {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tier-label-input {
+  width: 80px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--font-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.tier-threshold-label {
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+}
+
+.tier-threshold-input {
+  width: 60px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--font-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
 /* Metrics */
 
 .metric {

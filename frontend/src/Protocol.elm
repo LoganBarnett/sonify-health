@@ -10,6 +10,7 @@ module Protocol exposing
     , ServerMsg(..)
     , SliderRange
     , SliderRanges
+    , TierInfo
     , TransitionInfo(..)
     , decodeServerMsg
     , encodeAddNote
@@ -34,6 +35,7 @@ module Protocol exposing
     , encodeSetNoteTransition
     , encodeSetPatchParam
     , encodeSetPlayback
+    , encodeSetTiers
     , encodeTriggerHeartbeat
     )
 
@@ -66,6 +68,7 @@ type alias HeartbeatInfo =
     , cycleOffsetSecs : Float
     , crossfadeMs : Float
     , notes : List NoteInfo
+    , tiers : List TierInfo
     }
 
 
@@ -87,6 +90,13 @@ type alias ProbeLogEntry =
     , name : String
     , result : String
     , overridden : Bool
+    }
+
+
+type alias TierInfo =
+    { threshold : Float
+    , label : String
+    , color : String
     }
 
 
@@ -149,6 +159,7 @@ type ServerMsg
     | NoteSliderChanged NoteSlider Int Int Float
     | NoteTransitionChanged Int Int TransitionInfo
     | NotesChanged Int (List NoteInfo)
+    | TiersChanged Int (List TierInfo)
     | ProbeLog ProbeLogEntry
     | ConfigExport String
     | ImportError String
@@ -214,6 +225,9 @@ serverMsgDecoder =
 
                     "notes_changed" ->
                         notesChangedDecoder
+
+                    "tiers_changed" ->
+                        tiersChangedDecoder
 
                     "probe_log" ->
                         probeLogDecoder
@@ -316,8 +330,8 @@ heartbeatInfoDecoder : D.Decoder HeartbeatInfo
 heartbeatInfoDecoder =
     D.map6
         (\name playback metric overridden cycleOffset notes ->
-            \crossfade ->
-                HeartbeatInfo name playback metric overridden cycleOffset crossfade notes
+            \crossfade tiers ->
+                HeartbeatInfo name playback metric overridden cycleOffset crossfade notes tiers
         )
         (D.field "name" D.string)
         (D.oneOf
@@ -331,10 +345,15 @@ heartbeatInfoDecoder =
         (D.field "notes" (D.list noteInfoDecoder))
         |> D.andThen
             (\build ->
-                D.map build
+                D.map2 build
                     (D.oneOf
                         [ D.field "crossfade_ms" D.float
                         , D.succeed 6.0
+                        ]
+                    )
+                    (D.oneOf
+                        [ D.field "tiers" (D.list tierInfoDecoder)
+                        , D.succeed []
                         ]
                     )
             )
@@ -545,6 +564,21 @@ notesChangedDecoder =
     D.map2 NotesChanged
         (D.field "index" D.int)
         (D.field "notes" (D.list noteInfoDecoder))
+
+
+tierInfoDecoder : D.Decoder TierInfo
+tierInfoDecoder =
+    D.map3 TierInfo
+        (D.field "threshold" D.float)
+        (D.field "label" D.string)
+        (D.field "color" D.string)
+
+
+tiersChangedDecoder : D.Decoder ServerMsg
+tiersChangedDecoder =
+    D.map2 TiersChanged
+        (D.field "index" D.int)
+        (D.field "tiers" (D.list tierInfoDecoder))
 
 
 probeLogDecoder : D.Decoder ServerMsg
@@ -847,6 +881,26 @@ encodeResetOverrideParam patchName param =
         [ ( "type", E.string "reset_override_param" )
         , ( "patch_name", E.string patchName )
         , ( "param", E.string param )
+        ]
+        |> E.encode 0
+
+
+encodeSetTiers : Int -> List TierInfo -> String
+encodeSetTiers index tiers =
+    E.object
+        [ ( "type", E.string "set_tiers" )
+        , ( "index", E.int index )
+        , ( "tiers"
+          , E.list
+                (\t ->
+                    E.object
+                        [ ( "threshold", E.float t.threshold )
+                        , ( "label", E.string t.label )
+                        , ( "color", E.string t.color )
+                        ]
+                )
+                tiers
+          )
         ]
         |> E.encode 0
 

@@ -130,6 +130,11 @@ type Msg
     | DismissProtocolError
     | ToggleDescription String
     | TogglePlayOnChange String
+    | AddTier Int
+    | RemoveTier Int Int
+    | SetTierThreshold Int Int String
+    | SetTierLabel Int Int String
+    | SetTierColor Int Int String
     | NoOp
 
 
@@ -816,6 +821,115 @@ update msg model =
             , Cmd.none
             )
 
+        AddTier hbIdx ->
+            let
+                newTier =
+                    { threshold = 1.01, label = "new", color = "#888888" }
+
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb -> { hb | tiers = hb.tiers ++ [ newTier ] })
+                        model.heartbeats
+
+                tiers =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .tiers
+                        |> Maybe.withDefault []
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , Ports.websocketSend (encodeSetTiers hbIdx tiers)
+            )
+
+        RemoveTier hbIdx tierIdx ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb -> { hb | tiers = removeAt tierIdx hb.tiers })
+                        model.heartbeats
+
+                tiers =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .tiers
+                        |> Maybe.withDefault []
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , Ports.websocketSend (encodeSetTiers hbIdx tiers)
+            )
+
+        SetTierThreshold hbIdx tierIdx raw ->
+            case String.toFloat raw of
+                Just val ->
+                    let
+                        newHeartbeats =
+                            updateAt hbIdx
+                                (\hb ->
+                                    { hb
+                                        | tiers =
+                                            updateAt tierIdx
+                                                (\t -> { t | threshold = val })
+                                                hb.tiers
+                                    }
+                                )
+                                model.heartbeats
+
+                        tiers =
+                            getAt hbIdx newHeartbeats
+                                |> Maybe.map .tiers
+                                |> Maybe.withDefault []
+                    in
+                    ( { model | heartbeats = newHeartbeats }
+                    , Ports.websocketSend (encodeSetTiers hbIdx tiers)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        SetTierLabel hbIdx tierIdx val ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb
+                                | tiers =
+                                    updateAt tierIdx
+                                        (\t -> { t | label = val })
+                                        hb.tiers
+                            }
+                        )
+                        model.heartbeats
+
+                tiers =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .tiers
+                        |> Maybe.withDefault []
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , Ports.websocketSend (encodeSetTiers hbIdx tiers)
+            )
+
+        SetTierColor hbIdx tierIdx val ->
+            let
+                newHeartbeats =
+                    updateAt hbIdx
+                        (\hb ->
+                            { hb
+                                | tiers =
+                                    updateAt tierIdx
+                                        (\t -> { t | color = val })
+                                        hb.tiers
+                            }
+                        )
+                        model.heartbeats
+
+                tiers =
+                    getAt hbIdx newHeartbeats
+                        |> Maybe.map .tiers
+                        |> Maybe.withDefault []
+            in
+            ( { model | heartbeats = newHeartbeats }
+            , Ports.websocketSend (encodeSetTiers hbIdx tiers)
+            )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -961,6 +1075,16 @@ handleServerMsg msg model =
                 | heartbeats =
                     updateAt hbIdx
                         (\hb -> { hb | notes = notes })
+                        model.heartbeats
+              }
+            , Cmd.none
+            )
+
+        TiersChanged hbIdx tiers ->
+            ( { model
+                | heartbeats =
+                    updateAt hbIdx
+                        (\hb -> { hb | tiers = tiers })
                         model.heartbeats
               }
             , Cmd.none
@@ -1113,6 +1237,11 @@ unique list =
 getAt : Int -> List a -> Maybe a
 getAt index list =
     List.drop index list |> List.head
+
+
+removeAt : Int -> List a -> List a
+removeAt index list =
+    List.take index list ++ List.drop (index + 1) list
 
 
 updateNoteTransition : Int -> Int -> (TransitionInfo -> TransitionInfo) -> List HeartbeatInfo -> List HeartbeatInfo
@@ -1722,8 +1851,7 @@ viewHeartbeatCard model index hb =
     div [ class "card" ]
         [ div [ class "card-header" ]
             [ span [ class "card-name" ] [ text hb.name ]
-            , span [ class (metricClass hb.metric) ]
-                [ text (metricLabel hb.metric) ]
+            , metricBadge hb.metric hb.tiers
             , if hb.playback /= "clock" then
                 span [ class "badge" ] [ text hb.playback ]
 
@@ -1783,6 +1911,7 @@ viewHeartbeatCard model index hb =
                             [ text "Add note" ]
                        ]
                 )
+            , viewTierEditor index hb.tiers
             ]
         ]
 
@@ -1809,6 +1938,62 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
         , viewSlider model ("slider:NoteVolume:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx) "Volume" (Just "Relative volume of this note within the heartbeat.") model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteSlider NoteVolume hbIdx noteIdx)
         , viewSlider model ("slider:NoteOffset:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx) "Offset" (Just "Delay before this note plays, in seconds.") model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteSlider NoteOffset hbIdx noteIdx)
         , viewNoteTransitionEdit model.sliderRanges patchNames hbIdx noteIdx note.transition
+        ]
+
+
+viewTierEditor : Int -> List TierInfo -> Html Msg
+viewTierEditor hbIdx tiers =
+    div [ class "tier-section" ]
+        [ div [ class "tier-header" ]
+            [ span [ class "tier-title" ] [ text "Metric Tiers" ]
+            , button
+                [ class "btn btn-sm"
+                , onClick (AddTier hbIdx)
+                ]
+                [ text "Add tier" ]
+            ]
+        , div [] (List.indexedMap (viewTierRow hbIdx (List.length tiers)) tiers)
+        ]
+
+
+viewTierRow : Int -> Int -> Int -> TierInfo -> Html Msg
+viewTierRow hbIdx tierCount tierIdx tier =
+    div [ class "tier-row" ]
+        [ input
+            [ type_ "color"
+            , value tier.color
+            , onInput (SetTierColor hbIdx tierIdx)
+            , class "tier-color-input"
+            ]
+            []
+        , input
+            [ type_ "text"
+            , value tier.label
+            , onInput (SetTierLabel hbIdx tierIdx)
+            , placeholder "Label"
+            , class "tier-label-input"
+            ]
+            []
+        , label [ class "tier-threshold-label" ] [ text "< " ]
+        , input
+            [ type_ "number"
+            , value (String.fromFloat tier.threshold)
+            , onInput (SetTierThreshold hbIdx tierIdx)
+            , Html.Attributes.step "0.01"
+            , Html.Attributes.min "0"
+            , Html.Attributes.max "2"
+            , class "tier-threshold-input"
+            ]
+            []
+        , if tierCount > 1 then
+            button
+                [ class "btn btn-sm transition-remove"
+                , onClick (RemoveTier hbIdx tierIdx)
+                ]
+                [ text "×" ]
+
+          else
+            text ""
         ]
 
 
@@ -2097,28 +2282,48 @@ viewStrategySvg strat =
         ]
 
 
-metricClass : Float -> String
-metricClass m =
-    if m < 0.25 then
-        "metric metric-healthy"
+resolveTier : Float -> List TierInfo -> Maybe TierInfo
+resolveTier m tiers =
+    case tiers of
+        [] ->
+            Nothing
 
-    else if m < 0.75 then
-        "metric metric-degraded"
+        t :: rest ->
+            if m < t.threshold then
+                Just t
 
-    else
-        "metric metric-down"
+            else
+                case rest of
+                    [] ->
+                        Just t
+
+                    _ ->
+                        resolveTier m rest
 
 
-metricLabel : Float -> String
-metricLabel m =
-    if m < 0.25 then
-        "healthy"
+metricBadge : Float -> List TierInfo -> Html msg
+metricBadge m tiers =
+    case resolveTier m tiers of
+        Just tier ->
+            span
+                [ class "metric"
+                , style "background" (tier.color ++ "33")
+                , style "color" tier.color
+                ]
+                [ text tier.label ]
 
-    else if m < 0.75 then
-        "degraded"
+        Nothing ->
+            span [ class "metric" ]
+                [ text (formatMetric m) ]
 
-    else
-        "down"
+
+formatMetric : Float -> String
+formatMetric m =
+    let
+        rounded =
+            toFloat (round (m * 1000)) / 1000
+    in
+    String.fromFloat rounded
 
 
 
@@ -2130,16 +2335,36 @@ viewProbeLog model =
     div [ class "section" ]
         [ h2 [] [ text "Probe Log" ]
         , div [ class "log-container" ]
-            (List.map viewLogEntry model.probeLog)
+            (List.map (viewLogEntry model.heartbeats) model.probeLog)
         ]
 
 
-viewLogEntry : ProbeLogEntry -> Html Msg
-viewLogEntry entry =
+viewLogEntry : List HeartbeatInfo -> ProbeLogEntry -> Html Msg
+viewLogEntry heartbeats entry =
+    let
+        tierColor =
+            heartbeats
+                |> List.filter (\hb -> hb.name == entry.name)
+                |> List.head
+                |> Maybe.andThen
+                    (\hb ->
+                        hb.tiers
+                            |> List.filter (\t -> t.label == entry.result)
+                            |> List.head
+                    )
+                |> Maybe.map .color
+
+        resultAttrs =
+            case tierColor of
+                Just c ->
+                    [ class "log-result", style "color" c ]
+
+                Nothing ->
+                    [ class (logResultClass entry.result) ]
+    in
     div [ class "log-entry" ]
         [ span [ class "log-name" ] [ text entry.name ]
-        , span [ class (logResultClass entry.result) ]
-            [ text entry.result ]
+        , span resultAttrs [ text entry.result ]
         , if entry.overridden then
             span [ class "badge badge-warn" ] [ text "override" ]
 

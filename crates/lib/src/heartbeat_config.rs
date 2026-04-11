@@ -33,6 +33,16 @@ pub fn default_crossfade_ms() -> f64 {
   6.0
 }
 
+/// A labeled tier for classifying metric values with a display
+/// label and color.  Tiers are ordered by threshold; the first
+/// tier whose threshold exceeds the metric wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TierConfig {
+  pub threshold: f64,
+  pub label: String,
+  pub color: String,
+}
+
 /// A single note within a heartbeat, with its own transition,
 /// volume, and time offset from heartbeat start.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -91,6 +101,11 @@ pub struct HeartbeatConfig {
   /// echo tails ring out naturally during continuous playback.
   #[serde(default = "default_crossfade_ms")]
   pub crossfade_ms: f64,
+
+  /// Optional labeled tiers for classifying metric values.  When
+  /// empty, the UI displays the raw metric value instead.
+  #[serde(default)]
+  pub tiers: Vec<TierConfig>,
 }
 
 impl HeartbeatConfig {
@@ -126,6 +141,7 @@ impl HeartbeatConfig {
       cycle_secs: default_cycle_secs(),
       cycle_offset_secs: 0.0,
       crossfade_ms: default_crossfade_ms(),
+      tiers: vec![],
     }
   }
 }

@@ -55,6 +55,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     let poll_cfg_name = cfg.name.clone();
     let poll_command = cfg.command.clone();
     let poll_mode = cfg.result_mode.clone();
+    let poll_tiers = cfg.tiers.clone();
     let poll_interval = Duration::from_secs_f64(cfg.poll_interval_secs);
     let poll_running = Arc::clone(&running);
     let poll_preview = Arc::clone(&preview);
@@ -71,25 +72,21 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         if let Some(metric) = overridden {
           let clamped = metric.clamp(0.0, 1.0);
           poll_preview.heartbeats[i].metric.set_value(clamped);
-          send_probe_log(
-            &poll_preview,
-            &poll_cfg_name,
-            &format!("{clamped:.3}"),
-            true,
-          );
+          let label = metric_label(clamped, &poll_tiers);
+          send_probe_log(&poll_preview, &poll_cfg_name, &label, true);
           poll_counter.inc();
           poll_gauge.set(clamped as f64);
         } else {
           match probe::run_probe(&poll_cfg_name, &poll_command, &poll_mode) {
             Ok(metric) => {
-              let label = metric_label(metric);
+              let label = metric_label(metric, &poll_tiers);
               info!(
                 heartbeat = poll_cfg_name,
                 result = label,
                 "Probe completed"
               );
               poll_preview.heartbeats[i].metric.set_value(metric);
-              send_probe_log(&poll_preview, &poll_cfg_name, label, false);
+              send_probe_log(&poll_preview, &poll_cfg_name, &label, false);
               poll_counter.inc();
               poll_gauge.set(metric as f64);
             }

@@ -14,7 +14,7 @@ pub use continuous::{
   StructuralParams,
 };
 pub use heartbeat::ResolvedNote;
-pub use heartbeat_config::{HeartbeatConfig, NoteConfig, Playback};
+pub use heartbeat_config::{HeartbeatConfig, NoteConfig, Playback, TierConfig};
 pub use library::{builtin_library, PatchLibrary};
 pub use logging::{LogFormat, LogLevel};
 pub use patch::{Patch, PatchOverrides, PatchParamMeta};

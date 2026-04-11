@@ -236,6 +236,27 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "set_tiers" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let tiers_val = msg.get("tiers")?;
+      let tiers: Vec<sonify_health_lib::TierConfig> =
+        serde_json::from_value(tiers_val.clone()).ok()?;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        let cfg = configs.get_mut(index)?;
+        cfg.tiers = tiers.clone();
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "tiers_changed",
+          "index": index,
+          "tiers": serde_json::to_value(&tiers).unwrap_or_default(),
+        })
+        .to_string(),
+      );
+      None
+    }
+
     "override_heartbeat" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let value = msg.get("value").and_then(|v| v.as_f64())? as f32;

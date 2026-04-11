@@ -129,7 +129,7 @@ sub-panel within the heartbeat card so the boundary between notes is
 immediately obvious.  Maintain the existing styling language (CSS
 variables, spacing, radius conventions already in =style.css=).
 
-* TODO Configurable labels and colors for metric tiers
+* DONE Configurable labels and colors for metric tiers
 The metric status labels (=healthy=, =degraded=, =down=) and their
 thresholds are hardcoded in both the backend (=metric_label= in
 =preview_state.rs=) and the frontend (=metricClass= / =metricLabel= in

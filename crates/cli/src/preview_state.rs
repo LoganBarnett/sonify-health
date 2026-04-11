@@ -254,6 +254,7 @@ impl PreviewState {
           "cycle_offset_secs": cfg.cycle_offset_secs,
           "crossfade_ms": cfg.crossfade_ms,
           "notes": notes_json,
+          "tiers": serde_json::to_value(&cfg.tiers).unwrap_or_default(),
         })
       })
       .collect();
@@ -293,13 +294,19 @@ impl PreviewState {
   }
 }
 
-/// Return a human-readable label for a metric value.
-pub fn metric_label(metric: f32) -> &'static str {
-  if metric < 0.25 {
-    "healthy"
-  } else if metric < 0.75 {
-    "degraded"
-  } else {
-    "down"
+/// Return a human-readable label for a metric value.  Uses custom
+/// tiers when available, otherwise formats the raw value.
+pub fn metric_label(
+  metric: f32,
+  tiers: &[sonify_health_lib::TierConfig],
+) -> String {
+  for tier in tiers {
+    if (metric as f64) < tier.threshold {
+      return tier.label.clone();
+    }
   }
+  tiers
+    .last()
+    .map(|t| t.label.clone())
+    .unwrap_or_else(|| format!("{metric:.3}"))
 }
