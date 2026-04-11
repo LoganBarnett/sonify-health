@@ -1,4 +1,5 @@
 use crate::patch::Patch;
+use fundsp::net::Net;
 use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 use std::time::Duration;
@@ -143,10 +144,174 @@ pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
   Duration::from_secs_f64(max)
 }
 
-/// Build a multi-note heartbeat audio graph.  Each note gets its
-/// own timing slot based on its offset.  Per-note volume scales
-/// the note's amplitude.  The optional external volume Shared
-/// multiplies the final mixed output.
+/// Build a complete stereo graph for a single note.  All synthesis
+/// parameters are read from the note's own patch — nothing is shared
+/// with other notes.  The note is silent until `offset` seconds, then
+/// plays its full ADSR envelope with drive, noise, sub-octave, FM,
+/// tremolo, echo, pan, and reverb.
+fn note_graph(
+  patch: &Patch,
+  offset: f64,
+  external_volume: Option<&Shared>,
+) -> Box<dyn AudioUnit> {
+  let freq = patch.freq as f32;
+  let amp = patch.amplitude as f32;
+  let attack = patch.attack_ms as f32 / 1000.0;
+  let decay = patch.decay_ms as f32 / 1000.0;
+  let release = patch.release_ms as f32 / 1000.0;
+  let dur = patch.duration as f32;
+  let sustain_level = patch.sustain as f32;
+  let offset = offset as f32;
+  let tail_end = offset + attack + decay + dur + release;
+
+  let chirp_ratio = patch.chirp_ratio as f32;
+  let brightness = patch.brightness as f32;
+  let resonance = patch.resonance as f32;
+  let sub_mix = patch.sub_octave as f32;
+  let drive = (patch.drive as f32).max(0.01);
+  let drive_norm = 1.0 / drive.tanh();
+  let noise_mix = patch.noise_mix as f32;
+  let crush_param = patch.crush as f32;
+  let crush_levels = 2.0_f32.powf(1.0 + 15.0 * (1.0 - crush_param));
+  let downsample = patch.downsample as f32;
+  let ds_rate = 100_000.0_f32 / 2.0_f32.powf(downsample * 8.0);
+  let vibrato_rate = patch.vibrato_rate;
+  let vibrato_depth = patch.vibrato_depth;
+  let tremolo_rate = patch.tremolo_rate;
+  let tremolo_depth = patch.tremolo_depth;
+  let fm_ratio = patch.fm_ratio as f32;
+  let fm_depth = patch.fm_depth as f32;
+
+  let total_ratio =
+    patch.sine_ratio + patch.tri_ratio + patch.saw_ratio + patch.square_ratio;
+  let norm = if total_ratio > 0.0 {
+    1.0 / total_ratio
+  } else {
+    1.0
+  } as f32;
+
+  let sine_w = patch.sine_ratio as f32 * norm;
+  let tri_w = patch.tri_ratio as f32 * norm;
+  let saw_w = patch.saw_ratio as f32 * norm;
+  let square_w = patch.square_ratio as f32 * norm;
+
+  // Frequency LFO with offset gating.
+  let freq_env = lfo(move |t: f32| {
+    if t < offset || t >= tail_end {
+      return 0.01;
+    }
+    let local_t = t - offset;
+    let body_t = (local_t - attack).max(0.0);
+    let chirp_t = (body_t / 0.04).min(1.0);
+    let base = freq * chirp_ratio + (freq - freq * chirp_ratio) * chirp_t;
+    let vib = 2f64.powf(
+      vibrato_depth * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
+        / 12.0,
+    ) as f32;
+    let fm_freq = base * fm_ratio;
+    let fm_mod =
+      fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+    (base * vib + fm_mod).max(0.01)
+  });
+
+  // Amplitude envelope with offset gating.
+  let amp_env = envelope(move |t: f32| {
+    if t < offset || t >= tail_end {
+      return 0.0;
+    }
+    let local_t = t - offset;
+    let level = if attack > 0.0 && local_t < attack {
+      local_t / attack
+    } else if decay > 0.0 && local_t < attack + decay {
+      1.0 + (sustain_level - 1.0) * (local_t - attack) / decay
+    } else {
+      let body_end = attack + decay + dur;
+      if local_t <= body_end {
+        sustain_level
+      } else if release > 0.0 {
+        (sustain_level * (body_end + release - local_t) / release).max(0.0)
+      } else {
+        0.0
+      }
+    };
+    let trem = (1.0
+      - tremolo_depth
+        * (1.0 - (std::f64::consts::TAU * tremolo_rate * t as f64).sin())
+        / 2.0) as f32;
+    level * amp * trem
+  });
+
+  // Main oscillator.
+  let waveform = (sine() * sine_w)
+    & (triangle() * tri_w)
+    & (saw() * saw_w)
+    & (square() * square_w);
+  let main_osc = freq_env >> waveform;
+
+  // Sub-octave oscillator with offset gating.
+  let sub_freq_env = lfo(move |t: f32| {
+    if t < offset || t >= tail_end {
+      return 0.01;
+    }
+    let local_t = t - offset;
+    let body_t = (local_t - attack).max(0.0);
+    let chirp_t = (body_t / 0.04).min(1.0);
+    let half = freq * 0.5;
+    let base = half * chirp_ratio + (half - half * chirp_ratio) * chirp_t;
+    let vib = 2f64.powf(
+      vibrato_depth * (std::f64::consts::TAU * vibrato_rate * t as f64).sin()
+        / 12.0,
+    ) as f32;
+    let fm_freq = base * fm_ratio;
+    let fm_mod =
+      fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+    (base * vib + fm_mod).max(0.01)
+  });
+  let sub_waveform = (sine() * sine_w)
+    & (triangle() * tri_w)
+    & (saw() * saw_w)
+    & (square() * square_w);
+  let sub_osc = sub_freq_env >> sub_waveform;
+
+  // Drive, noise, filter, effects.
+  let cutoff = dc((freq * 13.0 * brightness).min(MAX_CUTOFF));
+  let q_val = dc(0.5 * resonance * 0.2);
+
+  let ext = match external_volume {
+    Some(s) => s.clone(),
+    None => fundsp::prelude32::shared(1.0),
+  };
+  let ext_vol = var(&ext) >> follow(0.1);
+
+  let echo_delay = patch.echo_delay as f32;
+  let echo_mix = patch.echo_mix as f32;
+  let hp_cutoff = if patch.highpass > 0.0 {
+    patch.highpass as f32
+  } else {
+    1.0
+  };
+
+  let driven = (main_osc + (sub_osc * sub_mix))
+    >> (shape(Tanh(drive)) * drive_norm)
+    >> (pass() + (pink() * noise_mix));
+  let mono = (driven | cutoff | q_val)
+    >> (moog() * amp_env * ext_vol)
+    >> shape(Crush(crush_levels))
+    >> hold_hz(ds_rate, 0.0)
+    >> highpass_hz(hp_cutoff, 0.7);
+  let with_echo =
+    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
+  let stereo = with_echo
+    >> pan(patch.stereo_pan as f32)
+    >> reverb_stereo(0.3, 0.8, patch.reverb_mix as f32);
+  Box::new(stereo)
+}
+
+/// Build a multi-note heartbeat audio graph.  Each note is rendered
+/// as a fully independent stereo graph with its own synthesis
+/// parameters, then summed via `Net`.  Per-note volume scales the
+/// note's amplitude.  The optional external volume `Shared`
+/// multiplies each note's output.
 pub fn heartbeat_graph_with_notes(
   notes: &[ResolvedNote],
   external_volume: Option<&Shared>,
@@ -159,25 +324,21 @@ pub fn heartbeat_graph_with_notes(
     return Box::new(dc(0.0) * var(&ext) | dc(0.0) * var(&ext));
   }
 
-  let mut sorted: Vec<_> = notes.to_vec();
-  sorted.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap());
-
-  let patches: Vec<Patch> = sorted
+  let net = notes
     .iter()
     .map(|n| {
       let mut p = n.patch.clone();
       p.amplitude *= n.volume;
-      p
+      Net::wrap(note_graph(&p, n.offset, external_volume))
     })
-    .collect();
-
-  let offsets: Vec<f64> = sorted.iter().map(|n| n.offset).collect();
-
-  heartbeat_graph_with_offsets(&patches, &offsets, external_volume)
+    .reduce(|acc, n| acc + n)
+    .unwrap();
+  Box::new(net)
 }
 
 /// Build a heartbeat graph where each patch starts at an explicit
 /// offset (seconds from graph start) rather than sequentially.
+#[allow(dead_code)]
 fn heartbeat_graph_with_offsets(
   patches: &[Patch],
   offsets: &[f64],
