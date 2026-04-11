@@ -1,32 +1,17 @@
 [[heartbeats]]
 command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
-playback = "clock"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
 name = "gateway"
 phrase_gap = 0.0
+playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
 result_mode = "exit-code-severity"
 
 [[heartbeats.notes]]
 offset = 0.0
-volume = 1.0
-
-[heartbeats.notes.transition]
-type = "discrete"
-
-[[heartbeats.notes.transition.states]]
-patch = "reactor-ok"
-threshold = 0.5
-
-[[heartbeats.notes.transition.states]]
-patch = "reactor-error"
-threshold = 1.01
-
-[[heartbeats.notes]]
-offset = 0.2
 volume = 1.0
 
 [heartbeats.notes.transition]
@@ -42,12 +27,12 @@ threshold = 1.01
 
 [[heartbeats]]
 command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
-playback = "clock"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.6
 cycle_secs = 15.0
 name = "internet"
 phrase_gap = 0.0
+playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
 result_mode = "exit-code-severity"
@@ -68,7 +53,7 @@ patch = "reactor-error"
 threshold = 1.01
 
 [[heartbeats.notes]]
-offset = 0.2
+offset = 0.15
 volume = 1.0
 
 [heartbeats.notes.transition]
@@ -84,12 +69,12 @@ threshold = 1.1
 
 [[heartbeats]]
 command = '''sh -c 'load=$(uptime | awk -F"load average: " "{split(\$2,a,\", \"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\$1/\$2; print (v>1?1:v)}"''''
-playback = "continuous"
 crossfade_ms = 0.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
 name = "cpu"
 phrase_gap = 0.0
+playback = "continuous"
 poll_interval_secs = 5.0
 repeat_rate = 1.0
 result_mode = "stdout"
@@ -119,6 +104,7 @@ attack_ms = 0.0
 brightness = 1.47
 chirp_ratio = 1.0
 crush = 0.08
+decay_ms = 0.0
 downsample = 0.03
 drive = 2.01
 duration = 1.95
@@ -127,6 +113,8 @@ echo_mix = 0.18
 fm_depth = 0.7
 fm_ratio = 0.04
 freq = 15.0
+gap = 0.0
+highpass = 0.0
 noise_mix = 1.0
 release_ms = 0.0
 resonance = 3.78
@@ -154,6 +142,7 @@ attack_ms = 6.0
 brightness = 1.82
 chirp_ratio = 1.01
 crush = 0.0
+decay_ms = 97.0
 downsample = 0.0
 drive = 0.5
 duration = 0.22
@@ -161,7 +150,9 @@ echo_delay = 0.32
 echo_mix = 0.33
 fm_depth = 0.0
 fm_ratio = 0.0
-freq = 4307.0
+freq = 861.0
+gap = 0.0
+highpass = 0.0
 noise_mix = 0.0
 release_ms = 22.0
 resonance = 3.72
@@ -171,7 +162,7 @@ sine_ratio = 2.37
 square_ratio = 0.0
 stereo_pan = -0.42
 sub_octave = 0.03
-sustain = 1.0
+sustain = 0.47
 tremolo_depth = 0.11
 tremolo_rate = 0.0
 tri_ratio = 1.22
