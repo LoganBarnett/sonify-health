@@ -130,6 +130,9 @@ type Msg
     | DismissProtocolError
     | ToggleDescription String
     | TogglePlayOnChange String
+    | SetHeartbeatName Int String
+    | SetHeartbeatCommand Int String
+    | SetHeartbeatResultMode Int String
     | AddTier Int
     | RemoveTier Int Int
     | SetTierThreshold Int Int String
@@ -821,6 +824,30 @@ update msg model =
             , Cmd.none
             )
 
+        SetHeartbeatName hbIdx val ->
+            ( { model
+                | heartbeats =
+                    updateAt hbIdx (\hb -> { hb | name = val }) model.heartbeats
+              }
+            , Ports.websocketSend (encodeSetHeartbeatString "set_heartbeat_name" hbIdx val)
+            )
+
+        SetHeartbeatCommand hbIdx val ->
+            ( { model
+                | heartbeats =
+                    updateAt hbIdx (\hb -> { hb | command = val }) model.heartbeats
+              }
+            , Ports.websocketSend (encodeSetHeartbeatString "set_heartbeat_command" hbIdx val)
+            )
+
+        SetHeartbeatResultMode hbIdx val ->
+            ( { model
+                | heartbeats =
+                    updateAt hbIdx (\hb -> { hb | resultMode = val }) model.heartbeats
+              }
+            , Ports.websocketSend (encodeSetHeartbeatString "set_result_mode" hbIdx val)
+            )
+
         AddTier hbIdx ->
             let
                 newTier =
@@ -1036,6 +1063,16 @@ handleServerMsg msg model =
             , Cmd.none
             )
 
+        HeartbeatStringChanged field index value ->
+            ( { model
+                | heartbeats =
+                    updateAt index
+                        (setHeartbeatStringValue field value)
+                        model.heartbeats
+              }
+            , Cmd.none
+            )
+
         NoteSliderChanged slider hbIdx noteIdx value ->
             ( { model
                 | heartbeats =
@@ -1141,6 +1178,18 @@ heartbeatSliderKey slider =
         CrossfadeMs ->
             "hb_crossfade:"
 
+        PollInterval ->
+            "hb_poll:"
+
+        CycleSecs ->
+            "hb_cycle:"
+
+        PhraseGap ->
+            "hb_phrase:"
+
+        RepeatRate ->
+            "hb_repeat:"
+
 
 setHeartbeatSliderValue : HeartbeatSlider -> Float -> HeartbeatInfo -> HeartbeatInfo
 setHeartbeatSliderValue slider val hb =
@@ -1150,6 +1199,34 @@ setHeartbeatSliderValue slider val hb =
 
         CrossfadeMs ->
             { hb | crossfadeMs = val }
+
+        PollInterval ->
+            { hb | pollIntervalSecs = val }
+
+        CycleSecs ->
+            { hb | cycleSecs = val }
+
+        PhraseGap ->
+            { hb | phraseGap = val }
+
+        RepeatRate ->
+            { hb | repeatRate = val }
+
+
+setHeartbeatStringValue : String -> String -> HeartbeatInfo -> HeartbeatInfo
+setHeartbeatStringValue field val hb =
+    case field of
+        "name" ->
+            { hb | name = val }
+
+        "command" ->
+            { hb | command = val }
+
+        "result_mode" ->
+            { hb | resultMode = val }
+
+        _ ->
+            hb
 
 
 noteSliderKey : NoteSlider -> String
@@ -1850,7 +1927,13 @@ viewHeartbeatCard : Model -> Int -> HeartbeatInfo -> Html Msg
 viewHeartbeatCard model index hb =
     div [ class "card" ]
         [ div [ class "card-header" ]
-            [ span [ class "card-name" ] [ text hb.name ]
+            [ input
+                [ class "card-name-input"
+                , type_ "text"
+                , value hb.name
+                , onInput (SetHeartbeatName index)
+                ]
+                []
             , metricBadge hb.metric hb.tiers
             , if hb.playback /= "clock" then
                 span [ class "badge" ] [ text hb.playback ]
@@ -1864,12 +1947,43 @@ viewHeartbeatCard model index hb =
                 text ""
             ]
         , div [ class "card-body" ]
-            [ viewPlaybackCycler hb.playback (CyclePlayback index)
+            [ div [ class "hb-field-row" ]
+                [ label [ class "hb-field-label" ] [ text "Command" ]
+                , input
+                    [ class "hb-field-input"
+                    , type_ "text"
+                    , value hb.command
+                    , onInput (SetHeartbeatCommand index)
+                    ]
+                    []
+                ]
+            , div [ class "hb-field-row" ]
+                [ label [ class "hb-field-label" ] [ text "Result mode" ]
+                , select
+                    [ class "hb-field-select"
+                    , onInput (SetHeartbeatResultMode index)
+                    ]
+                    [ option [ value "stdout", selected (hb.resultMode == "stdout") ] [ text "stdout" ]
+                    , option [ value "exit-code", selected (hb.resultMode == "exit-code") ] [ text "exit-code" ]
+                    , option [ value "exit-code-severity", selected (hb.resultMode == "exit-code-severity") ] [ text "exit-code-severity" ]
+                    ]
+                ]
+            , viewPlaybackCycler hb.playback (CyclePlayback index)
             , button [ class "btn btn-sm", onClick (TriggerHeartbeat index) ]
                 [ text "Trigger" ]
+            , viewSlider model ("slider:PollInterval:" ++ String.fromInt index) "Poll interval" (Just "Seconds between probe command executions.") 1.0 300.0 1.0 hb.pollIntervalSecs (SetHeartbeatSlider PollInterval index)
+            , viewSlider model ("slider:CycleSecs:" ++ String.fromInt index) "Cycle" (Just "Seconds between plays for one-shot heartbeats.") 1.0 120.0 0.5 hb.cycleSecs (SetHeartbeatSlider CycleSecs index)
             , viewSlider model ("slider:Offset:" ++ String.fromInt index) "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
             , if hb.playback == "continuous" || hb.playback == "loop" then
                 viewSlider model ("slider:CrossfadeMs:" ++ String.fromInt index) "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
+
+              else
+                text ""
+            , if hb.playback == "continuous" then
+                div []
+                    [ viewSlider model ("slider:PhraseGap:" ++ String.fromInt index) "Phrase gap" (Just "Seconds of silence between phrase repetitions.") 0.0 10.0 0.1 hb.phraseGap (SetHeartbeatSlider PhraseGap index)
+                    , viewSlider model ("slider:RepeatRate:" ++ String.fromInt index) "Repeat rate" (Just "Speed multiplier on phrase repetition.") 0.01 5.0 0.01 hb.repeatRate (SetHeartbeatSlider RepeatRate index)
+                    ]
 
               else
                 text ""

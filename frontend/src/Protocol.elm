@@ -30,6 +30,7 @@ module Protocol exposing
     , encodeResetOverrideParam
     , encodeRevertAll
     , encodeSaveConfig
+    , encodeSetHeartbeatString
     , encodeSetMasterVolume
     , encodeSetMuted
     , encodeSetNoteTransition
@@ -62,11 +63,17 @@ type alias NoteInfo =
 
 type alias HeartbeatInfo =
     { name : String
+    , command : String
+    , resultMode : String
     , playback : String
     , metric : Float
     , overridden : Bool
+    , pollIntervalSecs : Float
+    , cycleSecs : Float
     , cycleOffsetSecs : Float
     , crossfadeMs : Float
+    , phraseGap : Float
+    , repeatRate : Float
     , notes : List NoteInfo
     , tiers : List TierInfo
     }
@@ -120,6 +127,10 @@ type alias SliderRanges =
 type HeartbeatSlider
     = CycleOffset
     | CrossfadeMs
+    | PollInterval
+    | CycleSecs
+    | PhraseGap
+    | RepeatRate
 
 
 type NoteSlider
@@ -156,6 +167,7 @@ type ServerMsg
     | LibraryChanged (Dict String (Dict String Float))
     | OverridesChanged (Dict String OverrideInfo)
     | HeartbeatSliderChanged HeartbeatSlider Int Float
+    | HeartbeatStringChanged String Int String
     | NoteSliderChanged NoteSlider Int Int Float
     | NoteTransitionChanged Int Int TransitionInfo
     | NotesChanged Int (List NoteInfo)
@@ -213,6 +225,27 @@ serverMsgDecoder =
 
                     "crossfade_ms_changed" ->
                         heartbeatSliderChangedDecoder CrossfadeMs
+
+                    "poll_interval_changed" ->
+                        heartbeatSliderChangedDecoder PollInterval
+
+                    "cycle_secs_changed" ->
+                        heartbeatSliderChangedDecoder CycleSecs
+
+                    "phrase_gap_changed" ->
+                        heartbeatSliderChangedDecoder PhraseGap
+
+                    "repeat_rate_changed" ->
+                        heartbeatSliderChangedDecoder RepeatRate
+
+                    "heartbeat_name_changed" ->
+                        heartbeatStringChangedDecoder "name"
+
+                    "heartbeat_command_changed" ->
+                        heartbeatStringChangedDecoder "command"
+
+                    "result_mode_changed" ->
+                        heartbeatStringChangedDecoder "result_mode"
 
                     "note_volume_changed" ->
                         noteSliderChangedDecoder NoteVolume
@@ -328,34 +361,41 @@ noteInfoDecoder =
 
 heartbeatInfoDecoder : D.Decoder HeartbeatInfo
 heartbeatInfoDecoder =
-    D.map6
-        (\name playback metric overridden cycleOffset notes ->
-            \crossfade tiers ->
-                HeartbeatInfo name playback metric overridden cycleOffset crossfade notes tiers
+    D.map8
+        (\name command resultMode playback metric overridden pollInterval cycleSecs ->
+            \cycleOffset crossfade phraseGap repeatRate notes tiers ->
+                HeartbeatInfo name
+                    command
+                    resultMode
+                    playback
+                    metric
+                    overridden
+                    pollInterval
+                    cycleSecs
+                    cycleOffset
+                    crossfade
+                    phraseGap
+                    repeatRate
+                    notes
+                    tiers
         )
         (D.field "name" D.string)
-        (D.oneOf
-            [ D.field "playback" D.string
-            , D.succeed "clock"
-            ]
-        )
+        (D.oneOf [ D.field "command" D.string, D.succeed "" ])
+        (D.oneOf [ D.field "result_mode" D.string, D.succeed "stdout" ])
+        (D.oneOf [ D.field "playback" D.string, D.succeed "clock" ])
         (D.field "metric" D.float)
         (D.field "overridden" D.bool)
-        (D.field "cycle_offset_secs" D.float)
-        (D.field "notes" (D.list noteInfoDecoder))
+        (D.oneOf [ D.field "poll_interval_secs" D.float, D.succeed 10.0 ])
+        (D.oneOf [ D.field "cycle_secs" D.float, D.succeed 15.0 ])
         |> D.andThen
             (\build ->
-                D.map2 build
-                    (D.oneOf
-                        [ D.field "crossfade_ms" D.float
-                        , D.succeed 6.0
-                        ]
-                    )
-                    (D.oneOf
-                        [ D.field "tiers" (D.list tierInfoDecoder)
-                        , D.succeed []
-                        ]
-                    )
+                D.map6 build
+                    (D.oneOf [ D.field "cycle_offset_secs" D.float, D.succeed 0.0 ])
+                    (D.oneOf [ D.field "crossfade_ms" D.float, D.succeed 6.0 ])
+                    (D.oneOf [ D.field "phrase_gap" D.float, D.succeed 0.0 ])
+                    (D.oneOf [ D.field "repeat_rate" D.float, D.succeed 1.0 ])
+                    (D.field "notes" (D.list noteInfoDecoder))
+                    (D.oneOf [ D.field "tiers" (D.list tierInfoDecoder), D.succeed [] ])
             )
 
 
@@ -541,6 +581,13 @@ heartbeatSliderChangedDecoder slider =
     D.map2 (HeartbeatSliderChanged slider)
         (D.field "index" D.int)
         (D.field "value" D.float)
+
+
+heartbeatStringChangedDecoder : String -> D.Decoder ServerMsg
+heartbeatStringChangedDecoder field =
+    D.map2 (HeartbeatStringChanged field)
+        (D.field "index" D.int)
+        (D.field "value" D.string)
 
 
 noteSliderChangedDecoder : NoteSlider -> D.Decoder ServerMsg
@@ -777,11 +824,33 @@ encodeHeartbeatSlider slider index value =
 
                 CrossfadeMs ->
                     "set_crossfade_ms"
+
+                PollInterval ->
+                    "set_poll_interval"
+
+                CycleSecs ->
+                    "set_cycle_secs"
+
+                PhraseGap ->
+                    "set_phrase_gap"
+
+                RepeatRate ->
+                    "set_repeat_rate"
     in
     E.object
         [ ( "type", E.string msgType )
         , ( "index", E.int index )
         , ( "value", E.float value )
+        ]
+        |> E.encode 0
+
+
+encodeSetHeartbeatString : String -> Int -> String -> String
+encodeSetHeartbeatString msgType index value =
+    E.object
+        [ ( "type", E.string msgType )
+        , ( "index", E.int index )
+        , ( "value", E.string value )
         ]
         |> E.encode 0
 

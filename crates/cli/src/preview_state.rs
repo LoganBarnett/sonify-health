@@ -248,11 +248,17 @@ impl PreviewState {
           .collect();
         json!({
           "name": cfg.name,
+          "command": cfg.command,
+          "result_mode": serde_json::to_value(&cfg.result_mode).unwrap_or_default(),
           "playback": serde_json::to_value(&cfg.playback).unwrap_or_default(),
           "metric": hb.metric.value(),
           "overridden": overridden,
+          "poll_interval_secs": cfg.poll_interval_secs,
+          "cycle_secs": cfg.cycle_secs,
           "cycle_offset_secs": cfg.cycle_offset_secs,
           "crossfade_ms": cfg.crossfade_ms,
+          "phrase_gap": cfg.phrase_gap,
+          "repeat_rate": cfg.repeat_rate,
           "notes": notes_json,
           "tiers": serde_json::to_value(&cfg.tiers).unwrap_or_default(),
         })

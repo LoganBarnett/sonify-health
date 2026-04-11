@@ -343,6 +343,91 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       "crossfade_ms_changed",
     ),
 
+    "set_poll_interval" => set_heartbeat_field(
+      preview,
+      &msg,
+      |cfg, v| cfg.poll_interval_secs = v.max(1.0),
+      "poll_interval_changed",
+    ),
+
+    "set_cycle_secs" => set_heartbeat_field(
+      preview,
+      &msg,
+      |cfg, v| cfg.cycle_secs = v.max(1.0),
+      "cycle_secs_changed",
+    ),
+
+    "set_phrase_gap" => set_heartbeat_field(
+      preview,
+      &msg,
+      |cfg, v| cfg.phrase_gap = v,
+      "phrase_gap_changed",
+    ),
+
+    "set_repeat_rate" => set_heartbeat_field(
+      preview,
+      &msg,
+      |cfg, v| cfg.repeat_rate = v.max(0.01),
+      "repeat_rate_changed",
+    ),
+
+    "set_heartbeat_name" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let value = msg.get("value").and_then(|v| v.as_str())?;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.name = value.to_string();
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "heartbeat_name_changed",
+          "index": index,
+          "value": value,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_heartbeat_command" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let value = msg.get("value").and_then(|v| v.as_str())?;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.command = value.to_string();
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "heartbeat_command_changed",
+          "index": index,
+          "value": value,
+        })
+        .to_string(),
+      );
+      None
+    }
+
+    "set_result_mode" => {
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      let raw = msg.get("value").and_then(|v| v.as_str())?;
+      let mode: sonify_health_lib::probe::ResultMode =
+        serde_json::from_value(serde_json::Value::String(raw.to_string()))
+          .ok()?;
+      {
+        let mut configs = preview.heartbeat_configs.write().unwrap();
+        configs.get_mut(index)?.result_mode = mode;
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "result_mode_changed",
+          "index": index,
+          "value": raw,
+        })
+        .to_string(),
+      );
+      None
+    }
+
     "set_playback" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let raw = msg.get("value").and_then(|v| v.as_str())?;
