@@ -270,7 +270,7 @@ the Clipboard API (=navigator.clipboard.writeText=).  Provide
 brief visual feedback on success (e.g., the button text changes to
 "Copied!" for a moment).
 
-* TODO Skip wall-clock alignment for non-clock playback modes
+* DONE Skip wall-clock alignment for non-clock playback modes
 Loop and Continuous play threads currently wait for the wall-clock
 grid (~seconds_until_next~) before the first play, same as Clock
 mode.  Only Clock mode benefits from this alignment.  Wrap the

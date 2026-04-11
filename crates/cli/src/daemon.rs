@@ -124,12 +124,15 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       metrics.heartbeats_played.with_label_values(&[&cfg.name]);
     handles.push(thread::spawn(move || {
       // Align to the wall-clock grid before the first play so that
-      // heartbeats with different offsets start staggered.
+      // clock-mode heartbeats with different offsets start staggered.
+      // Loop and Continuous modes skip this to start playing immediately.
       {
         let cfg = &play_preview.heartbeat_configs.read().unwrap()[i];
-        let wait = seconds_until_next(cfg.cycle_secs, cfg.cycle_offset_secs);
-        if wait > 0.005 {
-          sleep_checking(&play_running, Duration::from_secs_f64(wait));
+        if cfg.playback == Playback::Clock {
+          let wait = seconds_until_next(cfg.cycle_secs, cfg.cycle_offset_secs);
+          if wait > 0.005 {
+            sleep_checking(&play_running, Duration::from_secs_f64(wait));
+          }
         }
       }
 
