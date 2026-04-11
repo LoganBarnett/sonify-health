@@ -105,6 +105,7 @@ type Msg
     | RemoveNote Int Int
     | OverrideHeartbeat Int String
     | ClearOverride Int
+    | ToggleContinuous Int
     | ToggleHeartbeatLoop
     | TriggerHeartbeat
     | RevertAll
@@ -574,6 +575,22 @@ update msg model =
             , Ports.websocketSend (encodeClearOverride index)
             )
 
+        ToggleContinuous index ->
+            let
+                hb =
+                    List.drop index model.heartbeats
+                        |> List.head
+            in
+            case hb of
+                Just h ->
+                    ( model
+                    , Ports.websocketSend
+                        (encodeSetContinuous index (not h.continuous))
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         ToggleHeartbeatLoop ->
             ( model
             , Ports.websocketSend
@@ -787,6 +804,16 @@ handleServerMsg msg model =
 
         HeartbeatLoopChanged enabled ->
             ( { model | heartbeatLoop = enabled }, Cmd.none )
+
+        ContinuousChanged index value ->
+            ( { model
+                | heartbeats =
+                    updateAt index
+                        (\hb -> { hb | continuous = value })
+                        model.heartbeats
+              }
+            , Cmd.none
+            )
 
         LibraryChanged lib ->
             ( { model | library = lib }, Cmd.none )
@@ -1544,6 +1571,31 @@ viewSlider name min_ max_ step_ val toMsg =
         ]
 
 
+viewToggle : String -> Bool -> Msg -> Html Msg
+viewToggle name val msg =
+    label [ class "slider-row" ]
+        [ text (name ++ " ")
+        , button
+            [ class
+                (if val then
+                    "btn btn-sm btn-active"
+
+                 else
+                    "btn btn-sm"
+                )
+            , onClick msg
+            ]
+            [ text
+                (if val then
+                    "ON"
+
+                 else
+                    "OFF"
+                )
+            ]
+        ]
+
+
 
 -- Heartbeats
 
@@ -1575,7 +1627,8 @@ viewHeartbeatCard model index hb =
                 text ""
             ]
         , div [ class "card-body" ]
-            [ viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
+            [ viewToggle "Continuous" hb.continuous (ToggleContinuous index)
+            , viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
             , if hb.continuous then
                 viewSlider "Crossfade ms" model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
 

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod continuous;
 pub mod heartbeat;
 pub mod heartbeat_config;
 pub mod library;
@@ -8,6 +9,7 @@ pub mod probe;
 pub mod timing;
 pub mod transition;
 
+pub use continuous::{continuous_graph, ContinuousControls, StructuralParams};
 pub use heartbeat::ResolvedNote;
 pub use heartbeat_config::{HeartbeatConfig, NoteConfig};
 pub use library::{builtin_library, PatchLibrary};

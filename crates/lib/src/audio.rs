@@ -5,12 +5,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
-/// Number of frames over which `replace()` crossfades from the
-/// old graph to the new one.  256 frames ≈ 5.8 ms at 44.1 kHz —
-/// long enough to eliminate phase-discontinuity clicks, short
-/// enough to be inaudible as a blend.
-const CROSSFADE_FRAMES: usize = 256;
-
 /// Preferred buffer size in frames for a single-graph stream.
 /// Larger buffers give the CPU more headroom for expensive graphs
 /// (the 32-channel FDN reverb in particular) at the cost of a few
@@ -181,6 +175,7 @@ struct CrossfadeState {
   left: Vec<f32>,
   right: Vec<f32>,
   remaining_frames: usize,
+  total_frames: usize,
 }
 
 struct MixerSlot {
@@ -287,7 +282,7 @@ fn mixer_callback(
           // once remaining_frames hits 0 we output 100% new.
           let fade = if prev.remaining_frames > 0 {
             prev.remaining_frames -= 1;
-            prev.remaining_frames as f32 / CROSSFADE_FRAMES as f32
+            prev.remaining_frames as f32 / prev.total_frames as f32
           } else {
             0.0
           };
@@ -432,11 +427,17 @@ impl AudioMixer {
   }
 
   /// Replace the graph at the given slot in-place, crossfading
-  /// from the old graph to the new one over `CROSSFADE_FRAMES`.
-  pub fn replace(&self, id: usize, mut graph: Box<dyn AudioUnit>) {
+  /// from the old graph to the new one over `crossfade_frames`.
+  pub fn replace(
+    &self,
+    id: usize,
+    mut graph: Box<dyn AudioUnit>,
+    crossfade_frames: usize,
+  ) {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
     let new_adapter = BigBlockAdapter::new(graph);
+    let frames = Ord::max(crossfade_frames, 1);
 
     let mut slots = self.inner.slots.lock().unwrap();
     if id < slots.len() {
@@ -449,7 +450,8 @@ impl AudioMixer {
             adapter: old_slot.adapter,
             left: old_slot.left,
             right: old_slot.right,
-            remaining_frames: CROSSFADE_FRAMES,
+            remaining_frames: frames,
+            total_frames: frames,
           }),
         });
       } else {
@@ -529,11 +531,17 @@ impl MixerHandle {
   }
 
   /// Replace the graph at the given slot, crossfading from the old
-  /// graph to the new one over `CROSSFADE_FRAMES`.
-  pub fn replace(&self, id: usize, mut graph: Box<dyn AudioUnit>) {
+  /// graph to the new one over `crossfade_frames`.
+  pub fn replace(
+    &self,
+    id: usize,
+    mut graph: Box<dyn AudioUnit>,
+    crossfade_frames: usize,
+  ) {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
     let new_adapter = BigBlockAdapter::new(graph);
+    let frames = Ord::max(crossfade_frames, 1);
 
     let mut slots = self.inner.slots.lock().unwrap();
     if id < slots.len() {
@@ -546,7 +554,8 @@ impl MixerHandle {
             adapter: old_slot.adapter,
             left: old_slot.left,
             right: old_slot.right,
-            remaining_frames: CROSSFADE_FRAMES,
+            remaining_frames: frames,
+            total_frames: frames,
           }),
         });
       } else {
@@ -566,6 +575,10 @@ impl MixerHandle {
         prev: None,
       });
     }
+  }
+
+  pub fn sample_rate(&self) -> f64 {
+    self.sample_rate
   }
 }
 

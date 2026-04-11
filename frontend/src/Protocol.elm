@@ -27,6 +27,7 @@ module Protocol exposing
     , encodeResetOverrideParam
     , encodeRevertAll
     , encodeSaveConfig
+    , encodeSetContinuous
     , encodeSetHeartbeatLoop
     , encodeSetMasterVolume
     , encodeSetMuted
@@ -147,6 +148,7 @@ type ServerMsg
     | HeartbeatSliderChanged HeartbeatSlider Int Float
     | NoteSliderChanged NoteSlider Int Int Float
     | NoteTransitionChanged Int Int TransitionInfo
+    | ContinuousChanged Int Bool
     | NotesChanged Int (List NoteInfo)
     | ProbeLog ProbeLogEntry
     | ConfigExport (Dict String (Dict String Float)) (Dict String OverrideInfo)
@@ -201,6 +203,9 @@ serverMsgDecoder =
 
                     "crossfade_ms_changed" ->
                         heartbeatSliderChangedDecoder CrossfadeMs
+
+                    "continuous_changed" ->
+                        continuousChangedDecoder
 
                     "note_volume_changed" ->
                         noteSliderChangedDecoder NoteVolume
@@ -519,6 +524,13 @@ heartbeatSliderChangedDecoder slider =
         (D.field "value" D.float)
 
 
+continuousChangedDecoder : D.Decoder ServerMsg
+continuousChangedDecoder =
+    D.map2 ContinuousChanged
+        (D.field "index" D.int)
+        (D.field "value" D.bool)
+
+
 noteSliderChangedDecoder : NoteSlider -> D.Decoder ServerMsg
 noteSliderChangedDecoder slider =
     D.map3 (NoteSliderChanged slider)
@@ -690,6 +702,16 @@ encodeSetMuted muted =
     E.object
         [ ( "type", E.string "set_muted" )
         , ( "muted", E.bool muted )
+        ]
+        |> E.encode 0
+
+
+encodeSetContinuous : Int -> Bool -> String
+encodeSetContinuous index value =
+    E.object
+        [ ( "type", E.string "set_continuous" )
+        , ( "index", E.int index )
+        , ( "value", E.bool value )
         ]
         |> E.encode 0
 

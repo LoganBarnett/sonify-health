@@ -18,6 +18,10 @@ fn default_cycle_secs() -> f64 {
   15.0
 }
 
+pub fn default_crossfade_ms() -> f64 {
+  6.0
+}
+
 /// A single note within a heartbeat, with its own transition,
 /// volume, and time offset from heartbeat start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,4 +71,10 @@ pub struct HeartbeatConfig {
   /// heartbeats to stagger their play times.
   #[serde(default)]
   pub cycle_offset_secs: f64,
+
+  /// Milliseconds over which `replace()` crossfades the old graph
+  /// into the new one.  Higher values let release envelopes and
+  /// echo tails ring out naturally during continuous playback.
+  #[serde(default = "default_crossfade_ms")]
+  pub crossfade_ms: f64,
 }

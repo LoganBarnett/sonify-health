@@ -12,7 +12,7 @@ pub struct ResolvedNote {
 }
 
 /// Maximum lowpass cutoff to avoid filter instability near Nyquist.
-const MAX_CUTOFF: f32 = 18000.0;
+pub const MAX_CUTOFF: f32 = 18000.0;
 
 /// Base gap between consecutive boops.  Actual gaps scale
 /// proportionally with the shorter of the two adjacent boops.
