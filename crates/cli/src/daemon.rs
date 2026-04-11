@@ -130,13 +130,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             play_continuous_tick(&play_running, &play_preview, &play_mix, i);
           }
           Playback::Loop => {
-            play_oneshot_once(
-              &play_running,
-              &play_preview,
-              &play_mix,
-              i,
-              false,
-            );
+            play_loop(&play_running, &play_preview, &play_mix, i);
           }
           Playback::Clock => {
             play_oneshot_once(&play_running, &play_preview, &play_mix, i, true);
@@ -286,6 +280,102 @@ fn play_continuous_tick(
   play_mix.remove(sid);
 }
 
+/// Loop playback: keep a persistent mixer slot and crossfade each
+/// iteration into the next via `replace()`.  Sleeps for the
+/// content duration (excluding release/echo tail) so the crossfade
+/// overlaps sustaining audio with the attack of the new graph.
+/// Returns when the daemon is shutting down or the playback mode
+/// changes away from `Loop`.
+fn play_loop(
+  running: &AtomicBool,
+  preview: &PreviewState,
+  play_mix: &MixerHandle,
+  i: usize,
+) {
+  let metric = preview.heartbeats[i].metric.value() as f64;
+  let note_configs = {
+    let cfg = &preview.heartbeat_configs.read().unwrap()[i];
+    cfg.notes.clone()
+  };
+  let lib = preview.library.read().unwrap();
+  let notes: Vec<ResolvedNote> = note_configs
+    .iter()
+    .filter_map(|nc| {
+      let patch = nc.transition.resolve(metric, &lib)?;
+      Some(ResolvedNote {
+        patch,
+        volume: nc.volume,
+        offset: nc.offset,
+      })
+    })
+    .collect();
+  drop(lib);
+
+  if notes.is_empty() {
+    thread::sleep(Duration::from_secs(1));
+    return;
+  }
+
+  preview.update_effective_volume(i);
+  let graph = heartbeat::heartbeat_graph_with_notes(
+    &notes,
+    Some(&preview.heartbeats[i].effective_volume),
+  );
+  let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
+  let sid = play_mix.add(graph);
+
+  sleep_checking(running, content_dur);
+
+  while running.load(Ordering::Relaxed) {
+    // Break out if the user switched away from loop mode.
+    if preview.heartbeat_configs.read().unwrap()[i].playback != Playback::Loop {
+      break;
+    }
+
+    // Check for manual trigger — break so the outer loop
+    // re-enters and fires immediately.
+    if preview.heartbeat_trigger.swap(false, Ordering::Relaxed) {
+      break;
+    }
+
+    let metric = preview.heartbeats[i].metric.value() as f64;
+    let (note_configs, crossfade_ms) = {
+      let cfg = &preview.heartbeat_configs.read().unwrap()[i];
+      (cfg.notes.clone(), cfg.crossfade_ms)
+    };
+    let lib = preview.library.read().unwrap();
+    let notes: Vec<ResolvedNote> = note_configs
+      .iter()
+      .filter_map(|nc| {
+        let patch = nc.transition.resolve(metric, &lib)?;
+        Some(ResolvedNote {
+          patch,
+          volume: nc.volume,
+          offset: nc.offset,
+        })
+      })
+      .collect();
+    drop(lib);
+
+    if notes.is_empty() {
+      break;
+    }
+
+    preview.update_effective_volume(i);
+    let graph = heartbeat::heartbeat_graph_with_notes(
+      &notes,
+      Some(&preview.heartbeats[i].effective_volume),
+    );
+    let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
+    let cf = ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
+    play_mix.replace(sid, graph, cf);
+
+    sleep_checking(running, content_dur);
+  }
+
+  play_mix.remove(sid);
+}
+
 /// One-shot playback: build and play a single heartbeat, then
 /// either wait for the wall-clock grid (`wait_for_clock = true`)
 /// or sleep briefly before looping (`wait_for_clock = false`).
@@ -297,9 +387,9 @@ fn play_oneshot_once(
   wait_for_clock: bool,
 ) {
   let metric = preview.heartbeats[i].metric.value() as f64;
-  let (note_configs, cycle_secs, cycle_offset, _crossfade_ms) = {
+  let (note_configs, cycle_secs, cycle_offset) = {
     let cfg = &preview.heartbeat_configs.read().unwrap()[i];
-    (cfg.notes.clone(), cfg.cycle_secs, cfg.cycle_offset_secs, cfg.crossfade_ms)
+    (cfg.notes.clone(), cfg.cycle_secs, cfg.cycle_offset_secs)
   };
   let lib = preview.library.read().unwrap();
   let notes: Vec<ResolvedNote> = note_configs

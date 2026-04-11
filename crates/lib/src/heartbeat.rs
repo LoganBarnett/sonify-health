@@ -112,6 +112,25 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
   Duration::from_secs_f64(max + 0.05)
 }
 
+/// Content-only duration of a multi-note heartbeat: the maximum
+/// across all notes of `offset + attack + duration`.  Excludes
+/// release tails, echo decay, and safety margin so that
+/// `replace()` fires while the last note is still sustaining,
+/// letting the crossfade overlap sound with sound.
+pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
+  if notes.is_empty() {
+    return Duration::ZERO;
+  }
+  let max = notes
+    .iter()
+    .map(|n| {
+      let attack = n.patch.attack_ms / 1000.0;
+      n.offset + attack + n.patch.duration
+    })
+    .fold(0.0f64, f64::max);
+  Duration::from_secs_f64(max)
+}
+
 /// Build a multi-note heartbeat audio graph.  Each note gets its
 /// own timing slot based on its offset.  Per-note volume scales
 /// the note's amplitude.  The optional external volume Shared

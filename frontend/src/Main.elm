@@ -1621,7 +1621,7 @@ viewHeartbeatCard model index hb =
         , div [ class "card-body" ]
             [ viewPlaybackCycler hb.playback (CyclePlayback index)
             , viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
-            , if hb.playback == "continuous" then
+            , if hb.playback == "continuous" || hb.playback == "loop" then
                 viewSlider "Crossfade ms" model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
 
               else
