@@ -11,7 +11,7 @@ use tokio_listener::ListenerAddress;
 /// Tracks which patches are overrides (derived from a base patch with
 /// a sparse delta) so the UI can display inherited vs overridden
 /// parameters and exports can emit the compact form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OverrideInfo {
   pub base: String,
   pub delta: HashMap<String, f64>,
@@ -532,6 +532,8 @@ mod tests {
   use super::*;
   use sonify_health_lib::heartbeat_config::Playback;
   use sonify_health_lib::probe::ResultMode;
+  use sonify_health_lib::transition::{DiscreteState, Transition};
+  use sonify_health_lib::NoteConfig;
 
   #[test]
   fn heartbeats_section_parses() {
@@ -932,5 +934,336 @@ mod tests {
 
     let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
     assert!((raw.heartbeats[0].crossfade_ms - 6.0).abs() < f64::EPSILON);
+  }
+
+  /// Load a TOML config, serialize via build_save_toml, reload, and
+  /// assert that every serializable field survives the round-trip.
+  fn assert_config_round_trip(toml_str: &str) {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), toml_str).unwrap();
+
+    let original = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(tmp.path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+
+    let saved = build_save_toml(
+      &original.library,
+      &original.overrides,
+      &original.heartbeats,
+      &original.slider_ranges,
+    )
+    .unwrap();
+
+    let tmp2 = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp2.path(), &saved).unwrap();
+
+    let reloaded = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(tmp2.path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+
+    // Compare user-defined patches (exclude builtins that weren't
+    // in the original config and thus aren't exported).
+    let user_patches: PatchLibrary = reloaded
+      .library
+      .iter()
+      .filter(|(name, _)| original.library.contains_key(*name))
+      .map(|(k, v)| (k.clone(), v.clone()))
+      .collect();
+    let orig_patches: PatchLibrary = original.library.clone();
+    assert_eq!(
+      orig_patches, user_patches,
+      "Patch library mismatch after round-trip.\nSaved TOML:\n{saved}"
+    );
+    assert_eq!(
+      original.overrides, reloaded.overrides,
+      "Overrides mismatch after round-trip.\nSaved TOML:\n{saved}"
+    );
+    assert_eq!(
+      original.heartbeats, reloaded.heartbeats,
+      "Heartbeats mismatch after round-trip.\nSaved TOML:\n{saved}"
+    );
+    assert_eq!(
+      original.slider_ranges, reloaded.slider_ranges,
+      "Slider ranges mismatch after round-trip.\nSaved TOML:\n{saved}"
+    );
+  }
+
+  #[test]
+  fn round_trip_discrete_transitions() {
+    assert_config_round_trip(
+      r#"
+        [patches.low-beep]
+        freq = 330.0
+        duration = 0.3
+
+        [patches.hi-alert]
+        freq = 880.0
+        duration = 0.2
+        saw_ratio = 2.0
+
+        [[heartbeats]]
+        name = "net"
+        command = "ping -c1 localhost"
+        result_mode = "exit-code-severity"
+        cycle_secs = 10
+        cycle_offset_secs = 2.5
+
+        [[heartbeats.notes]]
+        volume = 0.5
+
+        [heartbeats.notes.transition]
+        type = "discrete"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 0.5
+        patch = "low-beep"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 1.01
+        patch = "hi-alert"
+      "#,
+    );
+  }
+
+  #[test]
+  fn round_trip_gradient_transitions() {
+    assert_config_round_trip(
+      r#"
+        [patches.my-warm]
+        freq = 220.0
+        sine_ratio = 2.0
+        brightness = 0.5
+
+        [patches.my-sharp]
+        freq = 660.0
+        saw_ratio = 3.0
+        brightness = 1.5
+
+        [[heartbeats]]
+        name = "cpu"
+        command = "echo 0.5"
+        result_mode = "stdout"
+        playback = "loop"
+        crossfade_ms = 100.0
+
+        [[heartbeats.notes]]
+        volume = 0.6
+        offset = 0.1
+
+        [heartbeats.notes.transition]
+        type = "gradient"
+        patches = ["my-warm", "my-sharp"]
+
+        [[heartbeats.notes.transition.segments]]
+        strategy = "ease-in"
+        intensity = 3.0
+      "#,
+    );
+  }
+
+  #[test]
+  fn round_trip_multiple_heartbeats_and_overrides() {
+    assert_config_round_trip(
+      r#"
+        [patches.base-tone]
+        freq = 440.0
+        amplitude = 0.5
+        reverb_mix = 0.3
+
+        [patches.variant]
+        overrides = "base-tone"
+        freq = 550.0
+
+        [[heartbeats]]
+        name = "hb-one"
+        command = "echo 0"
+        result_mode = "exit-code-severity"
+        playback = "continuous"
+        poll_interval_secs = 5.0
+
+        [[heartbeats.notes]]
+        volume = 0.4
+
+        [heartbeats.notes.transition]
+        type = "discrete"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 1.01
+        patch = "base-tone"
+
+        [[heartbeats]]
+        name = "hb-two"
+        command = "exit 0"
+        result_mode = "exit-code-severity"
+        cycle_secs = 30
+
+        [[heartbeats.notes]]
+        volume = 0.3
+        offset = 0.2
+
+        [heartbeats.notes.transition]
+        type = "discrete"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 0.5
+        patch = "variant"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 1.01
+        patch = "alarm"
+
+        [[heartbeats.notes]]
+        volume = 0.2
+
+        [heartbeats.notes.transition]
+        type = "discrete"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 1.01
+        patch = "sine"
+      "#,
+    );
+  }
+
+  #[test]
+  fn round_trip_custom_slider_ranges() {
+    assert_config_round_trip(
+      r#"
+        [slider_ranges.master_volume]
+        min = 0.0
+        max = 3.0
+        step = 0.1
+
+        [slider_ranges.note_offset]
+        min = 0.0
+        max = 10.0
+        step = 0.5
+
+        [[heartbeats]]
+        name = "hb"
+        command = "echo 0"
+        result_mode = "stdout"
+
+        [[heartbeats.notes]]
+
+        [heartbeats.notes.transition]
+        type = "discrete"
+
+        [[heartbeats.notes.transition.states]]
+        threshold = 1.01
+        patch = "sine"
+      "#,
+    );
+  }
+
+  #[test]
+  fn round_trip_with_mutations() {
+    let toml_str = r#"
+      [patches.my-patch]
+      freq = 440.0
+      duration = 0.5
+
+      [[heartbeats]]
+      name = "test"
+      command = "echo 0"
+      result_mode = "exit-code-severity"
+
+      [[heartbeats.notes]]
+      volume = 0.4
+
+      [heartbeats.notes.transition]
+      type = "discrete"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "my-patch"
+    "#;
+
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), toml_str).unwrap();
+
+    let config = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(tmp.path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+
+    // Mutate: change patch params, note volume, add a note.
+    let mut library = config.library.clone();
+    library.get_mut("my-patch").unwrap().freq = 550.0;
+    library.get_mut("my-patch").unwrap().detune = 10.0;
+
+    let mut heartbeats = config.heartbeats.clone();
+    heartbeats[0].notes[0].volume = 0.8;
+    heartbeats[0].notes.push(NoteConfig {
+      transition: Transition::Discrete {
+        states: vec![DiscreteState {
+          threshold: 1.01,
+          patch: "sine".to_string(),
+        }],
+      },
+      volume: 0.2,
+      offset: 0.3,
+    });
+
+    let saved = build_save_toml(
+      &library,
+      &config.overrides,
+      &heartbeats,
+      &config.slider_ranges,
+    )
+    .unwrap();
+
+    let tmp2 = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp2.path(), &saved).unwrap();
+
+    let reloaded = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(tmp2.path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+
+    assert_eq!(reloaded.library["my-patch"].freq, 550.0);
+    assert_eq!(reloaded.library["my-patch"].detune, 10.0);
+    assert_eq!(reloaded.heartbeats[0].notes.len(), 2);
+    assert_eq!(reloaded.heartbeats[0].notes[0].volume, 0.8);
+    assert_eq!(reloaded.heartbeats[0].notes[1].volume, 0.2);
+    assert_eq!(reloaded.heartbeats[0].notes[1].offset, 0.3);
   }
 }

@@ -19,7 +19,7 @@ pub struct PatchParamMeta {
 /// They are stored in a `PatchLibrary` (built-in presets plus user
 /// overrides).  `Transition::resolve()` interpolates or selects
 /// patches based on a probe metric.
-#[derive(Debug, Clone, Serialize, Deserialize, PatchGenerate)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PatchGenerate)]
 #[serde(default)]
 pub struct Patch {
   #[patch_param(

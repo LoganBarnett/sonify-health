@@ -353,17 +353,23 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
     "export_config" => {
       let lib = preview.library.read().unwrap();
       let ovr = preview.overrides.read().unwrap();
-      let lib_json = serde_json::to_value(&*lib).unwrap_or_default();
-      let ovr_json = preview.overrides_json();
-      drop(ovr);
-      Some(
-        json!({
-          "type": "config_export",
-          "library": lib_json,
-          "overrides": ovr_json,
-        })
-        .to_string(),
-      )
+      let hb_configs = preview.heartbeat_configs.read().unwrap();
+      match build_save_toml(&lib, &ovr, &hb_configs, &preview.slider_ranges) {
+        Ok(toml_str) => Some(
+          json!({
+            "type": "config_export",
+            "toml": toml_str,
+          })
+          .to_string(),
+        ),
+        Err(e) => Some(
+          json!({
+            "type": "export_error",
+            "message": format!("{e}"),
+          })
+          .to_string(),
+        ),
+      }
     }
 
     "import_config" => {

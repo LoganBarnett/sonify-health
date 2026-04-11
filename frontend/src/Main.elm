@@ -65,7 +65,7 @@ type alias Model =
     , muted : Bool
     , masterVolume : Float
     , probeLog : List ProbeLogEntry
-    , exportData : Maybe (Dict String (Dict String Float))
+    , exportData : Maybe String
     , debounces : Dict String Int
     , nextDebounce : Int
     , importText : String
@@ -971,8 +971,8 @@ handleServerMsg msg model =
             , Cmd.none
             )
 
-        ConfigExport lib _ ->
-            ( { model | exportData = Just lib }, Cmd.none )
+        ConfigExport tomlText ->
+            ( { model | exportData = Just tomlText }, Cmd.none )
 
         ImportError err ->
             ( { model | importError = Just err }, Cmd.none )
@@ -2471,7 +2471,7 @@ viewExportModal model =
         Nothing ->
             text ""
 
-        Just lib ->
+        Just tomlText ->
             div [ class "modal-backdrop", onClick DismissExport ]
                 [ div
                     [ class "modal"
@@ -2480,30 +2480,11 @@ viewExportModal model =
                     ]
                     [ h2 [] [ text "Exported Configuration" ]
                     , pre [ class "export-pre" ]
-                        [ text (libraryToToml lib) ]
+                        [ text tomlText ]
                     , button [ class "btn", onClick DismissExport ]
                         [ text "Close" ]
                     ]
                 ]
-
-
-libraryToToml : Dict String (Dict String Float) -> String
-libraryToToml lib =
-    Dict.toList lib
-        |> List.map
-            (\( name, params ) ->
-                "[patches."
-                    ++ name
-                    ++ "]\n"
-                    ++ (Dict.toList params
-                            |> List.map
-                                (\( k, v ) ->
-                                    k ++ " = " ++ String.fromFloat v
-                                )
-                            |> String.join "\n"
-                       )
-            )
-        |> String.join "\n\n"
 
 
 

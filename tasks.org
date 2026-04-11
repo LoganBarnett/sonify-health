@@ -97,7 +97,7 @@ interpolated voice's =freq= at play time.  Remove
 =Voice= to something more accurate (=Patch=, =Tone=, =SoundGraph=, =Profile=,
 etc.) since it is really a synthesis recipe, not a vocal identity.
 
-* TODO Full config round-trip export with integration tests
+* IN-PROGRESS Full config round-trip export with integration tests
 Currently =export_config= only exports the =PatchLibrary= (patch
 definitions).  The full config — heartbeats, timing, notes, transitions,
 slider ranges, log level, etc. — is not included in the export.

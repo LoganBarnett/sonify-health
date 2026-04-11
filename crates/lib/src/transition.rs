@@ -12,7 +12,7 @@ fn default_step_intensity() -> f64 {
 
 /// Describes how to interpolate between two adjacent patches
 /// within a gradient transition segment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "strategy", rename_all = "kebab-case")]
 pub enum LerpStrategy {
   Linear {
@@ -73,7 +73,7 @@ impl LerpStrategy {
 }
 
 /// Describes how a probe metric (0.0–1.0) maps to patches.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Transition {
   /// Interpolate between adjacent keyframe patches.  Each segment
@@ -89,7 +89,7 @@ pub enum Transition {
 }
 
 /// A single threshold/patch pair in a discrete transition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscreteState {
   pub threshold: f64,
   pub patch: String,

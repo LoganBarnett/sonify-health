@@ -150,7 +150,7 @@ type ServerMsg
     | NoteTransitionChanged Int Int TransitionInfo
     | NotesChanged Int (List NoteInfo)
     | ProbeLog ProbeLogEntry
-    | ConfigExport (Dict String (Dict String Float)) (Dict String OverrideInfo)
+    | ConfigExport String
     | ImportError String
     | ConfigSaved
     | SaveError String
@@ -566,13 +566,7 @@ probeLogDecoder =
 
 configExportDecoder : D.Decoder ServerMsg
 configExportDecoder =
-    D.map2 ConfigExport
-        (D.field "library" libraryDecoder)
-        (D.oneOf
-            [ D.field "overrides" overridesDecoder
-            , D.succeed Dict.empty
-            ]
-        )
+    D.map ConfigExport (D.field "toml" D.string)
 
 
 importErrorDecoder : D.Decoder ServerMsg

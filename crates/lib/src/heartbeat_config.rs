@@ -35,7 +35,7 @@ pub fn default_crossfade_ms() -> f64 {
 
 /// A single note within a heartbeat, with its own transition,
 /// volume, and time offset from heartbeat start.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NoteConfig {
   pub transition: Transition,
 
@@ -48,7 +48,7 @@ pub struct NoteConfig {
 
 /// A heartbeat joins a probe command with one or more notes, each
 /// mapping the probe's metric to patches from the library.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatConfig {
   pub name: String,
