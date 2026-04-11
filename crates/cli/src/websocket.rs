@@ -272,7 +272,8 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
     }
 
     "trigger_heartbeat" => {
-      preview.heartbeat_trigger.store(true, Ordering::Relaxed);
+      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+      preview.trigger_immediate_play(index);
       None
     }
 

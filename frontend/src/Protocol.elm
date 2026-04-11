@@ -674,9 +674,12 @@ encodeClearOverride index =
         |> E.encode 0
 
 
-encodeTriggerHeartbeat : String
-encodeTriggerHeartbeat =
-    E.object [ ( "type", E.string "trigger_heartbeat" ) ]
+encodeTriggerHeartbeat : Int -> String
+encodeTriggerHeartbeat index =
+    E.object
+        [ ( "type", E.string "trigger_heartbeat" )
+        , ( "index", E.int index )
+        ]
         |> E.encode 0
 
 

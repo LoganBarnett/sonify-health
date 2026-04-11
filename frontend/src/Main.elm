@@ -108,7 +108,7 @@ type Msg
     | OverrideDebounce Int Int Float
     | ClearOverride Int
     | CyclePlayback Int
-    | TriggerHeartbeat
+    | TriggerHeartbeat Int
     | RevertAll
     | SelectPatch String
     | Export
@@ -636,8 +636,8 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        TriggerHeartbeat ->
-            ( model, Ports.websocketSend encodeTriggerHeartbeat )
+        TriggerHeartbeat index ->
+            ( model, Ports.websocketSend (encodeTriggerHeartbeat index) )
 
         RevertAll ->
             ( model, Ports.websocketSend encodeRevertAll )
@@ -1550,8 +1550,6 @@ viewToolbar model =
                 )
             ]
         , viewSlider model "slider:Master" "Master" (Just "Global volume multiplier applied to all heartbeats.") model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
-        , button [ class "btn", onClick TriggerHeartbeat ]
-            [ text "Trigger" ]
         , button [ class "btn", onClick RevertAll ]
             [ text "Revert" ]
         , button
@@ -1717,6 +1715,8 @@ viewHeartbeatCard model index hb =
             ]
         , div [ class "card-body" ]
             [ viewPlaybackCycler hb.playback (CyclePlayback index)
+            , button [ class "btn btn-sm", onClick (TriggerHeartbeat index) ]
+                [ text "Trigger" ]
             , viewSlider model ("slider:Offset:" ++ String.fromInt index) "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
             , if hb.playback == "continuous" || hb.playback == "loop" then
                 viewSlider model ("slider:CrossfadeMs:" ++ String.fromInt index) "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)

@@ -2,13 +2,17 @@ use crate::config::{OverrideInfo, SliderRanges};
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use serde_json::json;
-use sonify_health_lib::{HeartbeatConfig, Patch, PatchLibrary};
+use sonify_health_lib::{
+  audio::MixerHandle, heartbeat, HeartbeatConfig, Patch, PatchLibrary,
+  ResolvedNote,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
   Arc, RwLock,
 };
+use std::thread;
 use tokio::sync::broadcast;
 
 /// Per-heartbeat runtime state.
@@ -32,7 +36,7 @@ pub struct PreviewState {
   pub heartbeats: Vec<HeartbeatState>,
   pub muted: Arc<AtomicBool>,
   pub master_volume: Shared,
-  pub heartbeat_trigger: AtomicBool,
+  pub mixer_handle: RwLock<Option<MixerHandle>>,
   pub slider_ranges: SliderRanges,
   pub config_path: Option<PathBuf>,
   pub config_writable: bool,
@@ -75,7 +79,7 @@ impl PreviewState {
       config_path,
       config_writable,
       master_volume: shared(1.0),
-      heartbeat_trigger: AtomicBool::new(false),
+      mixer_handle: RwLock::new(None),
       broadcast_tx,
       probe_log_tx,
     }
@@ -115,6 +119,61 @@ impl PreviewState {
     }
     self.master_volume.set_value(1.0);
     self.update_all_effective_volumes();
+  }
+
+  /// Store the mixer handle so trigger_immediate_play can use it.
+  pub fn set_mixer_handle(&self, handle: MixerHandle) {
+    *self.mixer_handle.write().unwrap() = Some(handle);
+  }
+
+  /// Play heartbeat `index` immediately as a one-shot sound.
+  /// Spawns a fire-and-forget thread that removes the mixer slot
+  /// after the sound finishes.
+  pub fn trigger_immediate_play(&self, index: usize) {
+    let handle = match self.mixer_handle.read().unwrap().clone() {
+      Some(h) => h,
+      None => return,
+    };
+
+    let notes = self.resolve_notes(index);
+    if notes.is_empty() {
+      return;
+    }
+
+    self.update_effective_volume(index);
+    let graph = heartbeat::heartbeat_graph_with_notes(
+      &notes,
+      Some(&self.heartbeats[index].effective_volume),
+    );
+    let dur = heartbeat::heartbeat_notes_duration(&notes);
+
+    let sid = handle.add(graph);
+    thread::spawn(move || {
+      thread::sleep(dur);
+      handle.remove(sid);
+    });
+  }
+
+  /// Resolve all notes for heartbeat `index` from the current
+  /// metric and transition config.
+  fn resolve_notes(&self, index: usize) -> Vec<ResolvedNote> {
+    let metric = self.heartbeats[index].metric.value() as f64;
+    let note_configs = {
+      let cfg = &self.heartbeat_configs.read().unwrap()[index];
+      cfg.notes.clone()
+    };
+    let lib = self.library.read().unwrap();
+    note_configs
+      .iter()
+      .filter_map(|nc| {
+        let patch = nc.transition.resolve(metric, &lib)?;
+        Some(ResolvedNote {
+          patch,
+          volume: nc.volume,
+          offset: nc.offset,
+        })
+      })
+      .collect()
   }
 
   /// Build a full state snapshot JSON string for WebSocket clients.

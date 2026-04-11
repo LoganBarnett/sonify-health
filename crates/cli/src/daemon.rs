@@ -43,6 +43,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   } = ctx;
 
   let mixer = AudioMixer::new(audio_device)?;
+  preview.set_mixer_handle(mixer.handle());
 
   let mut handles = Vec::new();
 
@@ -174,7 +175,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
   info!(heartbeats = hb_configs.len(), "Daemon started");
 
-  // Main loop: handle mute transitions and global triggers.
+  // Main loop: handle mute transitions.
   let mut was_muted = muted.load(Ordering::Relaxed);
   while running.load(Ordering::Relaxed) {
     let is_muted = muted.load(Ordering::Relaxed);
@@ -186,11 +187,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       }
       preview.update_all_effective_volumes();
       was_muted = is_muted;
-    }
-
-    // Global heartbeat trigger: wake all one-shot heartbeats.
-    if preview.heartbeat_trigger.load(Ordering::Relaxed) {
-      // The per-heartbeat play threads will pick this up.
     }
 
     thread::sleep(Duration::from_millis(100));
@@ -391,10 +387,6 @@ fn play_loop(
       break;
     }
 
-    if preview.heartbeat_trigger.swap(false, Ordering::Relaxed) {
-      break;
-    }
-
     let crossfade_ms = {
       let cfg = &preview.heartbeat_configs.read().unwrap()[i];
       cfg.crossfade_ms
@@ -454,10 +446,6 @@ fn play_oneshot_once(
   counter.inc();
 
   if !running.load(Ordering::Relaxed) {
-    return;
-  }
-
-  if preview.heartbeat_trigger.swap(false, Ordering::Relaxed) {
     return;
   }
 

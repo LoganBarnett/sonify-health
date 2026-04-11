@@ -314,7 +314,7 @@ meta.description~, add click-to-expand).
 
 Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~
 
-* TODO Per-heartbeat trigger that plays immediately
+* DONE Per-heartbeat trigger that plays immediately
 Replace the global ~heartbeat_trigger: AtomicBool~ with a
 ~mixer_handle: RwLock<Option<MixerHandle>>~ on ~PreviewState~.
 Add ~trigger_immediate_play(&self, index)~ that resolves notes,
