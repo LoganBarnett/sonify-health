@@ -1,4 +1,4 @@
-use prometheus::{IntCounterVec, IntGauge, Opts, Registry};
+use prometheus::{GaugeVec, IntCounterVec, IntGauge, Opts, Registry};
 use std::sync::Arc;
 
 /// Holds all Prometheus collectors for the daemon, registered
@@ -9,6 +9,7 @@ pub struct Metrics {
   pub registry: Arc<Registry>,
   pub heartbeats_played: IntCounterVec,
   pub probes_completed: IntCounterVec,
+  pub probe_value: GaugeVec,
   pub muted: IntGauge,
 }
 
@@ -41,6 +42,15 @@ impl Metrics {
     )
     .expect("Failed to create probes_completed counter");
 
+    let probe_value = GaugeVec::new(
+      Opts::new(
+        "sonify_health_probe_value",
+        "Most recent probe metric value per heartbeat (0.0–1.0).",
+      ),
+      &["heartbeat"],
+    )
+    .expect("Failed to create probe_value gauge");
+
     let muted = IntGauge::new(
       "sonify_health_muted",
       "Whether audio output is currently muted (1=muted, 0=unmuted).",
@@ -54,6 +64,9 @@ impl Metrics {
       .register(Box::new(probes_completed.clone()))
       .expect("Failed to register probes_completed");
     registry
+      .register(Box::new(probe_value.clone()))
+      .expect("Failed to register probe_value");
+    registry
       .register(Box::new(muted.clone()))
       .expect("Failed to register muted");
 
@@ -61,6 +74,7 @@ impl Metrics {
       registry: Arc::new(registry),
       heartbeats_played,
       probes_completed,
+      probe_value,
       muted,
     }
   }

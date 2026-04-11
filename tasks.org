@@ -55,7 +55,7 @@ Added six new voice parameters for gritty/textured sound:
 Also: rich sub-oscillator (weighted waveform mix instead of pure sine),
 moog ladder filter replacing lowpass.
 
-* TODO Connect Prometheus metrics to daemon heartbeat threads
+* DONE Connect Prometheus metrics to daemon heartbeat threads
 Wire up the =Metrics= struct to the daemon's per-heartbeat poll and play
 threads.  Currently only =muted= is updated; the =heartbeats_played=
 counter is registered but never incremented.  Add per-heartbeat probe
@@ -67,7 +67,7 @@ time a heartbeat sound is played.
    Increment in play threads after each heartbeat plays.
 ** DONE Add =probes_completed= =IntCounterVec= labeled by heartbeat name
    Increment in poll threads after each successful probe.
-** TODO Add =probe_value= =GaugeVec= labeled by heartbeat name
+** DONE Add =probe_value= =GaugeVec= labeled by heartbeat name
    Set to current metric value in poll threads after each probe.
 
 * TODO Voice-level detune
