@@ -279,7 +279,7 @@ Continuous start playing immediately on daemon startup.
 
 Files: ~crates/cli/src/daemon.rs~
 
-* TODO Make override slider and playback cycler optimistic
+* DONE Make override slider and playback cycler optimistic
 The override slider (~OverrideHeartbeat~) sends to the server
 without updating local state — the UI waits for ~override_changed~
 to move the slider, causing visible lag.  Change to the same

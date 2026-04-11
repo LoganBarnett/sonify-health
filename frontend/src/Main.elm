@@ -103,6 +103,7 @@ type Msg
     | AddNote Int
     | RemoveNote Int Int
     | OverrideHeartbeat Int String
+    | OverrideDebounce Int Int Float
     | ClearOverride Int
     | CyclePlayback Int
     | TriggerHeartbeat
@@ -561,12 +562,35 @@ update msg model =
         OverrideHeartbeat index rawVal ->
             case String.toFloat rawVal of
                 Just val ->
-                    ( model
-                    , Ports.websocketSend (encodeOverrideHeartbeat index val)
-                    )
+                    let
+                        key =
+                            "override:" ++ String.fromInt index
+
+                        updated =
+                            { model
+                                | heartbeats =
+                                    updateAt index
+                                        (\hb -> { hb | metric = val, overridden = True })
+                                        model.heartbeats
+                            }
+                    in
+                    debounce key val updated (OverrideDebounce index)
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        OverrideDebounce index id val ->
+            let
+                key =
+                    "override:" ++ String.fromInt index
+            in
+            if isCurrentDebounce key id model then
+                ( model
+                , Ports.websocketSend (encodeOverrideHeartbeat index val)
+                )
+
+            else
+                ( model, Cmd.none )
 
         ClearOverride index ->
             ( model
@@ -592,9 +616,17 @@ update msg model =
             in
             case hb of
                 Just h ->
-                    ( model
-                    , Ports.websocketSend
-                        (encodeSetPlayback index (nextMode h.playback))
+                    let
+                        next =
+                            nextMode h.playback
+                    in
+                    ( { model
+                        | heartbeats =
+                            updateAt index
+                                (\hbi -> { hbi | playback = next })
+                                model.heartbeats
+                      }
+                    , Ports.websocketSend (encodeSetPlayback index next)
                     )
 
                 Nothing ->
@@ -810,11 +842,17 @@ handleServerMsg msg model =
             , Cmd.none
             )
 
-        OverrideChanged index _ overridden ->
+        OverrideChanged index maybeValue overridden ->
             ( { model
                 | heartbeats =
                     updateAt index
-                        (\hb -> { hb | overridden = overridden })
+                        (\hb ->
+                            { hb
+                                | overridden = overridden
+                                , metric =
+                                    Maybe.withDefault hb.metric maybeValue
+                            }
+                        )
                         model.heartbeats
               }
             , Cmd.none
