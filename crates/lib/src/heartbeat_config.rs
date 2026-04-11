@@ -109,6 +109,39 @@ pub struct HeartbeatConfig {
 }
 
 impl HeartbeatConfig {
+  /// Build a HeartbeatConfig with the given fields and sensible
+  /// defaults for legacy/internal fields.
+  pub fn new(
+    name: String,
+    command: String,
+    result_mode: ResultMode,
+    notes: Vec<NoteConfig>,
+    playback: Playback,
+    phrase_gap: f64,
+    repeat_rate: f64,
+    poll_interval_secs: f64,
+    cycle_secs: f64,
+    cycle_offset_secs: f64,
+    crossfade_ms: f64,
+    tiers: Vec<TierConfig>,
+  ) -> Self {
+    Self {
+      name,
+      command,
+      result_mode,
+      notes,
+      playback,
+      continuous: false,
+      phrase_gap,
+      repeat_rate,
+      poll_interval_secs,
+      cycle_secs,
+      cycle_offset_secs,
+      crossfade_ms,
+      tiers,
+    }
+  }
+
   /// Upgrade the legacy `continuous = true` field to
   /// `Playback::Continuous` when no explicit `playback` was set.
   pub fn resolve_legacy_continuous(&mut self) {

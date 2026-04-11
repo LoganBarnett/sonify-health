@@ -223,14 +223,18 @@ modal inside a modal trends to 1.  They block the UI — which may
 contain information relevant to the decision at hand — and they are
 an accessibility nightmare.  Powerful UIs do not use modals.
 
-* TODO Allow creating new patches from the UI
+* DONE Allow creating new patches from the UI
+Already implemented: backend =create_patch= handler, frontend
+=CreatePatch= message, =encodeCreatePatch= encoder, and "+" button
+in the patch list.  New patches persist in the runtime library and
+round-trip through export/save.
 Add a control (button or similar) in the patch library section that
 lets the user create a new patch.  The user should be able to name
 it and then edit its parameters with the existing patch editor.
 The new patch must persist in the runtime library and round-trip
 through export/save.
 
-* TODO Allow creating new heartbeats from the UI
+* DONE Allow creating new heartbeats from the UI
 Add a control in the heartbeats section that lets the user create a
 new heartbeat.  It should start probing immediately with a dummy
 command (=echo 0= / =exit 0=) so it always returns a value.  Use a

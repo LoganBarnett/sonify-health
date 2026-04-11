@@ -1,4 +1,5 @@
 use crate::config::{OverrideInfo, SliderRanges};
+use crate::metrics::Metrics;
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use serde_json::json;
@@ -33,8 +34,10 @@ pub struct PreviewState {
   original_overrides: HashMap<String, OverrideInfo>,
   pub heartbeat_configs: RwLock<Vec<HeartbeatConfig>>,
   original_heartbeat_configs: Vec<HeartbeatConfig>,
-  pub heartbeats: Vec<HeartbeatState>,
+  pub heartbeats: RwLock<Vec<HeartbeatState>>,
+  pub running: Arc<AtomicBool>,
   pub muted: Arc<AtomicBool>,
+  pub metrics: Metrics,
   pub master_volume: Shared,
   pub mixer_handle: RwLock<Option<MixerHandle>>,
   pub slider_ranges: SliderRanges,
@@ -50,6 +53,8 @@ impl PreviewState {
     overrides: HashMap<String, OverrideInfo>,
     heartbeat_configs: Vec<HeartbeatConfig>,
     muted: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+    metrics: Metrics,
     slider_ranges: SliderRanges,
     config_path: Option<PathBuf>,
     config_writable: bool,
@@ -73,8 +78,10 @@ impl PreviewState {
       overrides: RwLock::new(overrides),
       original_heartbeat_configs: heartbeat_configs.clone(),
       heartbeat_configs: RwLock::new(heartbeat_configs),
-      heartbeats,
+      heartbeats: RwLock::new(heartbeats),
+      running,
       muted,
+      metrics,
       slider_ranges,
       config_path,
       config_writable,
@@ -89,7 +96,8 @@ impl PreviewState {
   /// mute and master volume.  Volume is now master * mute only;
   /// per-note volume is baked into the audio graph.
   pub fn update_effective_volume(&self, index: usize) {
-    if let Some(hb) = self.heartbeats.get(index) {
+    let hbs = self.heartbeats.read().unwrap();
+    if let Some(hb) = hbs.get(index) {
       let mute_factor = if self.muted.load(Ordering::Relaxed) {
         0.0
       } else {
@@ -102,8 +110,15 @@ impl PreviewState {
 
   /// Update effective volumes for all heartbeats.
   pub fn update_all_effective_volumes(&self) {
-    for i in 0..self.heartbeats.len() {
-      self.update_effective_volume(i);
+    let hbs = self.heartbeats.read().unwrap();
+    let mute_factor = if self.muted.load(Ordering::Relaxed) {
+      0.0
+    } else {
+      1.0
+    };
+    let vol = self.master_volume.value() * mute_factor;
+    for hb in hbs.iter() {
+      hb.effective_volume.set_value(vol);
     }
   }
 
@@ -114,9 +129,11 @@ impl PreviewState {
     *self.overrides.write().unwrap() = self.original_overrides.clone();
     *self.heartbeat_configs.write().unwrap() =
       self.original_heartbeat_configs.clone();
-    for hb in &self.heartbeats {
+    let hbs = self.heartbeats.read().unwrap();
+    for hb in hbs.iter() {
       *hb.override_value.write().unwrap() = None;
     }
+    drop(hbs);
     self.master_volume.set_value(1.0);
     self.update_all_effective_volumes();
   }
@@ -141,10 +158,14 @@ impl PreviewState {
     }
 
     self.update_effective_volume(index);
-    let graph = heartbeat::heartbeat_graph_with_notes(
-      &notes,
-      Some(&self.heartbeats[index].effective_volume),
-    );
+    let eff_vol = {
+      let hbs = self.heartbeats.read().unwrap();
+      match hbs.get(index) {
+        Some(hb) => hb.effective_volume.clone(),
+        None => return,
+      }
+    };
+    let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
     let sid = handle.add(graph);
@@ -183,10 +204,35 @@ impl PreviewState {
     });
   }
 
+  /// Add a new heartbeat at runtime.  Returns the index.
+  pub fn add_heartbeat(&self, cfg: HeartbeatConfig) -> usize {
+    let mut configs = self.heartbeat_configs.write().unwrap();
+    configs.push(cfg);
+    let index = configs.len() - 1;
+    drop(configs);
+
+    let mut hbs = self.heartbeats.write().unwrap();
+    hbs.push(HeartbeatState {
+      metric: shared(0.0),
+      override_value: RwLock::new(None),
+      effective_volume: shared(1.0),
+    });
+    drop(hbs);
+
+    self.update_effective_volume(index);
+    index
+  }
+
   /// Resolve all notes for heartbeat `index` from the current
   /// metric and transition config.
   fn resolve_notes(&self, index: usize) -> Vec<ResolvedNote> {
-    let metric = self.heartbeats[index].metric.value() as f64;
+    let metric = {
+      let hbs = self.heartbeats.read().unwrap();
+      match hbs.get(index) {
+        Some(hb) => hb.metric.value() as f64,
+        None => return vec![],
+      }
+    };
     let note_configs = {
       let cfg = &self.heartbeat_configs.read().unwrap()[index];
       cfg.notes.clone()
@@ -229,11 +275,12 @@ impl PreviewState {
       .collect();
 
     let hb_configs = self.heartbeat_configs.read().unwrap();
+    let hbs = self.heartbeats.read().unwrap();
     let heartbeats_json: Vec<_> = hb_configs
       .iter()
       .enumerate()
       .map(|(i, cfg)| {
-        let hb = &self.heartbeats[i];
+        let hb = &hbs[i];
         let overridden = hb.override_value.read().unwrap().is_some();
         let notes_json: Vec<_> = cfg
           .notes

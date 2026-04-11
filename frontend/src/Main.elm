@@ -123,6 +123,7 @@ type Msg
     | SetHeartbeatSlider HeartbeatSlider Int String
     | HeartbeatSliderDebounce HeartbeatSlider Int Int Float
     | CreatePatch
+    | CreateHeartbeat
     | CreateOverride String
     | StartRename String
     | SetRenameInput String
@@ -739,6 +740,25 @@ update msg model =
             , Ports.websocketSend (encodeCreatePatch name)
             )
 
+        CreateHeartbeat ->
+            let
+                names =
+                    List.map .name model.heartbeats
+
+                candidate =
+                    "new-heartbeat"
+
+                name =
+                    if List.member candidate names then
+                        findUniqueHeartbeatName candidate 2 names
+
+                    else
+                        candidate
+            in
+            ( model
+            , Ports.websocketSend (encodeCreateHeartbeat name)
+            )
+
         CreateOverride base ->
             let
                 candidate =
@@ -1320,6 +1340,19 @@ findUniqueName base n library =
     in
     if Dict.member candidate library then
         findUniqueName base (n + 1) library
+
+    else
+        candidate
+
+
+findUniqueHeartbeatName : String -> Int -> List String -> String
+findUniqueHeartbeatName base n names =
+    let
+        candidate =
+            base ++ "-" ++ String.fromInt n
+    in
+    if List.member candidate names then
+        findUniqueHeartbeatName base (n + 1) names
 
     else
         candidate
@@ -1953,6 +1986,9 @@ viewHeartbeats model =
     div [ class "section" ]
         (h2 [] [ text "Heartbeats" ]
             :: List.indexedMap (viewHeartbeatCard model) model.heartbeats
+            ++ [ button [ class "btn btn-add", onClick CreateHeartbeat ]
+                    [ text "+ Add Heartbeat" ]
+               ]
         )
 
 

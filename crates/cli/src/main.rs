@@ -1,14 +1,11 @@
-mod auth;
-mod config;
-mod daemon;
 mod logging;
-mod metrics;
 mod patch_args;
-mod preview_state;
 mod print;
 mod systemd;
-mod web_base;
-mod websocket;
+
+use sonify_health_cli::{
+  auth, config, daemon, metrics, preview_state, web_base,
+};
 
 use axum::{middleware, routing::get, Router};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -288,6 +285,8 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     config.overrides.clone(),
     config.heartbeats.clone(),
     Arc::clone(&muted),
+    Arc::clone(&running),
+    metrics.clone(),
     config.slider_ranges.clone(),
     config.config_path.clone(),
     config_writable,
@@ -371,16 +370,11 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
 
   // Spawn the blocking daemon loop in a separate thread.
   let audio_device = config.audio_device.clone();
-  let daemon_muted = Arc::clone(&muted);
-  let daemon_running = Arc::clone(&running);
   let daemon_preview = Arc::clone(&preview);
   let daemon_handle = tokio::task::spawn_blocking(move || {
     daemon::run_daemon(daemon::DaemonContext {
       audio_device: audio_device.as_deref(),
-      muted: daemon_muted,
-      running: daemon_running,
       preview: daemon_preview,
-      metrics: metrics.clone(),
     })
   });
 

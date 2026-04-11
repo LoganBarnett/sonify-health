@@ -9,8 +9,12 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::heartbeat_config::default_volume;
-use sonify_health_lib::{NoteConfig, Patch, Transition};
+use sonify_health_lib::heartbeat_config::{
+  default_crossfade_ms, default_volume,
+};
+use sonify_health_lib::{
+  HeartbeatConfig, NoteConfig, Patch, Playback, Transition,
+};
 use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::broadcast;
@@ -90,7 +94,10 @@ async fn handle_socket(socket: WebSocket, preview: Arc<PreviewState>) {
   tracing::debug!("WebSocket client disconnected");
 }
 
-fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
+fn handle_client_message(
+  preview: &Arc<PreviewState>,
+  text: &str,
+) -> Option<String> {
   let msg: serde_json::Value = serde_json::from_str(text).ok()?;
   let msg_type = msg.get("type").and_then(|v| v.as_str())?;
 
@@ -261,9 +268,12 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let value = msg.get("value").and_then(|v| v.as_f64())? as f32;
       let clamped = value.clamp(0.0, 1.0);
-      let hb = preview.heartbeats.get(index)?;
-      *hb.override_value.write().unwrap() = Some(clamped);
-      hb.metric.set_value(clamped);
+      {
+        let hbs = preview.heartbeats.read().unwrap();
+        let hb = hbs.get(index)?;
+        *hb.override_value.write().unwrap() = Some(clamped);
+        hb.metric.set_value(clamped);
+      }
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "override_changed",
@@ -278,8 +288,11 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     "clear_override" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let hb = preview.heartbeats.get(index)?;
-      *hb.override_value.write().unwrap() = None;
+      {
+        let hbs = preview.heartbeats.read().unwrap();
+        let hb = hbs.get(index)?;
+        *hb.override_value.write().unwrap() = None;
+      }
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "override_changed",
@@ -720,6 +733,60 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
           .to_string(),
         ),
       }
+    }
+
+    "create_heartbeat" => {
+      let name = msg.get("name").and_then(|v| v.as_str())?;
+      let first_patch = {
+        let lib = preview.library.read().unwrap();
+        lib
+          .keys()
+          .next()
+          .cloned()
+          .unwrap_or_else(|| "sine".to_string())
+      };
+      let alarm_patch = {
+        let lib = preview.library.read().unwrap();
+        if lib.contains_key("alarm") {
+          "alarm".to_string()
+        } else {
+          first_patch.clone()
+        }
+      };
+      let cfg = HeartbeatConfig::new(
+        name.to_string(),
+        "echo 0".to_string(),
+        sonify_health_lib::probe::ResultMode::ExitCode,
+        vec![NoteConfig {
+          transition: Transition::Discrete {
+            states: vec![
+              sonify_health_lib::transition::DiscreteState {
+                threshold: 0.5,
+                patch: first_patch,
+              },
+              sonify_health_lib::transition::DiscreteState {
+                threshold: 1.01,
+                patch: alarm_patch,
+              },
+            ],
+          },
+          volume: default_volume(),
+          offset: 0.0,
+        }],
+        Playback::default(),
+        0.0,
+        1.0,
+        10.0,
+        15.0,
+        0.0,
+        default_crossfade_ms(),
+        vec![],
+      );
+      let index = preview.add_heartbeat(cfg);
+      crate::daemon::spawn_heartbeat_threads(preview, index);
+      let snapshot = preview.state_snapshot();
+      let _ = preview.broadcast_tx.send(snapshot);
+      None
     }
 
     _ => None,

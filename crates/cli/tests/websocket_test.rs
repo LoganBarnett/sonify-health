@@ -20,11 +20,14 @@ async fn start_test_server() -> (SocketAddr, Arc<PreviewState>) {
   let heartbeats = vec![sonify_health_lib::HeartbeatConfig::test_default()];
   let muted = Arc::new(AtomicBool::new(false));
 
+  let running = Arc::new(AtomicBool::new(true));
   let preview = Arc::new(PreviewState::new(
     library,
     HashMap::new(),
     heartbeats,
     muted.clone(),
+    running,
+    Metrics::new(),
     SliderRanges::default(),
     None,
     false,

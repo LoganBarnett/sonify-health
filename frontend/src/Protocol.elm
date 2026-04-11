@@ -15,6 +15,7 @@ module Protocol exposing
     , decodeServerMsg
     , encodeAddNote
     , encodeClearOverride
+    , encodeCreateHeartbeat
     , encodeCreateOverride
     , encodeCreatePatch
     , encodeExportConfig
@@ -919,6 +920,15 @@ encodeCreatePatch : String -> String
 encodeCreatePatch name =
     E.object
         [ ( "type", E.string "create_patch" )
+        , ( "name", E.string name )
+        ]
+        |> E.encode 0
+
+
+encodeCreateHeartbeat : String -> String
+encodeCreateHeartbeat name =
+    E.object
+        [ ( "type", E.string "create_heartbeat" )
         , ( "name", E.string name )
         ]
         |> E.encode 0
