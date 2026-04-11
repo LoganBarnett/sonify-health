@@ -332,7 +332,7 @@ Files: ~crates/cli/src/preview_state.rs~,
 ~crates/cli/src/daemon.rs~, ~crates/cli/src/websocket.rs~,
 ~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~
 
-* TODO Play-on-change checkbox for patches
+* DONE Play-on-change checkbox for patches
 Add an ephemeral (not persisted) "Play on change" checkbox per
 patch.  When checked, any parameter change triggers a one-shot play
 of that patch.

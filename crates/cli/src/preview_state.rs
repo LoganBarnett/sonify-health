@@ -154,6 +154,35 @@ impl PreviewState {
     });
   }
 
+  /// Play a named patch immediately as a one-shot sound.
+  /// Spawns a fire-and-forget thread that removes the mixer slot
+  /// after the sound finishes.
+  pub fn play_patch_immediate(&self, name: &str) {
+    let handle = match self.mixer_handle.read().unwrap().clone() {
+      Some(h) => h,
+      None => return,
+    };
+
+    let patch = match self.library.read().unwrap().get(name).cloned() {
+      Some(p) => p,
+      None => return,
+    };
+
+    let notes = [ResolvedNote {
+      patch,
+      volume: 1.0,
+      offset: 0.0,
+    }];
+    let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
+    let dur = heartbeat::heartbeat_notes_duration(&notes);
+
+    let sid = handle.add(graph);
+    thread::spawn(move || {
+      thread::sleep(dur);
+      handle.remove(sid);
+    });
+  }
+
   /// Resolve all notes for heartbeat `index` from the current
   /// metric and transition config.
   fn resolve_notes(&self, index: usize) -> Vec<ResolvedNote> {

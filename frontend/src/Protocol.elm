@@ -23,6 +23,7 @@ module Protocol exposing
     , encodeLerpStrategy
     , encodeNoteSlider
     , encodeOverrideHeartbeat
+    , encodePlayPatch
     , encodeRemoveNote
     , encodeRenamePatch
     , encodeResetOverrideParam
@@ -852,5 +853,14 @@ encodeResetOverrideParam patchName param =
         [ ( "type", E.string "reset_override_param" )
         , ( "patch_name", E.string patchName )
         , ( "param", E.string param )
+        ]
+        |> E.encode 0
+
+
+encodePlayPatch : String -> String
+encodePlayPatch patchName =
+    E.object
+        [ ( "type", E.string "play_patch" )
+        , ( "patch_name", E.string patchName )
         ]
         |> E.encode 0

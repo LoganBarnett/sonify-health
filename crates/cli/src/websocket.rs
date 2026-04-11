@@ -277,6 +277,12 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
+    "play_patch" => {
+      let name = msg.get("patch_name").and_then(|v| v.as_str())?;
+      preview.play_patch_immediate(name);
+      None
+    }
+
     "set_muted" => {
       let muted = msg.get("muted").and_then(|v| v.as_bool())?;
       preview.muted.store(muted, Ordering::Relaxed);

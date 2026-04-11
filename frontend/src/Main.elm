@@ -78,6 +78,7 @@ type alias Model =
     , configPath : Maybe String
     , saveStatus : Maybe String
     , expandedDescriptions : Set String
+    , playOnChange : Set String
     }
 
 
@@ -128,6 +129,7 @@ type Msg
     | DismissSaveStatus
     | DismissProtocolError
     | ToggleDescription String
+    | TogglePlayOnChange String
     | NoOp
 
 
@@ -175,6 +177,7 @@ init _ url key =
       , configPath = Nothing
       , saveStatus = Nothing
       , expandedDescriptions = Set.empty
+      , playOnChange = Set.empty
       }
     , cmdForRoute route
     )
@@ -317,8 +320,15 @@ update msg model =
             in
             if isCurrentDebounce key id model then
                 ( model
-                , Ports.websocketSend
-                    (encodeSetPatchParam patchName param val)
+                , Cmd.batch
+                    [ Ports.websocketSend
+                        (encodeSetPatchParam patchName param val)
+                    , if Set.member patchName model.playOnChange then
+                        Ports.websocketSend (encodePlayPatch patchName)
+
+                      else
+                        Cmd.none
+                    ]
                 )
 
             else
@@ -790,6 +800,18 @@ update msg model =
 
                     else
                         Set.insert key model.expandedDescriptions
+              }
+            , Cmd.none
+            )
+
+        TogglePlayOnChange patchName ->
+            ( { model
+                | playOnChange =
+                    if Set.member patchName model.playOnChange then
+                        Set.remove patchName model.playOnChange
+
+                    else
+                        Set.insert patchName model.playOnChange
               }
             , Cmd.none
             )
@@ -2310,6 +2332,15 @@ viewPatchEditor model =
                     div [ class "section patch-editor" ]
                         [ h2 [] [ text patchName ]
                         , headerExtra
+                        , label [ class "play-on-change" ]
+                            [ input
+                                [ type_ "checkbox"
+                                , Html.Attributes.checked (Set.member patchName model.playOnChange)
+                                , onClick (TogglePlayOnChange patchName)
+                                ]
+                                []
+                            , text " Play on change"
+                            ]
                         , div [ class "param-grid" ]
                             (List.map
                                 (viewParamSlider model patchName patchValues maybeOverride)
