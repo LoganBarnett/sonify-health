@@ -116,6 +116,7 @@ pub struct SliderRanges {
   pub segment_intensity: SliderRange,
   pub discrete_threshold: SliderRange,
   pub step_position: SliderRange,
+  pub crossfade_ms: SliderRange,
 }
 
 impl Default for SliderRanges {
@@ -160,6 +161,11 @@ impl Default for SliderRanges {
         min: 0.0,
         max: 1.0,
         step: 0.01,
+      },
+      crossfade_ms: SliderRange {
+        min: 0.0,
+        max: 500.0,
+        step: 1.0,
       },
     }
   }
@@ -822,5 +828,52 @@ mod tests {
     assert!(writable_flag, "Should be writable");
 
     std::fs::remove_file(&tmp).ok();
+  }
+
+  #[test]
+  fn crossfade_ms_parses_from_toml() {
+    let toml_str = r#"
+      [[heartbeats]]
+      name = "hb"
+      command = "echo 0"
+      result_mode = "stdout"
+      crossfade_ms = 200.0
+
+      [[heartbeats.notes]]
+      volume = 0.3
+
+      [heartbeats.notes.transition]
+      type = "discrete"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "sine"
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
+    assert!((raw.heartbeats[0].crossfade_ms - 200.0).abs() < f64::EPSILON);
+  }
+
+  #[test]
+  fn crossfade_ms_defaults() {
+    let toml_str = r#"
+      [[heartbeats]]
+      name = "hb"
+      command = "echo 0"
+      result_mode = "stdout"
+
+      [[heartbeats.notes]]
+      volume = 0.3
+
+      [heartbeats.notes.transition]
+      type = "discrete"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "sine"
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
+    assert!((raw.heartbeats[0].crossfade_ms - 6.0).abs() < f64::EPSILON);
   }
 }

@@ -1,7 +1,9 @@
 module Protocol exposing
     ( HeartbeatInfo
+    , HeartbeatSlider(..)
     , LerpStrategy(..)
     , NoteInfo
+    , NoteSlider(..)
     , OverrideInfo
     , PatchParamMeta
     , ProbeLogEntry
@@ -15,21 +17,20 @@ module Protocol exposing
     , encodeCreateOverride
     , encodeExportConfig
     , encodeGetState
+    , encodeHeartbeatSlider
     , encodeImportConfig
     , encodeLerpStrategy
+    , encodeNoteSlider
     , encodeOverrideHeartbeat
     , encodeRemoveNote
     , encodeRenamePatch
     , encodeResetOverrideParam
     , encodeRevertAll
     , encodeSaveConfig
-    , encodeSetCycleOffset
     , encodeSetHeartbeatLoop
     , encodeSetMasterVolume
     , encodeSetMuted
-    , encodeSetNoteOffset
     , encodeSetNoteTransition
-    , encodeSetNoteVolume
     , encodeSetPatchParam
     , encodeTriggerHeartbeat
     )
@@ -61,6 +62,7 @@ type alias HeartbeatInfo =
     , metric : Float
     , overridden : Bool
     , cycleOffsetSecs : Float
+    , crossfadeMs : Float
     , notes : List NoteInfo
     }
 
@@ -99,7 +101,18 @@ type alias SliderRanges =
     , segmentIntensity : SliderRange
     , discreteThreshold : SliderRange
     , stepPosition : SliderRange
+    , crossfadeMs : SliderRange
     }
+
+
+type HeartbeatSlider
+    = CycleOffset
+    | CrossfadeMs
+
+
+type NoteSlider
+    = NoteVolume
+    | NoteOffset
 
 
 type alias OverrideInfo =
@@ -131,9 +144,8 @@ type ServerMsg
     | HeartbeatLoopChanged Bool
     | LibraryChanged (Dict String (Dict String Float))
     | OverridesChanged (Dict String OverrideInfo)
-    | CycleOffsetChanged Int Float
-    | NoteVolumeChanged Int Int Float
-    | NoteOffsetChanged Int Int Float
+    | HeartbeatSliderChanged HeartbeatSlider Int Float
+    | NoteSliderChanged NoteSlider Int Int Float
     | NoteTransitionChanged Int Int TransitionInfo
     | NotesChanged Int (List NoteInfo)
     | ProbeLog ProbeLogEntry
@@ -185,13 +197,16 @@ serverMsgDecoder =
                         overridesChangedDecoder
 
                     "cycle_offset_changed" ->
-                        cycleOffsetChangedDecoder
+                        heartbeatSliderChangedDecoder CycleOffset
+
+                    "crossfade_ms_changed" ->
+                        heartbeatSliderChangedDecoder CrossfadeMs
 
                     "note_volume_changed" ->
-                        noteVolumeChangedDecoder
+                        noteSliderChangedDecoder NoteVolume
 
                     "note_offset_changed" ->
-                        noteOffsetChangedDecoder
+                        noteSliderChangedDecoder NoteOffset
 
                     "note_transition_changed" ->
                         noteTransitionChangedDecoder
@@ -300,13 +315,26 @@ noteInfoDecoder =
 
 heartbeatInfoDecoder : D.Decoder HeartbeatInfo
 heartbeatInfoDecoder =
-    D.map6 HeartbeatInfo
+    D.map6
+        (\name continuous metric overridden cycleOffset notes ->
+            \crossfade ->
+                HeartbeatInfo name continuous metric overridden cycleOffset crossfade notes
+        )
         (D.field "name" D.string)
         (D.field "continuous" D.bool)
         (D.field "metric" D.float)
         (D.field "overridden" D.bool)
         (D.field "cycle_offset_secs" D.float)
         (D.field "notes" (D.list noteInfoDecoder))
+        |> D.andThen
+            (\build ->
+                D.map build
+                    (D.oneOf
+                        [ D.field "crossfade_ms" D.float
+                        , D.succeed 6.0
+                        ]
+                    )
+            )
 
 
 sliderRangeDecoder : D.Decoder SliderRange
@@ -321,8 +349,8 @@ sliderRangesDecoder : D.Decoder SliderRanges
 sliderRangesDecoder =
     D.map6
         (\mv co om nv no si ->
-            \dt sp ->
-                SliderRanges mv co om nv no si dt sp
+            \dt sp cf ->
+                SliderRanges mv co om nv no si dt sp cf
         )
         (D.field "master_volume" sliderRangeDecoder)
         (D.field "cycle_offset" sliderRangeDecoder)
@@ -332,9 +360,10 @@ sliderRangesDecoder =
         (D.field "segment_intensity" sliderRangeDecoder)
         |> D.andThen
             (\build ->
-                D.map2 build
+                D.map3 build
                     (D.field "discrete_threshold" sliderRangeDecoder)
                     (D.field "step_position" sliderRangeDecoder)
+                    (D.field "crossfade_ms" sliderRangeDecoder)
             )
 
 
@@ -483,27 +512,19 @@ overridesChangedDecoder =
     D.map OverridesChanged (D.field "overrides" overridesDecoder)
 
 
-cycleOffsetChangedDecoder : D.Decoder ServerMsg
-cycleOffsetChangedDecoder =
-    D.map2 CycleOffsetChanged
+heartbeatSliderChangedDecoder : HeartbeatSlider -> D.Decoder ServerMsg
+heartbeatSliderChangedDecoder slider =
+    D.map2 (HeartbeatSliderChanged slider)
         (D.field "index" D.int)
         (D.field "value" D.float)
 
 
-noteVolumeChangedDecoder : D.Decoder ServerMsg
-noteVolumeChangedDecoder =
-    D.map3 NoteVolumeChanged
+noteSliderChangedDecoder : NoteSlider -> D.Decoder ServerMsg
+noteSliderChangedDecoder slider =
+    D.map3 (NoteSliderChanged slider)
         (D.field "index" D.int)
         (D.field "note" D.int)
-        (D.field "volume" D.float)
-
-
-noteOffsetChangedDecoder : D.Decoder ServerMsg
-noteOffsetChangedDecoder =
-    D.map3 NoteOffsetChanged
-        (D.field "index" D.int)
-        (D.field "note" D.int)
-        (D.field "offset" D.float)
+        (D.field "value" D.float)
 
 
 noteTransitionChangedDecoder : D.Decoder ServerMsg
@@ -580,24 +601,22 @@ encodeSetPatchParam patchName param value =
         |> E.encode 0
 
 
-encodeSetNoteVolume : Int -> Int -> Float -> String
-encodeSetNoteVolume index note volume =
+encodeNoteSlider : NoteSlider -> Int -> Int -> Float -> String
+encodeNoteSlider slider index note value =
+    let
+        msgType =
+            case slider of
+                NoteVolume ->
+                    "set_note_volume"
+
+                NoteOffset ->
+                    "set_note_offset"
+    in
     E.object
-        [ ( "type", E.string "set_note_volume" )
+        [ ( "type", E.string msgType )
         , ( "index", E.int index )
         , ( "note", E.int note )
-        , ( "volume", E.float volume )
-        ]
-        |> E.encode 0
-
-
-encodeSetNoteOffset : Int -> Int -> Float -> String
-encodeSetNoteOffset index note offset =
-    E.object
-        [ ( "type", E.string "set_note_offset" )
-        , ( "index", E.int index )
-        , ( "note", E.int note )
-        , ( "offset", E.float offset )
+        , ( "value", E.float value )
         ]
         |> E.encode 0
 
@@ -711,10 +730,19 @@ encodeImportConfig text =
         |> E.encode 0
 
 
-encodeSetCycleOffset : Int -> Float -> String
-encodeSetCycleOffset index value =
+encodeHeartbeatSlider : HeartbeatSlider -> Int -> Float -> String
+encodeHeartbeatSlider slider index value =
+    let
+        msgType =
+            case slider of
+                CycleOffset ->
+                    "set_cycle_offset"
+
+                CrossfadeMs ->
+                    "set_crossfade_ms"
+    in
     E.object
-        [ ( "type", E.string "set_cycle_offset" )
+        [ ( "type", E.string msgType )
         , ( "index", E.int index )
         , ( "value", E.float value )
         ]

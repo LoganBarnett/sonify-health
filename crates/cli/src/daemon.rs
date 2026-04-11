@@ -2,7 +2,7 @@ use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer},
-  heartbeat, probe, seconds_until_next, Patch, ResolvedNote,
+  heartbeat, probe, seconds_until_next, ResolvedNote,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -131,9 +131,14 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         // Resolve notes → patches.  Re-read mutable config fields
         // under a brief lock so live edits take effect immediately.
         let metric = play_preview.heartbeats[i].metric.value() as f64;
-        let (note_configs, cycle_secs, cycle_offset) = {
+        let (note_configs, cycle_secs, cycle_offset, crossfade_ms) = {
           let cfg = &play_preview.heartbeat_configs.read().unwrap()[i];
-          (cfg.notes.clone(), cfg.cycle_secs, cfg.cycle_offset_secs)
+          (
+            cfg.notes.clone(),
+            cfg.cycle_secs,
+            cfg.cycle_offset_secs,
+            cfg.crossfade_ms,
+          )
         };
         let lib = play_preview.library.read().unwrap();
         let notes: Vec<ResolvedNote> = note_configs
@@ -164,9 +169,11 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
         if continuous {
           // Continuous: loop with phrase_gap / repeat_rate sleep.
+          let crossfade_frames =
+            ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
           let sid = match slot_id {
             Some(id) => {
-              play_mix.replace(id, graph);
+              play_mix.replace(id, graph, crossfade_frames);
               id
             }
             None => {
@@ -178,9 +185,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
           let gap = phrase_gap / repeat_rate.max(0.1);
           let sleep_dur = if gap == 0.0 {
-            let content_patches: Vec<Patch> =
-              notes.iter().map(|n| n.patch.clone()).collect();
-            heartbeat::heartbeat_content_duration(&content_patches)
+            let crossfade_dur = Duration::from_secs_f64(crossfade_ms / 1000.0);
+            dur.saturating_sub(crossfade_dur)
           } else {
             dur
           };

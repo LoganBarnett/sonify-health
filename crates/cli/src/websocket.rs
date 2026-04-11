@@ -135,47 +135,19 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_note_volume" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
-      let vol = msg.get("volume").and_then(|v| v.as_f64())?;
-      let clamped = vol.clamp(0.0, 1.0);
-      {
-        let mut configs = preview.heartbeat_configs.write().unwrap();
-        configs.get_mut(index)?.notes.get_mut(note)?.volume = clamped;
-      }
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "note_volume_changed",
-          "index": index,
-          "note": note,
-          "volume": clamped,
-        })
-        .to_string(),
-      );
-      None
-    }
+    "set_note_volume" => set_note_field(
+      preview,
+      &msg,
+      |nc, v| nc.volume = v.clamp(0.0, 1.0),
+      "note_volume_changed",
+    ),
 
-    "set_note_offset" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
-      let offset = msg.get("offset").and_then(|v| v.as_f64())?;
-      let clamped = offset.max(0.0);
-      {
-        let mut configs = preview.heartbeat_configs.write().unwrap();
-        configs.get_mut(index)?.notes.get_mut(note)?.offset = clamped;
-      }
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "note_offset_changed",
-          "index": index,
-          "note": note,
-          "offset": clamped,
-        })
-        .to_string(),
-      );
-      None
-    }
+    "set_note_offset" => set_note_field(
+      preview,
+      &msg,
+      |nc, v| nc.offset = v.max(0.0),
+      "note_offset_changed",
+    ),
 
     "set_note_transition" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
@@ -342,24 +314,19 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_cycle_offset" => {
-      let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let value = msg.get("value").and_then(|v| v.as_f64())?;
-      let clamped = value.max(0.0);
-      {
-        let mut configs = preview.heartbeat_configs.write().unwrap();
-        configs.get_mut(index)?.cycle_offset_secs = clamped;
-      }
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "cycle_offset_changed",
-          "index": index,
-          "value": clamped,
-        })
-        .to_string(),
-      );
-      None
-    }
+    "set_cycle_offset" => set_heartbeat_field(
+      preview,
+      &msg,
+      |cfg, v| cfg.cycle_offset_secs = v,
+      "cycle_offset_changed",
+    ),
+
+    "set_crossfade_ms" => set_heartbeat_field(
+      preview,
+      &msg,
+      |cfg, v| cfg.crossfade_ms = v,
+      "crossfade_ms_changed",
+    ),
 
     "revert_all" => {
       preview.revert();
@@ -613,6 +580,59 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
 
     _ => None,
   }
+}
+
+/// Extract index and value from a message, clamp, apply a field
+/// setter on the heartbeat config, and broadcast the change.
+fn set_heartbeat_field(
+  preview: &PreviewState,
+  msg: &serde_json::Value,
+  setter: impl FnOnce(&mut sonify_health_lib::HeartbeatConfig, f64),
+  changed_type: &str,
+) -> Option<String> {
+  let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+  let value = msg.get("value").and_then(|v| v.as_f64())?;
+  let clamped = value.max(0.0);
+  {
+    let mut configs = preview.heartbeat_configs.write().unwrap();
+    setter(configs.get_mut(index)?, clamped);
+  }
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": changed_type,
+      "index": index,
+      "value": clamped,
+    })
+    .to_string(),
+  );
+  None
+}
+
+/// Extract index, note, and value from a message, apply a field
+/// setter on the note config, and broadcast the change.
+fn set_note_field(
+  preview: &PreviewState,
+  msg: &serde_json::Value,
+  setter: impl FnOnce(&mut NoteConfig, f64),
+  changed_type: &str,
+) -> Option<String> {
+  let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
+  let note_idx = msg.get("note").and_then(|v| v.as_u64())? as usize;
+  let value = msg.get("value").and_then(|v| v.as_f64())?;
+  {
+    let mut configs = preview.heartbeat_configs.write().unwrap();
+    setter(configs.get_mut(index)?.notes.get_mut(note_idx)?, value);
+  }
+  let _ = preview.broadcast_tx.send(
+    json!({
+      "type": changed_type,
+      "index": index,
+      "note": note_idx,
+      "value": value,
+    })
+    .to_string(),
+  );
+  None
 }
 
 /// Serialize a notes list to JSON values.

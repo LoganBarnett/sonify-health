@@ -166,6 +166,7 @@ impl PreviewState {
           "metric": hb.metric.value(),
           "overridden": overridden,
           "cycle_offset_secs": cfg.cycle_offset_secs,
+          "crossfade_ms": cfg.crossfade_ms,
           "notes": notes_json,
         })
       })

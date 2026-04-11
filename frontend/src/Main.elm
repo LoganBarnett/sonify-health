@@ -90,10 +90,8 @@ type Msg
     | ToggleMute
     | SetMasterVolume String
     | MasterVolDebounce Int Float
-    | SetNoteVolume Int Int String
-    | NoteVolDebounce Int Int Int Float
-    | SetNoteOffset Int Int String
-    | NoteOffsetDebounce Int Int Int Float
+    | SetNoteSlider NoteSlider Int Int String
+    | NoteSliderDebounce NoteSlider Int Int Int Float
     | SetNoteTransitionPatch Int Int Int String
     | SetNoteTransitionThreshold Int Int Int String
     | AddNoteTransitionState Int Int
@@ -115,8 +113,8 @@ type Msg
     | DismissExport
     | SetImportText String
     | SubmitImport
-    | SetCycleOffset Int String
-    | CycleOffsetDebounce Int Int Float
+    | SetHeartbeatSlider HeartbeatSlider Int String
+    | HeartbeatSliderDebounce HeartbeatSlider Int Int Float
     | CreateOverride String
     | StartRename String
     | SetRenameInput String
@@ -188,6 +186,7 @@ defaultSliderRanges =
     , segmentIntensity = { min = 0.1, max = 10, step = 0.1 }
     , discreteThreshold = { min = 0, max = 1, step = 0.01 }
     , stepPosition = { min = 0, max = 1, step = 0.01 }
+    , crossfadeMs = { min = 0, max = 500, step = 1 }
     }
 
 
@@ -343,12 +342,15 @@ update msg model =
             else
                 ( model, Cmd.none )
 
-        SetNoteVolume hbIdx noteIdx rawVal ->
+        SetNoteSlider slider hbIdx noteIdx rawVal ->
             case String.toFloat rawVal of
                 Just val ->
                     let
                         key =
-                            "nv:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx
+                            noteSliderKey slider
+                                ++ String.fromInt hbIdx
+                                ++ ":"
+                                ++ String.fromInt noteIdx
 
                         updated =
                             { model
@@ -358,66 +360,29 @@ update msg model =
                                             { hb
                                                 | notes =
                                                     updateAt noteIdx
-                                                        (\n -> { n | volume = val })
+                                                        (setNoteSliderValue slider val)
                                                         hb.notes
                                             }
                                         )
                                         model.heartbeats
                             }
                     in
-                    debounce key val updated (NoteVolDebounce hbIdx noteIdx)
+                    debounce key val updated (NoteSliderDebounce slider hbIdx noteIdx)
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        NoteVolDebounce hbIdx noteIdx id val ->
+        NoteSliderDebounce slider hbIdx noteIdx id val ->
             let
                 key =
-                    "nv:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx
+                    noteSliderKey slider
+                        ++ String.fromInt hbIdx
+                        ++ ":"
+                        ++ String.fromInt noteIdx
             in
             if isCurrentDebounce key id model then
                 ( model
-                , Ports.websocketSend (encodeSetNoteVolume hbIdx noteIdx val)
-                )
-
-            else
-                ( model, Cmd.none )
-
-        SetNoteOffset hbIdx noteIdx rawVal ->
-            case String.toFloat rawVal of
-                Just val ->
-                    let
-                        key =
-                            "no:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx
-
-                        updated =
-                            { model
-                                | heartbeats =
-                                    updateAt hbIdx
-                                        (\hb ->
-                                            { hb
-                                                | notes =
-                                                    updateAt noteIdx
-                                                        (\n -> { n | offset = val })
-                                                        hb.notes
-                                            }
-                                        )
-                                        model.heartbeats
-                            }
-                    in
-                    debounce key val updated (NoteOffsetDebounce hbIdx noteIdx)
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        NoteOffsetDebounce hbIdx noteIdx id val ->
-            let
-                key =
-                    "no:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx
-            in
-            if isCurrentDebounce key id model then
-                ( model
-                , Ports.websocketSend (encodeSetNoteOffset hbIdx noteIdx val)
+                , Ports.websocketSend (encodeNoteSlider slider hbIdx noteIdx val)
                 )
 
             else
@@ -642,34 +607,34 @@ update msg model =
                 , Ports.websocketSend (encodeImportConfig model.importText)
                 )
 
-        SetCycleOffset index rawVal ->
+        SetHeartbeatSlider slider index rawVal ->
             case String.toFloat rawVal of
                 Just val ->
                     let
                         key =
-                            "hb_offset:" ++ String.fromInt index
+                            heartbeatSliderKey slider ++ String.fromInt index
 
                         updated =
                             { model
                                 | heartbeats =
                                     updateAt index
-                                        (\hb -> { hb | cycleOffsetSecs = val })
+                                        (setHeartbeatSliderValue slider val)
                                         model.heartbeats
                             }
                     in
-                    debounce key val updated (CycleOffsetDebounce index)
+                    debounce key val updated (HeartbeatSliderDebounce slider index)
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        CycleOffsetDebounce index id val ->
+        HeartbeatSliderDebounce slider index id val ->
             let
                 key =
-                    "hb_offset:" ++ String.fromInt index
+                    heartbeatSliderKey slider ++ String.fromInt index
             in
             if isCurrentDebounce key id model then
                 ( model
-                , Ports.websocketSend (encodeSetCycleOffset index val)
+                , Ports.websocketSend (encodeHeartbeatSlider slider index val)
                 )
 
             else
@@ -829,17 +794,17 @@ handleServerMsg msg model =
         OverridesChanged ovr ->
             ( { model | overrides = ovr }, Cmd.none )
 
-        CycleOffsetChanged index value ->
+        HeartbeatSliderChanged slider index value ->
             ( { model
                 | heartbeats =
                     updateAt index
-                        (\hb -> { hb | cycleOffsetSecs = value })
+                        (setHeartbeatSliderValue slider value)
                         model.heartbeats
               }
             , Cmd.none
             )
 
-        NoteVolumeChanged hbIdx noteIdx volume ->
+        NoteSliderChanged slider hbIdx noteIdx value ->
             ( { model
                 | heartbeats =
                     updateAt hbIdx
@@ -847,24 +812,7 @@ handleServerMsg msg model =
                             { hb
                                 | notes =
                                     updateAt noteIdx
-                                        (\n -> { n | volume = volume })
-                                        hb.notes
-                            }
-                        )
-                        model.heartbeats
-              }
-            , Cmd.none
-            )
-
-        NoteOffsetChanged hbIdx noteIdx offset ->
-            ( { model
-                | heartbeats =
-                    updateAt hbIdx
-                        (\hb ->
-                            { hb
-                                | notes =
-                                    updateAt noteIdx
-                                        (\n -> { n | offset = offset })
+                                        (setNoteSliderValue slider value)
                                         hb.notes
                             }
                         )
@@ -940,6 +888,46 @@ updateAt index fn list =
                 item
         )
         list
+
+
+heartbeatSliderKey : HeartbeatSlider -> String
+heartbeatSliderKey slider =
+    case slider of
+        CycleOffset ->
+            "hb_offset:"
+
+        CrossfadeMs ->
+            "hb_crossfade:"
+
+
+setHeartbeatSliderValue : HeartbeatSlider -> Float -> HeartbeatInfo -> HeartbeatInfo
+setHeartbeatSliderValue slider val hb =
+    case slider of
+        CycleOffset ->
+            { hb | cycleOffsetSecs = val }
+
+        CrossfadeMs ->
+            { hb | crossfadeMs = val }
+
+
+noteSliderKey : NoteSlider -> String
+noteSliderKey slider =
+    case slider of
+        NoteVolume ->
+            "nv:"
+
+        NoteOffset ->
+            "no:"
+
+
+setNoteSliderValue : NoteSlider -> Float -> NoteInfo -> NoteInfo
+setNoteSliderValue slider val note =
+    case slider of
+        NoteVolume ->
+            { note | volume = val }
+
+        NoteOffset ->
+            { note | offset = val }
 
 
 onEnter : Msg -> Html.Attribute Msg
@@ -1587,7 +1575,12 @@ viewHeartbeatCard model index hb =
                 text ""
             ]
         , div [ class "card-body" ]
-            [ viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetCycleOffset index)
+            [ viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
+            , if hb.continuous then
+                viewSlider "Crossfade ms" model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
+
+              else
+                text ""
             , viewSlider "Override" model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
             , if hb.overridden then
                 button
@@ -1630,8 +1623,8 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
               else
                 text ""
             ]
-        , viewSlider "Volume" model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteVolume hbIdx noteIdx)
-        , viewSlider "Offset" model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteOffset hbIdx noteIdx)
+        , viewSlider "Volume" model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteSlider NoteVolume hbIdx noteIdx)
+        , viewSlider "Offset" model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteSlider NoteOffset hbIdx noteIdx)
         , viewNoteTransitionEdit model.sliderRanges patchNames hbIdx noteIdx note.transition
         ]
 
