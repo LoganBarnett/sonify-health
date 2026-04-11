@@ -84,7 +84,7 @@ threshold = 1.1
 
 [[heartbeats]]
 command = '''sh -c 'load=$(uptime | awk -F"load average: " "{split(\$2,a,\", \"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\$1/\$2; print (v>1?1:v)}"''''
-crossfade_ms = 0.0
+crossfade_ms = 42.0
 cycle_offset_secs = 4.8
 cycle_secs = 15.0
 name = "cpu"
@@ -96,7 +96,7 @@ result_mode = "stdout"
 
 [[heartbeats.notes]]
 offset = 0.0
-volume = 0.9
+volume = 1.0
 
 [heartbeats.notes.transition]
 patches = [
@@ -109,6 +109,49 @@ type = "gradient"
 intensity = 2.0
 strategy = "ease-in"
 
+[[heartbeats.notes]]
+offset = 0.0
+volume = 0.0
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+patch = "sine-test"
+threshold = 1.01
+
+[patches.sine-test]
+amplitude = 1.0
+attack_ms = 20.0
+brightness = 10.0
+chirp_ratio = 1.0
+crush = 0.0
+decay_ms = 0.0
+downsample = 0.0
+drive = 0.01
+duration = 0.5
+echo_delay = 0.01
+echo_mix = 0.0
+fm_depth = 0.0
+fm_ratio = 0.0
+freq = 85.0
+highpass = 0.0
+noise_mix = 0.0
+release_ms = 150.0
+resonance = 0.1
+reverb_mix = 0.0
+saw_ratio = 0.0
+sine_ratio = 0.23
+square_ratio = 0.0
+stereo_pan = 0.0
+sub_octave = 0.0
+sustain = 1.0
+tremolo_depth = 0.0
+tremolo_rate = 0.0
+tri_ratio = 0.0
+vibrato_depth = 0.0
+vibrato_rate = 0.0
+
 [patches.star-trek-error]
 amplitude = 0.54
 chirp_ratio = 0.8
@@ -120,6 +163,7 @@ attack_ms = 6.0
 brightness = 1.82
 chirp_ratio = 1.01
 crush = 0.0
+decay_ms = 0.0
 downsample = 0.0
 drive = 0.5
 duration = 0.22
@@ -128,6 +172,7 @@ echo_mix = 0.33
 fm_depth = 0.0
 fm_ratio = 0.0
 freq = 4307.0
+highpass = 0.0
 noise_mix = 0.0
 release_ms = 22.0
 resonance = 3.72
@@ -145,35 +190,37 @@ vibrato_depth = 0.49
 vibrato_rate = 0.0
 
 [patches.warpdrive-cpu-hi]
-freq = 18.0
+duration = 0.27
 overrides = "warpdrive-cpu-lo"
 
 [patches.warpdrive-cpu-lo]
-amplitude = 0.74
-attack_ms = 59.0
-brightness = 0.05
+amplitude = 1.0
+attack_ms = 30.0
+brightness = 0.11
 chirp_ratio = 1.0
 crush = 0.0
+decay_ms = 1209.0
 downsample = 0.0
-drive = 0.01
-duration = 1.95
-echo_delay = 0.12
-echo_mix = 0.28
-fm_depth = 0.0
-fm_ratio = 0.04
-freq = 149.0
-noise_mix = 0.0
-release_ms = 534.0
+drive = 19.91
+duration = 0.54
+echo_delay = 0.01
+echo_mix = 0.0
+fm_depth = 1.5
+fm_ratio = 0.17
+freq = 55.0
+highpass = 0.0
+noise_mix = 0.18
+release_ms = 16.0
 resonance = 0.1
 reverb_mix = 0.0
 saw_ratio = 0.0
-sine_ratio = 2.09
-square_ratio = 0.0
+sine_ratio = 0.08
+square_ratio = 0.2
 stereo_pan = 0.0
-sub_octave = 0.0
-sustain = 0.0
-tremolo_depth = 0.0
-tremolo_rate = 0.0
+sub_octave = 1.0
+sustain = 0.09
+tremolo_depth = 0.5
+tremolo_rate = 40.0
 tri_ratio = 0.0
 vibrato_depth = 0.0
 vibrato_rate = 0.0
