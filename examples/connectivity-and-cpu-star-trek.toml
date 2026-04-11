@@ -108,40 +108,6 @@ type = "gradient"
 [[heartbeats.notes.transition.segments]]
 intensity = 5.3
 strategy = "linear"
-
-[patches.sine-test]
-amplitude = 1.0
-attack_ms = 20.0
-brightness = 10.0
-chirp_ratio = 1.0
-crush = 0.0
-decay_ms = 0.0
-downsample = 0.0
-drive = 0.01
-duration = 0.5
-echo_delay = 0.01
-echo_mix = 0.0
-fm_depth = 0.0
-fm_ratio = 0.0
-freq = 85.0
-gap = 0.0
-highpass = 0.0
-noise_mix = 0.0
-release_ms = 150.0
-resonance = 0.1
-reverb_mix = 0.0
-saw_ratio = 0.0
-sine_ratio = 0.23
-square_ratio = 0.0
-stereo_pan = 0.0
-sub_octave = 0.0
-sustain = 1.0
-tremolo_depth = 0.0
-tremolo_rate = 0.0
-tri_ratio = 0.0
-vibrato_depth = 0.0
-vibrato_rate = 0.0
-
 [patches.star-trek-error]
 amplitude = 0.54
 chirp_ratio = 0.8
