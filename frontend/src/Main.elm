@@ -15,6 +15,7 @@ import Set exposing (Set)
 import Svg
 import Svg.Attributes as SA
 import Task
+import Time
 import Url exposing (Url)
 import Url.Parser exposing (Parser)
 
@@ -80,6 +81,7 @@ type alias Model =
     , expandedDescriptions : Set String
     , playOnChange : Set String
     , metricHistory : Dict Int (List Float)
+    , timezone : Time.Zone
     }
 
 
@@ -131,6 +133,7 @@ type Msg
     | DismissProtocolError
     | ToggleDescription String
     | TogglePlayOnChange String
+    | GotTimezone Time.Zone
     | SetHeartbeatName Int String
     | SetHeartbeatCommand Int String
     | SetHeartbeatResultMode Int String
@@ -188,8 +191,9 @@ init _ url key =
       , expandedDescriptions = Set.empty
       , playOnChange = Set.empty
       , metricHistory = Dict.empty
+      , timezone = Time.utc
       }
-    , cmdForRoute route
+    , Cmd.batch [ cmdForRoute route, Task.perform GotTimezone Time.here ]
     )
 
 
@@ -825,6 +829,9 @@ update msg model =
               }
             , Cmd.none
             )
+
+        GotTimezone zone ->
+            ( { model | timezone = zone }, Cmd.none )
 
         SetHeartbeatName hbIdx val ->
             ( { model
@@ -2501,12 +2508,12 @@ viewProbeLog model =
     div [ class "section" ]
         [ h2 [] [ text "Probe Log" ]
         , div [ class "log-container" ]
-            (List.map (viewLogEntry model.heartbeats) model.probeLog)
+            (List.map (viewLogEntry model.timezone model.heartbeats) model.probeLog)
         ]
 
 
-viewLogEntry : List HeartbeatInfo -> ProbeLogEntry -> Html Msg
-viewLogEntry heartbeats entry =
+viewLogEntry : Time.Zone -> List HeartbeatInfo -> ProbeLogEntry -> Html Msg
+viewLogEntry zone heartbeats entry =
     let
         tierColor =
             heartbeats
@@ -2529,7 +2536,8 @@ viewLogEntry heartbeats entry =
                     [ class (logResultClass entry.result) ]
     in
     div [ class "log-entry" ]
-        [ span [ class "log-name" ] [ text entry.name ]
+        [ span [ class "log-timestamp" ] [ text (formatTimestamp zone entry.timestamp) ]
+        , span [ class "log-name" ] [ text entry.name ]
         , span resultAttrs [ text entry.result ]
         , if entry.overridden then
             span [ class "badge badge-warn" ] [ text "override" ]
@@ -2537,6 +2545,24 @@ viewLogEntry heartbeats entry =
           else
             text ""
         ]
+
+
+formatTimestamp : Time.Zone -> Float -> String
+formatTimestamp zone epochSecs =
+    let
+        posix =
+            Time.millisToPosix (round (epochSecs * 1000))
+
+        h =
+            String.padLeft 2 '0' (String.fromInt (Time.toHour zone posix))
+
+        m =
+            String.padLeft 2 '0' (String.fromInt (Time.toMinute zone posix))
+
+        s =
+            String.padLeft 2 '0' (String.fromInt (Time.toSecond zone posix))
+    in
+    h ++ ":" ++ m ++ ":" ++ s
 
 
 logResultClass : String -> String

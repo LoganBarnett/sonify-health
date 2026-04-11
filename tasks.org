@@ -178,7 +178,7 @@ axis spans 0–1 (the severity range).  Use an inline SVG or canvas
 element that fits naturally in the header row.  The graph should
 remain visible when the heartbeat card is collapsed.
 
-* TODO Timestamps in probe log with browser timezone
+* DONE Timestamps in probe log with browser timezone
 Add a timestamp to each probe log entry, formatted in the browser's
 local timezone.  Display the timezone abbreviation and UTC offset (e.g., =CST
 (UTC−06:00)=) in the probe log header line so the user knows which

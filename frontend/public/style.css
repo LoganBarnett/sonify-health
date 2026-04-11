@@ -756,6 +756,13 @@ a:hover {
   border-bottom: 1px solid var(--color-border);
 }
 
+.log-timestamp {
+  font-family: monospace;
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  min-width: 60px;
+}
+
 .log-name {
   font-weight: 500;
   min-width: 80px;
