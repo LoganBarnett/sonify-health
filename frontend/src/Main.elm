@@ -68,6 +68,7 @@ type alias Model =
     , probeLog : List ProbeLogEntry
     , exportFormat : String
     , exportData : Maybe String
+    , copyFeedback : Bool
     , debounces : Dict String Int
     , nextDebounce : Int
     , importText : String
@@ -120,6 +121,8 @@ type Msg
     | Export
     | DismissExport
     | SetExportFormat String
+    | CopyExport
+    | ClearCopyFeedback
     | SetImportText String
     | SubmitImport
     | SetHeartbeatSlider HeartbeatSlider Int String
@@ -183,6 +186,7 @@ init _ url key =
       , probeLog = []
       , exportFormat = "toml"
       , exportData = Nothing
+      , copyFeedback = False
       , debounces = Dict.empty
       , nextDebounce = 0
       , importText = ""
@@ -680,10 +684,27 @@ update msg model =
             ( model, Ports.websocketSend (encodeExportConfig model.exportFormat) )
 
         DismissExport ->
-            ( { model | exportData = Nothing, exportFormat = "toml" }, Cmd.none )
+            ( { model | exportData = Nothing, exportFormat = "toml", copyFeedback = False }, Cmd.none )
 
         SetExportFormat fmt ->
             ( { model | exportFormat = fmt }, Cmd.none )
+
+        CopyExport ->
+            case model.exportData of
+                Just txt ->
+                    ( { model | copyFeedback = True }
+                    , Cmd.batch
+                        [ Ports.copyToClipboard txt
+                        , Process.sleep 1500
+                            |> Task.perform (\_ -> ClearCopyFeedback)
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ClearCopyFeedback ->
+            ( { model | copyFeedback = False }, Cmd.none )
 
         SetImportText txt ->
             ( { model | importText = txt, importError = Nothing }, Cmd.none )
@@ -2983,8 +3004,19 @@ viewExportInline model =
                                 ++ ")"
                             )
                         ]
-                    , button [ class "btn btn-sm", onClick DismissExport ]
-                        [ text "Close" ]
+                    , div [ class "export-inline-actions" ]
+                        [ button [ class "btn btn-sm", onClick CopyExport ]
+                            [ text
+                                (if model.copyFeedback then
+                                    "Copied!"
+
+                                 else
+                                    "Copy"
+                                )
+                            ]
+                        , button [ class "btn btn-sm", onClick DismissExport ]
+                            [ text "Close" ]
+                        ]
                     ]
                 , pre [ class "export-pre" ]
                     [ text exportText ]

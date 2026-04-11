@@ -268,7 +268,7 @@ already supports TOML, Nix, and CLI flags for the patch library) to
 cover the full config.  Provide a format selector in the export UI
 (inline, not a modal).
 
-* TODO Copy button in the export UI
+* DONE Copy button in the export UI
 Add a clipboard-copy button next to the exported config text.  Use
 the Clipboard API (=navigator.clipboard.writeText=).  Provide
 brief visual feedback on success (e.g., the button text changes to

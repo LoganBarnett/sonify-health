@@ -847,6 +847,11 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.export-inline-actions {
+  display: flex;
+  gap: var(--space-sm);
   margin-bottom: var(--space-md);
   font-weight: 600;
 }
