@@ -206,6 +206,12 @@ pub fn public_router(state: AppState) -> Router {
     )
 }
 
+/// Build a minimal router with just the WebSocket endpoint, no
+/// auth middleware.  Used by integration tests.
+pub fn test_router(state: AppState) -> Router {
+  Router::new().route("/ws", get(websocket::ws_handler).with_state(state))
+}
+
 /// Routes that are protected when OIDC is enabled: mute API,
 /// WebSocket, Scalar docs, and the SPA fallback.
 pub fn protected_router(state: AppState) -> Router {

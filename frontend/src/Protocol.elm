@@ -27,12 +27,11 @@ module Protocol exposing
     , encodeResetOverrideParam
     , encodeRevertAll
     , encodeSaveConfig
-    , encodeSetContinuous
-    , encodeSetHeartbeatLoop
     , encodeSetMasterVolume
     , encodeSetMuted
     , encodeSetNoteTransition
     , encodeSetPatchParam
+    , encodeSetPlayback
     , encodeTriggerHeartbeat
     )
 
@@ -59,7 +58,7 @@ type alias NoteInfo =
 
 type alias HeartbeatInfo =
     { name : String
-    , continuous : Bool
+    , playback : String
     , metric : Float
     , overridden : Bool
     , cycleOffsetSecs : Float
@@ -130,7 +129,6 @@ type ServerMsg
         , library : Dict String (Dict String Float)
         , muted : Bool
         , masterVolume : Float
-        , heartbeatLoop : Bool
         , heartbeats : List HeartbeatInfo
         , sliderRanges : SliderRanges
         , overrides : Dict String OverrideInfo
@@ -142,13 +140,12 @@ type ServerMsg
     | VolumeChanged String (Maybe Int) Float
     | MetricChanged Int Float
     | OverrideChanged Int (Maybe Float) Bool
-    | HeartbeatLoopChanged Bool
+    | PlaybackChanged Int String
     | LibraryChanged (Dict String (Dict String Float))
     | OverridesChanged (Dict String OverrideInfo)
     | HeartbeatSliderChanged HeartbeatSlider Int Float
     | NoteSliderChanged NoteSlider Int Int Float
     | NoteTransitionChanged Int Int TransitionInfo
-    | ContinuousChanged Int Bool
     | NotesChanged Int (List NoteInfo)
     | ProbeLog ProbeLogEntry
     | ConfigExport (Dict String (Dict String Float)) (Dict String OverrideInfo)
@@ -189,8 +186,8 @@ serverMsgDecoder =
                     "override_changed" ->
                         overrideChangedDecoder
 
-                    "heartbeat_loop_changed" ->
-                        heartbeatLoopChangedDecoder
+                    "playback_changed" ->
+                        playbackChangedDecoder
 
                     "library_changed" ->
                         libraryChangedDecoder
@@ -203,9 +200,6 @@ serverMsgDecoder =
 
                     "crossfade_ms_changed" ->
                         heartbeatSliderChangedDecoder CrossfadeMs
-
-                    "continuous_changed" ->
-                        continuousChangedDecoder
 
                     "note_volume_changed" ->
                         noteSliderChangedDecoder NoteVolume
@@ -251,15 +245,14 @@ serverMsgDecoder =
 
 stateDecoder : D.Decoder ServerMsg
 stateDecoder =
-    D.map6
-        (\pp lib muted mv hbLoop hbs ->
+    D.map5
+        (\pp lib muted mv hbs ->
             \sr ovr cw cp ->
                 StateMsg
                     { patchParams = pp
                     , library = lib
                     , muted = muted
                     , masterVolume = mv
-                    , heartbeatLoop = hbLoop
                     , heartbeats = hbs
                     , sliderRanges = sr
                     , overrides = ovr
@@ -271,7 +264,6 @@ stateDecoder =
         (D.field "library" libraryDecoder)
         (D.field "muted" D.bool)
         (D.field "master_volume" D.float)
-        (D.field "heartbeat_loop" D.bool)
         (D.field "heartbeats" (D.list heartbeatInfoDecoder))
         |> D.andThen
             (\buildState ->
@@ -321,12 +313,16 @@ noteInfoDecoder =
 heartbeatInfoDecoder : D.Decoder HeartbeatInfo
 heartbeatInfoDecoder =
     D.map6
-        (\name continuous metric overridden cycleOffset notes ->
+        (\name playback metric overridden cycleOffset notes ->
             \crossfade ->
-                HeartbeatInfo name continuous metric overridden cycleOffset crossfade notes
+                HeartbeatInfo name playback metric overridden cycleOffset crossfade notes
         )
         (D.field "name" D.string)
-        (D.field "continuous" D.bool)
+        (D.oneOf
+            [ D.field "playback" D.string
+            , D.succeed "clock"
+            ]
+        )
         (D.field "metric" D.float)
         (D.field "overridden" D.bool)
         (D.field "cycle_offset_secs" D.float)
@@ -490,9 +486,11 @@ overrideChangedDecoder =
         (D.field "overridden" D.bool)
 
 
-heartbeatLoopChangedDecoder : D.Decoder ServerMsg
-heartbeatLoopChangedDecoder =
-    D.map HeartbeatLoopChanged (D.field "enabled" D.bool)
+playbackChangedDecoder : D.Decoder ServerMsg
+playbackChangedDecoder =
+    D.map2 PlaybackChanged
+        (D.field "index" D.int)
+        (D.field "value" D.string)
 
 
 libraryChangedDecoder : D.Decoder ServerMsg
@@ -522,13 +520,6 @@ heartbeatSliderChangedDecoder slider =
     D.map2 (HeartbeatSliderChanged slider)
         (D.field "index" D.int)
         (D.field "value" D.float)
-
-
-continuousChangedDecoder : D.Decoder ServerMsg
-continuousChangedDecoder =
-    D.map2 ContinuousChanged
-        (D.field "index" D.int)
-        (D.field "value" D.bool)
 
 
 noteSliderChangedDecoder : NoteSlider -> D.Decoder ServerMsg
@@ -688,11 +679,12 @@ encodeTriggerHeartbeat =
         |> E.encode 0
 
 
-encodeSetHeartbeatLoop : Bool -> String
-encodeSetHeartbeatLoop enabled =
+encodeSetPlayback : Int -> String -> String
+encodeSetPlayback index value =
     E.object
-        [ ( "type", E.string "set_heartbeat_loop" )
-        , ( "enabled", E.bool enabled )
+        [ ( "type", E.string "set_playback" )
+        , ( "index", E.int index )
+        , ( "value", E.string value )
         ]
         |> E.encode 0
 
@@ -702,16 +694,6 @@ encodeSetMuted muted =
     E.object
         [ ( "type", E.string "set_muted" )
         , ( "muted", E.bool muted )
-        ]
-        |> E.encode 0
-
-
-encodeSetContinuous : Int -> Bool -> String
-encodeSetContinuous index value =
-    E.object
-        [ ( "type", E.string "set_continuous" )
-        , ( "index", E.int index )
-        , ( "value", E.bool value )
         ]
         |> E.encode 0
 

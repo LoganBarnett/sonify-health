@@ -2,6 +2,17 @@ use crate::probe::ResultMode;
 use crate::transition::Transition;
 use serde::{Deserialize, Serialize};
 
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Playback {
+  #[default]
+  Clock,
+  Loop,
+  Continuous,
+}
+
 pub fn default_volume() -> f64 {
   0.3
 }
@@ -45,10 +56,13 @@ pub struct HeartbeatConfig {
   pub result_mode: ResultMode,
   pub notes: Vec<NoteConfig>,
 
-  /// Whether this heartbeat plays continuously (drone-style) or
-  /// as a one-shot at each cycle.
   #[serde(default)]
-  pub continuous: bool,
+  pub playback: Playback,
+
+  /// Legacy field kept for back-compat deserialization only.
+  /// Upgraded to `Playback::Continuous` in `resolve_legacy_continuous`.
+  #[serde(default, skip_serializing)]
+  continuous: bool,
 
   /// Seconds of silence between phrase repetitions (continuous
   /// mode).
@@ -77,4 +91,66 @@ pub struct HeartbeatConfig {
   /// echo tails ring out naturally during continuous playback.
   #[serde(default = "default_crossfade_ms")]
   pub crossfade_ms: f64,
+}
+
+impl HeartbeatConfig {
+  /// Upgrade the legacy `continuous = true` field to
+  /// `Playback::Continuous` when no explicit `playback` was set.
+  pub fn resolve_legacy_continuous(&mut self) {
+    if self.continuous && self.playback == Playback::Clock {
+      self.playback = Playback::Continuous;
+    }
+  }
+
+  /// Build a minimal heartbeat config for testing.
+  pub fn test_default() -> Self {
+    Self {
+      name: "test".to_string(),
+      command: "echo 0".to_string(),
+      result_mode: crate::probe::ResultMode::Stdout,
+      notes: vec![NoteConfig {
+        transition: Transition::Discrete {
+          states: vec![crate::transition::DiscreteState {
+            threshold: 1.01,
+            patch: "sine".to_string(),
+          }],
+        },
+        volume: default_volume(),
+        offset: 0.0,
+      }],
+      playback: Playback::default(),
+      continuous: false,
+      phrase_gap: 0.0,
+      repeat_rate: default_repeat_rate(),
+      poll_interval_secs: default_poll_interval(),
+      cycle_secs: default_cycle_secs(),
+      cycle_offset_secs: 0.0,
+      crossfade_ms: default_crossfade_ms(),
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn playback_serde_round_trip() {
+    // TOML requires a table at the root, so wrap in a struct.
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Wrapper {
+      playback: Playback,
+    }
+    for variant in [Playback::Clock, Playback::Loop, Playback::Continuous] {
+      let w = Wrapper { playback: variant };
+      let serialized = toml::to_string(&w).unwrap();
+      let deserialized: Wrapper = toml::from_str(&serialized).unwrap();
+      assert_eq!(w, deserialized);
+    }
+  }
+
+  #[test]
+  fn playback_default_is_clock() {
+    assert_eq!(Playback::default(), Playback::Clock);
+  }
 }

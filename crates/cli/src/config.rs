@@ -418,6 +418,11 @@ impl Config {
       }
     };
 
+    let mut heartbeats = file.heartbeats;
+    for hb in &mut heartbeats {
+      hb.resolve_legacy_continuous();
+    }
+
     Ok(Config {
       log_level,
       log_format,
@@ -426,7 +431,7 @@ impl Config {
       frontend_path,
       library,
       overrides,
-      heartbeats: file.heartbeats,
+      heartbeats,
       slider_ranges: file.slider_ranges,
       oidc,
       config_path: resolved_config_path,
@@ -525,6 +530,7 @@ fn credential_secret_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use sonify_health_lib::heartbeat_config::Playback;
   use sonify_health_lib::probe::ResultMode;
 
   #[test]
@@ -554,7 +560,7 @@ mod tests {
       name = "cpu"
       command = "echo 0.5"
       result_mode = "stdout"
-      continuous = true
+      playback = "continuous"
 
       [[heartbeats.notes]]
       volume = 0.2
@@ -568,12 +574,61 @@ mod tests {
     assert_eq!(raw.heartbeats.len(), 2);
     assert_eq!(raw.heartbeats[0].name, "gateway");
     assert_eq!(raw.heartbeats[0].result_mode, ResultMode::ExitCodeSeverity);
-    assert!(!raw.heartbeats[0].continuous);
+    assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
     assert_eq!(raw.heartbeats[0].notes.len(), 1);
     assert_eq!(raw.heartbeats[1].name, "cpu");
     assert_eq!(raw.heartbeats[1].result_mode, ResultMode::Stdout);
-    assert!(raw.heartbeats[1].continuous);
+    assert_eq!(raw.heartbeats[1].playback, Playback::Continuous);
     assert!((raw.heartbeats[1].notes[0].volume - 0.2).abs() < f64::EPSILON);
+  }
+
+  #[test]
+  fn continuous_backcompat() {
+    let toml_str = r#"
+      [[heartbeats]]
+      name = "drone"
+      command = "echo 0.5"
+      result_mode = "stdout"
+      continuous = true
+
+      [[heartbeats.notes]]
+      volume = 0.3
+
+      [heartbeats.notes.transition]
+      type = "discrete"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "sine"
+    "#;
+
+    let mut raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
+    assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
+    raw.heartbeats[0].resolve_legacy_continuous();
+    assert_eq!(raw.heartbeats[0].playback, Playback::Continuous);
+  }
+
+  #[test]
+  fn playback_defaults_to_clock() {
+    let toml_str = r#"
+      [[heartbeats]]
+      name = "hb"
+      command = "echo 0"
+      result_mode = "stdout"
+
+      [[heartbeats.notes]]
+      volume = 0.3
+
+      [heartbeats.notes.transition]
+      type = "discrete"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "sine"
+    "#;
+
+    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
+    assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
   }
 
   #[test]
@@ -702,6 +757,7 @@ mod tests {
       name = "test-hb"
       command = "echo 0"
       result_mode = "exit-code-severity"
+      playback = "continuous"
 
       [[heartbeats.notes]]
       volume = 0.4
@@ -793,6 +849,7 @@ mod tests {
     // Verify heartbeat.
     assert_eq!(reloaded.heartbeats.len(), 1);
     assert_eq!(reloaded.heartbeats[0].name, "test-hb");
+    assert_eq!(reloaded.heartbeats[0].playback, Playback::Continuous);
 
     // Verify slider ranges.
     assert_eq!(reloaded.slider_ranges.master_volume.max, 2.0);

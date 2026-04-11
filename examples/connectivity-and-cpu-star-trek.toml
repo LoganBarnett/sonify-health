@@ -1,103 +1,179 @@
-# Heartbeats: internet connectivity, gateway reachability, and CPU
-# load with a Star Trek inspired sound palette.
-#
-# Run with:
-#   sonify-health --config examples/connectivity-and-cpu-star-trek.toml daemon
-#
-# Requires only ping and uptime, both available on macOS and Linux.
-
-log_level = "info"
-log_format = "text"
-
-# Custom patches for the Star Trek theme.
-[patches.trek-ok]
-freq = 1165.4
-sine_ratio = 2.37
-tri_ratio = 1.22
-saw_ratio = 0.02
-attack_ms = 6.0
-release_ms = 22.0
-chirp_ratio = 1.01
-stereo_pan = -0.42
-reverb_mix = 0.89
-echo_delay = 0.32
-echo_mix = 0.33
-brightness = 1.82
-resonance = 3.72
-sub_octave = 0.03
-amplitude = 0.327
-drive = 0.5
-
-[patches.trek-cpu]
-freq = 460.0
-attack_ms = 8.0
-release_ms = 15.0
-brightness = 0.55
-resonance = 0.5
-echo_delay = 0.01
-drive = 0.5
-fm_ratio = 0.0435
-fm_depth = 1.0
-
-# Gateway reachability.
 [[heartbeats]]
-name = "gateway"
 command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
+crossfade_ms = 6.0
+cycle_offset_secs = 0.0
+cycle_secs = 15.0
+name = "gateway"
+phrase_gap = 0.0
+playback = "clock"
+poll_interval_secs = 10.0
+repeat_rate = 1.0
 result_mode = "exit-code-severity"
-cycle_secs = 15
-cycle_offset_secs = 0
 
 [[heartbeats.notes]]
+offset = 0.0
+volume = 1.0
 
 [heartbeats.notes.transition]
 type = "discrete"
 
 [[heartbeats.notes.transition.states]]
+patch = "star-trek-ok"
 threshold = 0.5
-patch = "trek-ok"
 
 [[heartbeats.notes.transition.states]]
+patch = "star-trek-error"
 threshold = 1.01
-patch = "alarm"
 
-# Internet connectivity.
+[[heartbeats.notes]]
+offset = 0.2
+volume = 1.0
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+patch = "star-trek-ok"
+threshold = 0.5
+
+[[heartbeats.notes.transition.states]]
+patch = "star-trek-error"
+threshold = 1.01
+
 [[heartbeats]]
-name = "internet"
 command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
+crossfade_ms = 6.0
+cycle_offset_secs = 0.6
+cycle_secs = 15.0
+name = "internet"
+phrase_gap = 0.0
+playback = "clock"
+poll_interval_secs = 10.0
+repeat_rate = 1.0
 result_mode = "exit-code-severity"
-cycle_secs = 15
-cycle_offset_secs = 5
 
 [[heartbeats.notes]]
+offset = 0.0
+volume = 1.0
 
 [heartbeats.notes.transition]
 type = "discrete"
 
 [[heartbeats.notes.transition.states]]
+patch = "star-trek-ok"
 threshold = 0.5
-patch = "trek-ok"
 
 [[heartbeats.notes.transition.states]]
+patch = "star-trek-error"
 threshold = 1.01
-patch = "alarm"
-
-# CPU load.
-[[heartbeats]]
-name = "cpu"
-command = """sh -c 'load=$(uptime | awk -F"load average: " "{split(\\$2,a,\\", \\"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\\$1/\\$2; print (v>1?1:v)}"'"""
-result_mode = "stdout"
-continuous = true
-poll_interval_secs = 5
-cycle_secs = 15
-cycle_offset_secs = 10
 
 [[heartbeats.notes]]
-volume = 0.2
+offset = 0.2
+volume = 1.0
 
 [heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+patch = "star-trek-ok"
+threshold = 0.5
+
+[[heartbeats.notes.transition.states]]
+patch = "star-trek-error"
+threshold = 1.1
+
+[[heartbeats]]
+command = '''sh -c 'load=$(uptime | awk -F"load average: " "{split(\$2,a,\", \"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\$1/\$2; print (v>1?1:v)}"''''
+crossfade_ms = 0.0
+cycle_offset_secs = 4.8
+cycle_secs = 15.0
+name = "cpu"
+phrase_gap = 0.0
+playback = "loop"
+poll_interval_secs = 5.0
+repeat_rate = 1.0
+result_mode = "stdout"
+
+[[heartbeats.notes]]
+offset = 0.0
+volume = 0.9
+
+[heartbeats.notes.transition]
+patches = [
+    "warpdrive-cpu-lo",
+    "warpdrive-cpu-hi",
+]
 type = "gradient"
-patches = ["trek-cpu", "alarm"]
 
 [[heartbeats.notes.transition.segments]]
-strategy = "ease-in"
 intensity = 2.0
+strategy = "ease-in"
+
+[patches.star-trek-error]
+amplitude = 0.54
+chirp_ratio = 0.8
+overrides = "star-trek-ok"
+
+[patches.star-trek-ok]
+amplitude = 0.327
+attack_ms = 6.0
+brightness = 1.82
+chirp_ratio = 1.01
+crush = 0.0
+downsample = 0.0
+drive = 0.5
+duration = 0.22
+echo_delay = 0.32
+echo_mix = 0.33
+fm_depth = 0.0
+fm_ratio = 0.0
+freq = 4307.0
+noise_mix = 0.0
+release_ms = 22.0
+resonance = 3.72
+reverb_mix = 0.89
+saw_ratio = 0.02
+sine_ratio = 2.37
+square_ratio = 0.0
+stereo_pan = -0.42
+sub_octave = 0.03
+sustain = 1.0
+tremolo_depth = 0.11
+tremolo_rate = 0.0
+tri_ratio = 1.22
+vibrato_depth = 0.49
+vibrato_rate = 0.0
+
+[patches.warpdrive-cpu-hi]
+freq = 18.0
+overrides = "warpdrive-cpu-lo"
+
+[patches.warpdrive-cpu-lo]
+amplitude = 0.74
+attack_ms = 59.0
+brightness = 0.05
+chirp_ratio = 1.0
+crush = 0.0
+downsample = 0.0
+drive = 0.01
+duration = 1.95
+echo_delay = 0.12
+echo_mix = 0.28
+fm_depth = 0.0
+fm_ratio = 0.04
+freq = 149.0
+noise_mix = 0.0
+release_ms = 534.0
+resonance = 0.1
+reverb_mix = 0.0
+saw_ratio = 0.0
+sine_ratio = 2.09
+square_ratio = 0.0
+stereo_pan = 0.0
+sub_octave = 0.0
+sustain = 0.0
+tremolo_depth = 0.0
+tremolo_rate = 0.0
+tri_ratio = 0.0
+vibrato_depth = 0.0
+vibrato_rate = 0.0

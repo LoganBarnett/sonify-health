@@ -63,7 +63,6 @@ type alias Model =
     , heartbeats : List HeartbeatInfo
     , muted : Bool
     , masterVolume : Float
-    , heartbeatLoop : Bool
     , probeLog : List ProbeLogEntry
     , exportData : Maybe (Dict String (Dict String Float))
     , debounces : Dict String Int
@@ -105,8 +104,7 @@ type Msg
     | RemoveNote Int Int
     | OverrideHeartbeat Int String
     | ClearOverride Int
-    | ToggleContinuous Int
-    | ToggleHeartbeatLoop
+    | CyclePlayback Int
     | TriggerHeartbeat
     | RevertAll
     | SelectPatch String
@@ -158,7 +156,6 @@ init _ url key =
       , heartbeats = []
       , muted = False
       , masterVolume = 1.0
-      , heartbeatLoop = False
       , probeLog = []
       , exportData = Nothing
       , debounces = Dict.empty
@@ -575,27 +572,32 @@ update msg model =
             , Ports.websocketSend (encodeClearOverride index)
             )
 
-        ToggleContinuous index ->
+        CyclePlayback index ->
             let
                 hb =
                     List.drop index model.heartbeats
                         |> List.head
+
+                nextMode current =
+                    case current of
+                        "clock" ->
+                            "loop"
+
+                        "loop" ->
+                            "continuous"
+
+                        _ ->
+                            "clock"
             in
             case hb of
                 Just h ->
                     ( model
                     , Ports.websocketSend
-                        (encodeSetContinuous index (not h.continuous))
+                        (encodeSetPlayback index (nextMode h.playback))
                     )
 
                 Nothing ->
                     ( model, Cmd.none )
-
-        ToggleHeartbeatLoop ->
-            ( model
-            , Ports.websocketSend
-                (encodeSetHeartbeatLoop (not model.heartbeatLoop))
-            )
 
         TriggerHeartbeat ->
             ( model, Ports.websocketSend encodeTriggerHeartbeat )
@@ -741,7 +743,6 @@ handleServerMsg msg model =
                 , overrides = state.overrides
                 , muted = state.muted
                 , masterVolume = state.masterVolume
-                , heartbeatLoop = state.heartbeatLoop
                 , heartbeats = state.heartbeats
                 , sliderRanges = state.sliderRanges
                 , configWritable = state.configWritable
@@ -802,14 +803,11 @@ handleServerMsg msg model =
             , Cmd.none
             )
 
-        HeartbeatLoopChanged enabled ->
-            ( { model | heartbeatLoop = enabled }, Cmd.none )
-
-        ContinuousChanged index value ->
+        PlaybackChanged index value ->
             ( { model
                 | heartbeats =
                     updateAt index
-                        (\hb -> { hb | continuous = value })
+                        (\hb -> { hb | playback = value })
                         model.heartbeats
               }
             , Cmd.none
@@ -1483,24 +1481,6 @@ viewToolbar model =
         , viewSlider "Master" model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
         , button [ class "btn", onClick TriggerHeartbeat ]
             [ text "Trigger" ]
-        , button
-            [ class
-                (if model.heartbeatLoop then
-                    "btn btn-active"
-
-                 else
-                    "btn"
-                )
-            , onClick ToggleHeartbeatLoop
-            ]
-            [ text
-                (if model.heartbeatLoop then
-                    "Loop: ON"
-
-                 else
-                    "Loop: OFF"
-                )
-            ]
         , button [ class "btn", onClick RevertAll ]
             [ text "Revert" ]
         , button
@@ -1571,6 +1551,18 @@ viewSlider name min_ max_ step_ val toMsg =
         ]
 
 
+viewPlaybackCycler : String -> Msg -> Html Msg
+viewPlaybackCycler mode msg =
+    label [ class "slider-row" ]
+        [ text "Playback "
+        , button
+            [ class "btn btn-sm"
+            , onClick msg
+            ]
+            [ text mode ]
+        ]
+
+
 viewToggle : String -> Bool -> Msg -> Html Msg
 viewToggle name val msg =
     label [ class "slider-row" ]
@@ -1615,8 +1607,8 @@ viewHeartbeatCard model index hb =
             [ span [ class "card-name" ] [ text hb.name ]
             , span [ class (metricClass hb.metric) ]
                 [ text (metricLabel hb.metric) ]
-            , if hb.continuous then
-                span [ class "badge" ] [ text "continuous" ]
+            , if hb.playback /= "clock" then
+                span [ class "badge" ] [ text hb.playback ]
 
               else
                 text ""
@@ -1627,9 +1619,9 @@ viewHeartbeatCard model index hb =
                 text ""
             ]
         , div [ class "card-body" ]
-            [ viewToggle "Continuous" hb.continuous (ToggleContinuous index)
+            [ viewPlaybackCycler hb.playback (CyclePlayback index)
             , viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
-            , if hb.continuous then
+            , if hb.playback == "continuous" then
                 viewSlider "Crossfade ms" model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
 
               else

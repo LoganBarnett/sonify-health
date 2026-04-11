@@ -1,6 +1,6 @@
 [[heartbeats]]
 command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
-continuous = false
+playback = "clock"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
@@ -42,7 +42,7 @@ threshold = 1.01
 
 [[heartbeats]]
 command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
-continuous = false
+playback = "clock"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.6
 cycle_secs = 15.0
@@ -84,7 +84,7 @@ threshold = 1.1
 
 [[heartbeats]]
 command = '''sh -c 'load=$(uptime | awk -F"load average: " "{split(\$2,a,\", \"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\$1/\$2; print (v>1?1:v)}"''''
-continuous = true
+playback = "continuous"
 crossfade_ms = 0.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
@@ -96,7 +96,7 @@ result_mode = "stdout"
 
 [[heartbeats.notes]]
 offset = 0.0
-volume = 1.0
+volume = 0.55
 
 [heartbeats.notes.transition]
 patches = [

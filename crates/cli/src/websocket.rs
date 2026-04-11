@@ -276,19 +276,6 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       None
     }
 
-    "set_heartbeat_loop" => {
-      let enabled = msg.get("enabled").and_then(|v| v.as_bool())?;
-      preview.heartbeat_loop.store(enabled, Ordering::Relaxed);
-      let _ = preview.broadcast_tx.send(
-        json!({
-          "type": "heartbeat_loop_changed",
-          "enabled": enabled,
-        })
-        .to_string(),
-      );
-      None
-    }
-
     "set_muted" => {
       let muted = msg.get("muted").and_then(|v| v.as_bool())?;
       preview.muted.store(muted, Ordering::Relaxed);
@@ -328,18 +315,21 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       "crossfade_ms_changed",
     ),
 
-    "set_continuous" => {
+    "set_playback" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
-      let value = msg.get("value").and_then(|v| v.as_bool())?;
+      let raw = msg.get("value").and_then(|v| v.as_str())?;
+      let playback: sonify_health_lib::Playback =
+        serde_json::from_value(serde_json::Value::String(raw.to_string()))
+          .ok()?;
       {
         let mut configs = preview.heartbeat_configs.write().unwrap();
-        configs.get_mut(index)?.continuous = value;
+        configs.get_mut(index)?.playback = playback;
       }
       let _ = preview.broadcast_tx.send(
         json!({
-          "type": "continuous_changed",
+          "type": "playback_changed",
           "index": index,
-          "value": value,
+          "value": raw,
         })
         .to_string(),
       );

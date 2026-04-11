@@ -32,7 +32,6 @@ pub struct PreviewState {
   pub heartbeats: Vec<HeartbeatState>,
   pub muted: Arc<AtomicBool>,
   pub master_volume: Shared,
-  pub heartbeat_loop: AtomicBool,
   pub heartbeat_trigger: AtomicBool,
   pub slider_ranges: SliderRanges,
   pub config_path: Option<PathBuf>,
@@ -76,7 +75,6 @@ impl PreviewState {
       config_path,
       config_writable,
       master_volume: shared(1.0),
-      heartbeat_loop: AtomicBool::new(false),
       heartbeat_trigger: AtomicBool::new(false),
       broadcast_tx,
       probe_log_tx,
@@ -162,7 +160,7 @@ impl PreviewState {
           .collect();
         json!({
           "name": cfg.name,
-          "continuous": cfg.continuous,
+          "playback": serde_json::to_value(&cfg.playback).unwrap_or_default(),
           "metric": hb.metric.value(),
           "overridden": overridden,
           "cycle_offset_secs": cfg.cycle_offset_secs,
@@ -180,7 +178,6 @@ impl PreviewState {
       "library": lib_json,
       "muted": self.muted.load(Ordering::Relaxed),
       "master_volume": self.master_volume.value(),
-      "heartbeat_loop": self.heartbeat_loop.load(Ordering::Relaxed),
       "heartbeats": heartbeats_json,
       "slider_ranges": serde_json::to_value(&self.slider_ranges).unwrap_or_default(),
       "overrides": overrides_json,
