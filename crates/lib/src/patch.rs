@@ -80,6 +80,14 @@ pub struct Patch {
 
   #[patch_param(
     min = 0.0,
+    max = 2000.0,
+    step = 1.0,
+    description = "Decay time in milliseconds. Slopes from attack peak to sustain level."
+  )]
+  pub decay_ms: f64,
+
+  #[patch_param(
+    min = 0.0,
     max = 1000.0,
     step = 1.0,
     description = "Fade-out time in milliseconds. Low = staccato, high = lingering tail."
@@ -147,6 +155,14 @@ pub struct Patch {
     description = "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak."
   )]
   pub resonance: f64,
+
+  #[patch_param(
+    min = 0.0,
+    max = 2000.0,
+    step = 1.0,
+    description = "Highpass filter cutoff in Hz. 0 = off, higher = cuts more low frequencies."
+  )]
+  pub highpass: f64,
 
   #[patch_param(
     min = 0.0,
@@ -255,6 +271,7 @@ impl Default for Patch {
       saw_ratio: 0.0,
       square_ratio: 0.0,
       attack_ms: 20.0,
+      decay_ms: 0.0,
       release_ms: 150.0,
       sustain: 1.0,
       chirp_ratio: 1.0,
@@ -264,6 +281,7 @@ impl Default for Patch {
       echo_mix: 0.0,
       brightness: 1.0,
       resonance: 1.0,
+      highpass: 0.0,
       sub_octave: 0.0,
       vibrato_rate: 0.0,
       vibrato_depth: 0.0,
@@ -412,7 +430,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 28);
+    assert_eq!(Patch::PARAMS.len(), 30);
   }
 
   #[test]

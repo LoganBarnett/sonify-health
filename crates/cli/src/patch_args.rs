@@ -36,6 +36,10 @@ pub(crate) struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   attack_ms: Option<f64>,
 
+  /// Override decay time (ms).
+  #[arg(long, help_heading = "Patch overrides")]
+  decay_ms: Option<f64>,
+
   /// Override release time (ms).
   #[arg(long, help_heading = "Patch overrides")]
   release_ms: Option<f64>,
@@ -71,6 +75,10 @@ pub(crate) struct CliPatchOverrides {
   /// Override resonance (filter Q scaler).
   #[arg(long, help_heading = "Patch overrides")]
   resonance: Option<f64>,
+
+  /// Override highpass filter cutoff (Hz).
+  #[arg(long, help_heading = "Patch overrides")]
+  highpass: Option<f64>,
 
   /// Override sub-octave mix.
   #[arg(long, help_heading = "Patch overrides")]
@@ -131,6 +139,7 @@ impl CliPatchOverrides {
       saw_ratio: self.saw_ratio,
       square_ratio: self.square_ratio,
       attack_ms: self.attack_ms,
+      decay_ms: self.decay_ms,
       release_ms: self.release_ms,
       sustain: self.sustain,
       chirp_ratio: self.chirp_ratio,
@@ -140,6 +149,7 @@ impl CliPatchOverrides {
       echo_mix: self.echo_mix,
       brightness: self.brightness,
       resonance: self.resonance,
+      highpass: self.highpass,
       sub_octave: self.sub_octave,
       vibrato_rate: self.vibrato_rate,
       vibrato_depth: self.vibrato_depth,

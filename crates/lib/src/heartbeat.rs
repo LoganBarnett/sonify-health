@@ -42,11 +42,13 @@ pub fn heartbeat_duration(patches: &[Patch]) -> Duration {
 
   let shared = &patches[0];
   let attack_secs = shared.attack_ms / 1000.0;
+  let decay_secs = shared.decay_ms / 1000.0;
   let release_secs = shared.release_ms / 1000.0;
 
   let max_dur = patches.iter().map(|p| p.duration).fold(0.0f64, f64::max);
 
   let attack_total = attack_secs * patches.len() as f64;
+  let decay_total = decay_secs * patches.len() as f64;
   let boop_sum: f64 = patches.iter().map(|p| p.duration).sum();
   let gap_sum: f64 = patches
     .windows(2)
@@ -60,7 +62,13 @@ pub fn heartbeat_duration(patches: &[Patch]) -> Duration {
   };
 
   Duration::from_secs_f64(
-    attack_total + boop_sum + gap_sum + release_secs + echo_tail + 0.05,
+    attack_total
+      + decay_total
+      + boop_sum
+      + gap_sum
+      + release_secs
+      + echo_tail
+      + 0.05,
   )
 }
 
@@ -75,16 +83,18 @@ pub fn heartbeat_content_duration(patches: &[Patch]) -> Duration {
   }
 
   let attack_secs = patches[0].attack_ms / 1000.0;
+  let decay_secs = patches[0].decay_ms / 1000.0;
   let max_dur = patches.iter().map(|p| p.duration).fold(0.0f64, f64::max);
 
   let attack_total = attack_secs * patches.len() as f64;
+  let decay_total = decay_secs * patches.len() as f64;
   let boop_sum: f64 = patches.iter().map(|p| p.duration).sum();
   let gap_sum: f64 = patches
     .windows(2)
     .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
     .sum();
 
-  Duration::from_secs_f64(attack_total + boop_sum + gap_sum)
+  Duration::from_secs_f64(attack_total + decay_total + boop_sum + gap_sum)
 }
 
 /// Total wall-clock duration of a multi-note heartbeat.  Each note
@@ -100,13 +110,14 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
     .map(|n| {
       let p = &n.patch;
       let attack = p.attack_ms / 1000.0;
+      let decay = p.decay_ms / 1000.0;
       let release = p.release_ms / 1000.0;
       let echo_tail = if p.echo_mix > 0.0 {
         4.0 * p.echo_delay
       } else {
         0.0
       };
-      n.offset + attack + p.duration + release + echo_tail
+      n.offset + attack + decay + p.duration + release + echo_tail
     })
     .fold(0.0f64, f64::max);
   Duration::from_secs_f64(max + 0.05)
@@ -125,7 +136,8 @@ pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
     .iter()
     .map(|n| {
       let attack = n.patch.attack_ms / 1000.0;
-      n.offset + attack + n.patch.duration
+      let decay = n.patch.decay_ms / 1000.0;
+      n.offset + attack + decay + n.patch.duration
     })
     .fold(0.0f64, f64::max);
   Duration::from_secs_f64(max)
@@ -214,17 +226,19 @@ fn heartbeat_graph_with_offsets(
     let amp = p.amplitude as f32;
     let dur = p.duration as f32;
     let attack = p.attack_ms as f32 / 1000.0;
+    let decay = p.decay_ms as f32 / 1000.0;
     let release = p.release_ms as f32 / 1000.0;
     let sustain_level = p.sustain as f32;
     let start = offsets[i] as f32;
 
     timings.push(BoopTiming {
       start,
-      tail_end: start + attack + dur + release,
+      tail_end: start + attack + decay + dur + release,
       freq,
       amp,
       dur,
       attack,
+      decay,
       release,
       sustain: sustain_level,
       harshness: 0.0,
@@ -265,8 +279,10 @@ fn heartbeat_graph_with_offsets(
         let local_t = t - p.start;
         let level = if p.attack > 0.0 && local_t < p.attack {
           local_t / p.attack
+        } else if p.decay > 0.0 && local_t < p.attack + p.decay {
+          1.0 + (p.sustain - 1.0) * (local_t - p.attack) / p.decay
         } else {
-          let body_end = p.attack + p.dur;
+          let body_end = p.attack + p.decay + p.dur;
           if local_t <= body_end {
             p.sustain
           } else if p.release > 0.0 {
@@ -365,6 +381,11 @@ fn heartbeat_graph_with_offsets(
 
   let echo_delay = shared.echo_delay as f32;
   let echo_mix = shared.echo_mix as f32;
+  let hp_cutoff = if shared.highpass > 0.0 {
+    shared.highpass as f32
+  } else {
+    1.0
+  };
 
   let waveform = (sine() * sine_w_env)
     & (triangle() * tri_w)
@@ -377,7 +398,8 @@ fn heartbeat_graph_with_offsets(
   let mono = (signal | cutoff_env | moog_q)
     >> (moog() * amp_env * ext_vol)
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0);
+    >> hold_hz(ds_rate, 0.0)
+    >> highpass_hz(hp_cutoff, 0.7);
   let with_echo =
     mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
   let stereo = with_echo
@@ -390,12 +412,13 @@ fn heartbeat_graph_with_offsets(
 #[derive(Clone)]
 struct BoopTiming {
   start: f32,
-  /// End including the release tail (start + dur + release).
+  /// End including the release tail (start + attack + decay + dur + release).
   tail_end: f32,
   freq: f32,
   amp: f32,
   dur: f32,
   attack: f32,
+  decay: f32,
   release: f32,
   sustain: f32,
   harshness: f32,
@@ -472,17 +495,19 @@ pub fn heartbeat_graph_with_volume(
     let amp = p.amplitude as f32;
     let dur = p.duration as f32;
     let attack = p.attack_ms as f32 / 1000.0;
+    let decay = p.decay_ms as f32 / 1000.0;
     let release = p.release_ms as f32 / 1000.0;
     let sustain_level = p.sustain as f32;
     let start = t as f32;
 
     timings.push(BoopTiming {
       start,
-      tail_end: start + attack + dur + release,
+      tail_end: start + attack + decay + dur + release,
       freq,
       amp,
       dur,
       attack,
+      decay,
       release,
       sustain: sustain_level,
       harshness: 0.0,
@@ -490,7 +515,7 @@ pub fn heartbeat_graph_with_volume(
       filter_q: 0.5 * resonance,
     });
 
-    t += (p.attack_ms / 1000.0) + p.duration;
+    t += (p.attack_ms / 1000.0) + (p.decay_ms / 1000.0) + p.duration;
     if i + 1 < count {
       t += gap_between(p.duration, patches[i + 1].duration, max_dur);
     }
@@ -529,8 +554,10 @@ pub fn heartbeat_graph_with_volume(
         let local_t = t - p.start;
         let level = if p.attack > 0.0 && local_t < p.attack {
           local_t / p.attack
+        } else if p.decay > 0.0 && local_t < p.attack + p.decay {
+          1.0 + (p.sustain - 1.0) * (local_t - p.attack) / p.decay
         } else {
-          let body_end = p.attack + p.dur;
+          let body_end = p.attack + p.decay + p.dur;
           if local_t <= body_end {
             p.sustain
           } else if p.release > 0.0 {
@@ -629,6 +656,11 @@ pub fn heartbeat_graph_with_volume(
 
   let echo_delay = shared.echo_delay as f32;
   let echo_mix = shared.echo_mix as f32;
+  let hp_cutoff = if shared.highpass > 0.0 {
+    shared.highpass as f32
+  } else {
+    1.0
+  };
 
   let waveform = (sine() * sine_w_env)
     & (triangle() * tri_w)
@@ -641,7 +673,8 @@ pub fn heartbeat_graph_with_volume(
   let mono = (signal | cutoff_env | moog_q)
     >> (moog() * amp_env * ext_vol)
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0);
+    >> hold_hz(ds_rate, 0.0)
+    >> highpass_hz(hp_cutoff, 0.7);
   let with_echo =
     mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
   let stereo = with_echo
@@ -657,6 +690,7 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let amp = patch.amplitude as f32;
   let harshness = 0.0_f32;
   let attack = (patch.attack_ms / 1000.0) as f32;
+  let decay = (patch.decay_ms / 1000.0) as f32;
   let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
   let dur = patch.duration as f32;
 
@@ -716,8 +750,10 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let env = envelope(move |t: f32| {
     let level = if attack > 0.0 && t < attack {
       t / attack
+    } else if decay > 0.0 && t < attack + decay {
+      1.0 + (sustain_level - 1.0) * (t - attack) / decay
     } else {
-      let body_end = attack + dur;
+      let body_end = attack + decay + dur;
       if t <= body_end {
         sustain_level
       } else if release > 0.0 {
@@ -731,6 +767,11 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
 
   let echo_delay = patch.echo_delay as f32;
   let echo_mix = patch.echo_mix as f32;
+  let hp_cutoff = if patch.highpass > 0.0 {
+    patch.highpass as f32
+  } else {
+    1.0
+  };
 
   let driven = combined
     >> (shape(Tanh(drive)) * drive_norm)
@@ -738,7 +779,8 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let mono = (driven | cutoff | q_val)
     >> (moog() * env)
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0);
+    >> hold_hz(ds_rate, 0.0)
+    >> highpass_hz(hp_cutoff, 0.7);
   Box::new(mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix)))
 }
 
