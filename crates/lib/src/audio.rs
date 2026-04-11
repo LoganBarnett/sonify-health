@@ -487,6 +487,28 @@ impl AudioMixer {
       sample_rate: self.sample_rate,
     }
   }
+
+  /// Number of audio callbacks where the slot lock could not be
+  /// acquired (main thread was adding/removing graphs).
+  pub fn lock_failures(&self) -> u64 {
+    self.inner.lock_failures.load(Ordering::Relaxed)
+  }
+
+  /// Number of audio callbacks where a graph produced NaN/Inf
+  /// samples.
+  pub fn nan_frames(&self) -> u64 {
+    self.inner.nan_frames.load(Ordering::Relaxed)
+  }
+
+  /// Peak audio callback duration in microseconds since last reset.
+  pub fn peak_callback_us(&self) -> u64 {
+    self.inner.peak_callback_us.load(Ordering::Relaxed)
+  }
+
+  /// Reset the peak callback duration counter.
+  pub fn reset_peak_callback_us(&self) {
+    self.inner.peak_callback_us.store(0, Ordering::Relaxed);
+  }
 }
 
 impl MixerHandle {
@@ -580,6 +602,28 @@ impl MixerHandle {
   pub fn sample_rate(&self) -> f64 {
     self.sample_rate
   }
+
+  /// Number of audio callbacks where the slot lock could not be
+  /// acquired.
+  pub fn lock_failures(&self) -> u64 {
+    self.inner.lock_failures.load(Ordering::Relaxed)
+  }
+
+  /// Number of audio callbacks where a graph produced NaN/Inf
+  /// samples.
+  pub fn nan_frames(&self) -> u64 {
+    self.inner.nan_frames.load(Ordering::Relaxed)
+  }
+
+  /// Peak audio callback duration in microseconds since last reset.
+  pub fn peak_callback_us(&self) -> u64 {
+    self.inner.peak_callback_us.load(Ordering::Relaxed)
+  }
+
+  /// Reset the peak callback duration counter.
+  pub fn reset_peak_callback_us(&self) {
+    self.inner.peak_callback_us.store(0, Ordering::Relaxed);
+  }
 }
 
 #[cfg(test)]
@@ -649,5 +693,32 @@ mod tests {
       left_b.iter().any(|s| s.abs() > 0.001),
       "Graph B should produce non-zero samples"
     );
+  }
+
+  /// Verify that health accessors return initial values and that
+  /// reset_peak_callback_us works.  Skipped if no audio device is
+  /// available (CI).
+  #[test]
+  fn mixer_handle_health_accessors() {
+    let mixer = match AudioMixer::new(None) {
+      Ok(m) => m,
+      Err(_) => {
+        eprintln!("No audio device available, skipping test");
+        return;
+      }
+    };
+
+    assert_eq!(mixer.lock_failures(), 0);
+    assert_eq!(mixer.nan_frames(), 0);
+    // peak_callback_us may already be non-zero from the running
+    // stream, so just test the reset.
+    mixer.reset_peak_callback_us();
+    assert_eq!(mixer.peak_callback_us(), 0);
+
+    let handle = mixer.handle();
+    assert_eq!(handle.lock_failures(), 0);
+    assert_eq!(handle.nan_frames(), 0);
+    handle.reset_peak_callback_us();
+    assert_eq!(handle.peak_callback_us(), 0);
   }
 }

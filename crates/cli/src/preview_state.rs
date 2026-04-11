@@ -1,4 +1,5 @@
 use crate::config::{OverrideInfo, SliderRanges};
+use crate::lock_util::RecoverPoison;
 use crate::metrics::Metrics;
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
@@ -96,7 +97,7 @@ impl PreviewState {
   /// mute and master volume.  Volume is now master * mute only;
   /// per-note volume is baked into the audio graph.
   pub fn update_effective_volume(&self, index: usize) {
-    let hbs = self.heartbeats.read().unwrap();
+    let hbs = self.heartbeats.read().unwrap_or_recover();
     if let Some(hb) = hbs.get(index) {
       let mute_factor = if self.muted.load(Ordering::Relaxed) {
         0.0
@@ -110,7 +111,7 @@ impl PreviewState {
 
   /// Update effective volumes for all heartbeats.
   pub fn update_all_effective_volumes(&self) {
-    let hbs = self.heartbeats.read().unwrap();
+    let hbs = self.heartbeats.read().unwrap_or_recover();
     let mute_factor = if self.muted.load(Ordering::Relaxed) {
       0.0
     } else {
@@ -125,13 +126,14 @@ impl PreviewState {
   /// Revert all library patches, transitions, and volumes to their
   /// original state.
   pub fn revert(&self) {
-    *self.library.write().unwrap() = self.original_library.clone();
-    *self.overrides.write().unwrap() = self.original_overrides.clone();
-    *self.heartbeat_configs.write().unwrap() =
+    *self.library.write().unwrap_or_recover() = self.original_library.clone();
+    *self.overrides.write().unwrap_or_recover() =
+      self.original_overrides.clone();
+    *self.heartbeat_configs.write().unwrap_or_recover() =
       self.original_heartbeat_configs.clone();
-    let hbs = self.heartbeats.read().unwrap();
+    let hbs = self.heartbeats.read().unwrap_or_recover();
     for hb in hbs.iter() {
-      *hb.override_value.write().unwrap() = None;
+      *hb.override_value.write().unwrap_or_recover() = None;
     }
     drop(hbs);
     self.master_volume.set_value(1.0);
@@ -140,14 +142,14 @@ impl PreviewState {
 
   /// Store the mixer handle so trigger_immediate_play can use it.
   pub fn set_mixer_handle(&self, handle: MixerHandle) {
-    *self.mixer_handle.write().unwrap() = Some(handle);
+    *self.mixer_handle.write().unwrap_or_recover() = Some(handle);
   }
 
   /// Play heartbeat `index` immediately as a one-shot sound.
   /// Spawns a fire-and-forget thread that removes the mixer slot
   /// after the sound finishes.
   pub fn trigger_immediate_play(&self, index: usize) {
-    let handle = match self.mixer_handle.read().unwrap().clone() {
+    let handle = match self.mixer_handle.read().unwrap_or_recover().clone() {
       Some(h) => h,
       None => return,
     };
@@ -159,7 +161,7 @@ impl PreviewState {
 
     self.update_effective_volume(index);
     let eff_vol = {
-      let hbs = self.heartbeats.read().unwrap();
+      let hbs = self.heartbeats.read().unwrap_or_recover();
       match hbs.get(index) {
         Some(hb) => hb.effective_volume.clone(),
         None => return,
@@ -179,12 +181,13 @@ impl PreviewState {
   /// Spawns a fire-and-forget thread that removes the mixer slot
   /// after the sound finishes.
   pub fn play_patch_immediate(&self, name: &str) {
-    let handle = match self.mixer_handle.read().unwrap().clone() {
+    let handle = match self.mixer_handle.read().unwrap_or_recover().clone() {
       Some(h) => h,
       None => return,
     };
 
-    let patch = match self.library.read().unwrap().get(name).cloned() {
+    let patch = match self.library.read().unwrap_or_recover().get(name).cloned()
+    {
       Some(p) => p,
       None => return,
     };
@@ -206,12 +209,12 @@ impl PreviewState {
 
   /// Add a new heartbeat at runtime.  Returns the index.
   pub fn add_heartbeat(&self, cfg: HeartbeatConfig) -> usize {
-    let mut configs = self.heartbeat_configs.write().unwrap();
+    let mut configs = self.heartbeat_configs.write().unwrap_or_recover();
     configs.push(cfg);
     let index = configs.len() - 1;
     drop(configs);
 
-    let mut hbs = self.heartbeats.write().unwrap();
+    let mut hbs = self.heartbeats.write().unwrap_or_recover();
     hbs.push(HeartbeatState {
       metric: shared(0.0),
       override_value: RwLock::new(None),
@@ -227,17 +230,17 @@ impl PreviewState {
   /// metric and transition config.
   fn resolve_notes(&self, index: usize) -> Vec<ResolvedNote> {
     let metric = {
-      let hbs = self.heartbeats.read().unwrap();
+      let hbs = self.heartbeats.read().unwrap_or_recover();
       match hbs.get(index) {
         Some(hb) => hb.metric.value() as f64,
         None => return vec![],
       }
     };
     let note_configs = {
-      let cfg = &self.heartbeat_configs.read().unwrap()[index];
+      let cfg = &self.heartbeat_configs.read().unwrap_or_recover()[index];
       cfg.notes.clone()
     };
-    let lib = self.library.read().unwrap();
+    let lib = self.library.read().unwrap_or_recover();
     note_configs
       .iter()
       .filter_map(|nc| {
@@ -253,7 +256,7 @@ impl PreviewState {
 
   /// Build a full state snapshot JSON string for WebSocket clients.
   pub fn state_snapshot(&self) -> String {
-    let lib = self.library.read().unwrap();
+    let lib = self.library.read().unwrap_or_recover();
     let lib_json: serde_json::Map<String, serde_json::Value> = lib
       .iter()
       .map(|(name, patch)| {
@@ -274,14 +277,14 @@ impl PreviewState {
       })
       .collect();
 
-    let hb_configs = self.heartbeat_configs.read().unwrap();
-    let hbs = self.heartbeats.read().unwrap();
+    let hb_configs = self.heartbeat_configs.read().unwrap_or_recover();
+    let hbs = self.heartbeats.read().unwrap_or_recover();
     let heartbeats_json: Vec<_> = hb_configs
       .iter()
       .enumerate()
       .map(|(i, cfg)| {
         let hb = &hbs[i];
-        let overridden = hb.override_value.read().unwrap().is_some();
+        let overridden = hb.override_value.read().unwrap_or_recover().is_some();
         let notes_json: Vec<_> = cfg
           .notes
           .iter()
@@ -331,7 +334,7 @@ impl PreviewState {
 
   /// Serialize the overrides map to a JSON value.
   pub fn overrides_json(&self) -> serde_json::Value {
-    let ovr = self.overrides.read().unwrap();
+    let ovr = self.overrides.read().unwrap_or_recover();
     let map: serde_json::Map<String, serde_json::Value> = ovr
       .iter()
       .map(|(name, info)| {

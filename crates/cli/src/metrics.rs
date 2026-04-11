@@ -11,6 +11,9 @@ pub struct Metrics {
   pub probes_completed: IntCounterVec,
   pub probe_value: GaugeVec,
   pub muted: IntGauge,
+  pub audio_lock_failures: IntGauge,
+  pub audio_nan_frames: IntGauge,
+  pub audio_peak_callback_us: IntGauge,
 }
 
 impl Default for Metrics {
@@ -57,6 +60,24 @@ impl Metrics {
     )
     .expect("Failed to create muted gauge");
 
+    let audio_lock_failures = IntGauge::new(
+      "sonify_health_audio_lock_failures_total",
+      "Number of audio callbacks where the mixer slot lock was contended.",
+    )
+    .expect("Failed to create audio_lock_failures gauge");
+
+    let audio_nan_frames = IntGauge::new(
+      "sonify_health_audio_nan_frames_total",
+      "Number of audio callbacks where a graph produced NaN/Inf samples.",
+    )
+    .expect("Failed to create audio_nan_frames gauge");
+
+    let audio_peak_callback_us = IntGauge::new(
+      "sonify_health_audio_peak_callback_us",
+      "Peak audio callback duration in microseconds since last reset.",
+    )
+    .expect("Failed to create audio_peak_callback_us gauge");
+
     registry
       .register(Box::new(heartbeats_played.clone()))
       .expect("Failed to register heartbeats_played");
@@ -69,6 +90,15 @@ impl Metrics {
     registry
       .register(Box::new(muted.clone()))
       .expect("Failed to register muted");
+    registry
+      .register(Box::new(audio_lock_failures.clone()))
+      .expect("Failed to register audio_lock_failures");
+    registry
+      .register(Box::new(audio_nan_frames.clone()))
+      .expect("Failed to register audio_nan_frames");
+    registry
+      .register(Box::new(audio_peak_callback_us.clone()))
+      .expect("Failed to register audio_peak_callback_us");
 
     Self {
       registry: Arc::new(registry),
@@ -76,6 +106,9 @@ impl Metrics {
       probes_completed,
       probe_value,
       muted,
+      audio_lock_failures,
+      audio_nan_frames,
+      audio_peak_callback_us,
     }
   }
 }
