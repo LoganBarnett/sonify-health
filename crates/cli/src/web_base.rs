@@ -207,7 +207,10 @@ pub fn public_router(state: AppState) -> Router {
 }
 
 /// Build a minimal router with just the WebSocket endpoint, no
-/// auth middleware.  Used by integration tests.
+/// auth middleware.  Used by integration tests, which are a
+/// separate compilation unit that rustc cannot see from the
+/// binary target.
+#[allow(dead_code)]
 pub fn test_router(state: AppState) -> Router {
   Router::new().route("/ws", get(websocket::ws_handler).with_state(state))
 }
