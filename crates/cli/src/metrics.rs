@@ -1,4 +1,4 @@
-use prometheus::{IntCounter, IntGauge, Registry};
+use prometheus::{IntCounterVec, IntGauge, Opts, Registry};
 use std::sync::Arc;
 
 /// Holds all Prometheus collectors for the daemon, registered
@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct Metrics {
   pub registry: Arc<Registry>,
-  pub heartbeats_played: IntCounter,
+  pub heartbeats_played: IntCounterVec,
   pub muted: IntGauge,
 }
 
@@ -22,9 +22,12 @@ impl Metrics {
   pub fn new() -> Self {
     let registry = Registry::new();
 
-    let heartbeats_played = IntCounter::new(
-      "sonify_health_heartbeats_played_total",
-      "Total heartbeat audio sequences played.",
+    let heartbeats_played = IntCounterVec::new(
+      Opts::new(
+        "sonify_health_heartbeats_played_total",
+        "Total heartbeat audio sequences played.",
+      ),
+      &["heartbeat"],
     )
     .expect("Failed to create heartbeats_played counter");
 

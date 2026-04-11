@@ -115,6 +115,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     let play_running = Arc::clone(&running);
     let play_preview = Arc::clone(&preview);
     let play_mix = mixer.handle();
+    let play_counter =
+      metrics.heartbeats_played.with_label_values(&[&cfg.name]);
     handles.push(thread::spawn(move || {
       // Align to the wall-clock grid before the first play so that
       // heartbeats with different offsets start staggered.
@@ -130,13 +132,32 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         let mode = play_preview.heartbeat_configs.read().unwrap()[i].playback;
         match mode {
           Playback::Continuous => {
-            play_continuous_tick(&play_running, &play_preview, &play_mix, i);
+            play_continuous_tick(
+              &play_running,
+              &play_preview,
+              &play_mix,
+              i,
+              &play_counter,
+            );
           }
           Playback::Loop => {
-            play_loop(&play_running, &play_preview, &play_mix, i);
+            play_loop(
+              &play_running,
+              &play_preview,
+              &play_mix,
+              i,
+              &play_counter,
+            );
           }
           Playback::Clock => {
-            play_oneshot_once(&play_running, &play_preview, &play_mix, i, true);
+            play_oneshot_once(
+              &play_running,
+              &play_preview,
+              &play_mix,
+              i,
+              true,
+              &play_counter,
+            );
           }
         }
       }
@@ -204,6 +225,7 @@ fn play_continuous_tick(
   preview: &PreviewState,
   play_mix: &MixerHandle,
   i: usize,
+  counter: &prometheus::IntCounter,
 ) {
   // Wait for a valid initial patch.
   let (patch, _) = loop {
@@ -237,6 +259,7 @@ fn play_continuous_tick(
     Some(&preview.heartbeats[i].effective_volume),
   );
   let sid = play_mix.add(graph);
+  counter.inc();
 
   while running.load(Ordering::Relaxed) {
     sleep_checking(running, Duration::from_millis(50));
@@ -294,6 +317,7 @@ fn play_loop(
   preview: &PreviewState,
   play_mix: &MixerHandle,
   i: usize,
+  counter: &prometheus::IntCounter,
 ) {
   let metric = preview.heartbeats[i].metric.value() as f64;
   let note_configs = {
@@ -326,6 +350,7 @@ fn play_loop(
   );
   let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
   let sid = play_mix.add(graph);
+  counter.inc();
 
   sleep_checking(running, content_dur);
 
@@ -372,6 +397,7 @@ fn play_loop(
     let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
     let cf = ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
     play_mix.replace(sid, graph, cf);
+    counter.inc();
 
     sleep_checking(running, content_dur);
   }
@@ -388,6 +414,7 @@ fn play_oneshot_once(
   play_mix: &MixerHandle,
   i: usize,
   wait_for_clock: bool,
+  counter: &prometheus::IntCounter,
 ) {
   let metric = preview.heartbeats[i].metric.value() as f64;
   let (note_configs, cycle_secs, cycle_offset) = {
@@ -423,6 +450,7 @@ fn play_oneshot_once(
   let sid = play_mix.add(graph);
   sleep_checking(running, dur);
   play_mix.remove(sid);
+  counter.inc();
 
   if !running.load(Ordering::Relaxed) {
     return;
