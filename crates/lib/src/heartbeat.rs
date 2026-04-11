@@ -74,7 +74,7 @@ fn note_graph(
   offset: f64,
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
-  let freq = patch.freq as f32;
+  let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
   let amp = patch.amplitude as f32;
   let attack = patch.attack_ms as f32 / 1000.0;
   let decay = patch.decay_ms as f32 / 1000.0;
@@ -259,7 +259,7 @@ pub fn heartbeat_graph_with_notes(
 /// Build an audio graph for a single boop.  Duration and
 /// frequency come from the patch itself.
 pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
-  let freq = patch.freq as f32;
+  let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
   let amp = patch.amplitude as f32;
   let harshness = 0.0_f32;
   let attack = (patch.attack_ms / 1000.0) as f32;

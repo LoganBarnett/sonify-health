@@ -131,6 +131,10 @@ pub(crate) struct CliPatchOverrides {
   /// Override loop repeat gap (seconds added to content duration).
   #[arg(long, help_heading = "Patch overrides")]
   gap: Option<f64>,
+
+  /// Override detune offset in cents.
+  #[arg(long, help_heading = "Patch overrides")]
+  detune: Option<f64>,
 }
 
 impl CliPatchOverrides {
@@ -167,6 +171,7 @@ impl CliPatchOverrides {
       fm_depth: self.fm_depth,
       downsample: self.downsample,
       gap: self.gap,
+      detune: self.detune,
     }
   }
 

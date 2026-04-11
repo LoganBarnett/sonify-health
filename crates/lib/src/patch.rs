@@ -267,6 +267,14 @@ pub struct Patch {
     description = "Seconds added to content duration for loop repeat timing. Positive = silence between repetitions, negative = overlapping re-triggers via crossfade."
   )]
   pub gap: f64,
+
+  #[patch_param(
+    min = -100.0,
+    max = 100.0,
+    step = 1.0,
+    description = "Pitch offset in cents applied to all oscillators. Creates chorus-like thickness."
+  )]
+  pub detune: f64,
 }
 
 impl Default for Patch {
@@ -303,6 +311,7 @@ impl Default for Patch {
       fm_depth: 0.0,
       downsample: 0.0,
       gap: 0.0,
+      detune: 0.0,
     }
   }
 }
@@ -439,7 +448,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 31);
+    assert_eq!(Patch::PARAMS.len(), 32);
   }
 
   #[test]
