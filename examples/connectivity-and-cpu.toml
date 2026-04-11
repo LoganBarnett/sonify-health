@@ -19,7 +19,7 @@ log_format = "text"
 [[heartbeats]]
 name = "gateway"
 command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
-result_mode = "exit-code-severity"
+result_mode = "exit-code"
 cycle_secs = 15
 cycle_offset_secs = 0
 
@@ -36,11 +36,11 @@ patch = "sine"
 threshold = 1.01
 patch = "alarm"
 
-# Internet connectivity via a well-known public DNS resolver.
+# Internet connectivity via OpenDNS (208.67.222.222).
 [[heartbeats]]
 name = "internet"
-command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
-result_mode = "exit-code-severity"
+command = "ping -c 1 -W 4 208.67.222.222 >/dev/null 2>&1"
+result_mode = "exit-code"
 cycle_secs = 15
 cycle_offset_secs = 5
 

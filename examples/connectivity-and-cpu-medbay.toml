@@ -9,6 +9,7 @@ playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
 result_mode = "exit-code"
+tiers = []
 
 [[heartbeats.notes]]
 offset = 0.0
@@ -18,30 +19,15 @@ volume = 1.0
 type = "discrete"
 
 [[heartbeats.notes.transition.states]]
-patch = "star-trek-ok"
+patch = "medbay-ok"
 threshold = 0.5
 
 [[heartbeats.notes.transition.states]]
-patch = "star-trek-error"
+patch = "medbay-error"
 threshold = 1.01
 
-[[heartbeats.notes]]
-offset = 0.2
-volume = 1.0
-
-[heartbeats.notes.transition]
-type = "discrete"
-
-[[heartbeats.notes.transition.states]]
-patch = "star-trek-ok"
-threshold = 0.5
-
-[[heartbeats.notes.transition.states]]
-patch = "star-trek-error"
-threshold = 1.01
-
-[[heartbeats]]
 # OpenDNS resolver.
+[[heartbeats]]
 command = "ping -c 1 -W 4 208.67.222.222 >/dev/null 2>&1"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.6
@@ -52,6 +38,7 @@ playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
 result_mode = "exit-code"
+tiers = []
 
 [[heartbeats.notes]]
 offset = 0.0
@@ -61,66 +48,110 @@ volume = 1.0
 type = "discrete"
 
 [[heartbeats.notes.transition.states]]
-patch = "star-trek-ok"
+patch = "medbay-ok"
 threshold = 0.5
 
 [[heartbeats.notes.transition.states]]
-patch = "star-trek-error"
+patch = "medbay-error"
 threshold = 1.01
 
 [[heartbeats.notes]]
-offset = 0.2
+offset = 0.15
 volume = 1.0
 
 [heartbeats.notes.transition]
 type = "discrete"
 
 [[heartbeats.notes.transition.states]]
-patch = "star-trek-ok"
+patch = "medbay-ok"
 threshold = 0.5
 
 [[heartbeats.notes.transition.states]]
-patch = "star-trek-error"
+patch = "medbay-error"
 threshold = 1.1
 
 [[heartbeats]]
 command = '''sh -c 'load=$(uptime | awk -F"load average: " "{split(\$2,a,\", \"); print a[1]}"); cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1); echo "$load $cpus" | awk "{v=\$1/\$2; print (v>1?1:v)}"''''
-crossfade_ms = 42.0
-cycle_offset_secs = 4.8
+crossfade_ms = 0.0
+cycle_offset_secs = 0.0
 cycle_secs = 15.0
 name = "cpu"
-phrase_gap = 0.0
+phrase_gap = 7.0
 playback = "loop"
 poll_interval_secs = 5.0
 repeat_rate = 1.0
 result_mode = "stdout"
+tiers = []
 
 [[heartbeats.notes]]
 offset = 0.0
-volume = 1.0
+volume = 0.55
 
 [heartbeats.notes.transition]
 patches = [
-    "warpdrive-cpu-lo",
-    "warpdrive-cpu-hi",
+    "medbay-cpu-lo",
+    "medbay-cpu-lo",
 ]
 type = "gradient"
 
 [[heartbeats.notes.transition.segments]]
-intensity = 5.3
-strategy = "linear"
-[patches.star-trek-error]
-amplitude = 0.54
-chirp_ratio = 0.8
-overrides = "star-trek-ok"
+intensity = 2.0
+strategy = "ease-in"
 
-[patches.star-trek-ok]
+[patches.medbay-cpu-hi]
+freq = 18.0
+overrides = "medbay-cpu-lo"
+
+[patches.medbay-cpu-lo]
+amplitude = 0.3
+attack_ms = 2000.0
+brightness = 1.47
+chirp_ratio = 1.0
+crush = 0.0
+decay_ms = 2000.0
+detune = 0.0
+downsample = 0.03
+drive = 0.01
+duration = 4.17
+echo_delay = 0.01
+echo_mix = 0.18
+fm_depth = 0.7
+fm_ratio = 0.0
+freq = 85.0
+gap = 0.0
+harshness_offset = 0.0
+highpass = 0.0
+noise_mix = 1.0
+release_ms = 100.0
+resonance = 3.78
+reverb_mix = 0.0
+saw_ratio = 0.0
+sine_ratio = 1.32
+square_ratio = 1.0
+stereo_pan = 0.0
+sub_octave = 0.0
+sustain = 0.0
+tremolo_depth = 0.0
+tremolo_rate = 0.0
+tri_ratio = 0.0
+vibrato_depth = 0.0
+vibrato_rate = 0.0
+
+[patches.medbay-error]
+amplitude = 0.54
+chirp_ratio = 1.01
+detune = 92.0
+harshness_offset = 0.12
+overrides = "medbay-ok"
+
+[patches.medbay-ok]
 amplitude = 0.327
 attack_ms = 6.0
 brightness = 1.82
 chirp_ratio = 1.01
 crush = 0.0
-decay_ms = 0.0
+decay_ms = 97.0
+detune = 0.0
 downsample = 0.0
 drive = 0.5
 duration = 0.22
@@ -128,8 +159,9 @@ echo_delay = 0.32
 echo_mix = 0.33
 fm_depth = 0.0
 fm_ratio = 0.0
-freq = 4307.0
+freq = 182.0
 gap = 0.0
+harshness_offset = 0.0
 highpass = 0.0
 noise_mix = 0.0
 release_ms = 22.0
@@ -145,41 +177,4 @@ tremolo_depth = 0.11
 tremolo_rate = 0.0
 tri_ratio = 1.22
 vibrato_depth = 0.49
-vibrato_rate = 0.0
-
-[patches.warpdrive-cpu-hi]
-gap = -1.64
-overrides = "warpdrive-cpu-lo"
-
-[patches.warpdrive-cpu-lo]
-amplitude = 1.0
-attack_ms = 5.0
-brightness = 0.2
-chirp_ratio = 1.0
-crush = 0.0
-decay_ms = 400.0
-downsample = 0.0
-drive = 0.01
-duration = 1.68
-echo_delay = 0.08
-echo_mix = 0.15
-fm_depth = 0.0
-fm_ratio = 0.0
-freq = 60.0
-gap = 0.0
-highpass = 0.0
-noise_mix = 1.0
-release_ms = 200.0
-resonance = 5.0
-reverb_mix = 0.25
-saw_ratio = 0.0
-sine_ratio = 0.0
-square_ratio = 0.0
-stereo_pan = 0.0
-sub_octave = 0.0
-sustain = 0.39
-tremolo_depth = 0.0
-tremolo_rate = 0.0
-tri_ratio = 0.0
-vibrato_depth = 0.0
 vibrato_rate = 0.0

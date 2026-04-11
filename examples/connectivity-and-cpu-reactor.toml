@@ -8,7 +8,7 @@ phrase_gap = 0.0
 playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
-result_mode = "exit-code-severity"
+result_mode = "exit-code"
 
 [[heartbeats.notes]]
 offset = 0.0
@@ -26,7 +26,8 @@ patch = "reactor-error"
 threshold = 1.01
 
 [[heartbeats]]
-command = "ping -c 1 -W 4 8.8.8.8 >/dev/null 2>&1"
+# OpenDNS resolver.
+command = "ping -c 1 -W 4 208.67.222.222 >/dev/null 2>&1"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.6
 cycle_secs = 15.0
@@ -35,7 +36,7 @@ phrase_gap = 0.0
 playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
-result_mode = "exit-code-severity"
+result_mode = "exit-code"
 
 [[heartbeats.notes]]
 offset = 0.0
