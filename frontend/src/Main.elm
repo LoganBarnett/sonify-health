@@ -11,6 +11,7 @@ import Json.Decode as Decode
 import Ports
 import Process
 import Protocol exposing (..)
+import Set exposing (Set)
 import Svg
 import Svg.Attributes as SA
 import Task
@@ -76,6 +77,7 @@ type alias Model =
     , configWritable : Bool
     , configPath : Maybe String
     , saveStatus : Maybe String
+    , expandedDescriptions : Set String
     }
 
 
@@ -125,6 +127,7 @@ type Msg
     | SaveConfig
     | DismissSaveStatus
     | DismissProtocolError
+    | ToggleDescription String
     | NoOp
 
 
@@ -171,6 +174,7 @@ init _ url key =
       , configWritable = False
       , configPath = Nothing
       , saveStatus = Nothing
+      , expandedDescriptions = Set.empty
       }
     , cmdForRoute route
     )
@@ -777,6 +781,18 @@ update msg model =
 
         DismissProtocolError ->
             ( { model | protocolError = Nothing }, Cmd.none )
+
+        ToggleDescription key ->
+            ( { model
+                | expandedDescriptions =
+                    if Set.member key model.expandedDescriptions then
+                        Set.remove key model.expandedDescriptions
+
+                    else
+                        Set.insert key model.expandedDescriptions
+              }
+            , Cmd.none
+            )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1533,7 +1549,7 @@ viewToolbar model =
                     "Mute"
                 )
             ]
-        , viewSlider "Master" model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
+        , viewSlider model "slider:Master" "Master" (Just "Global volume multiplier applied to all heartbeats.") model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
         , button [ class "btn", onClick TriggerHeartbeat ]
             [ text "Trigger" ]
         , button [ class "btn", onClick RevertAll ]
@@ -1580,29 +1596,55 @@ viewToolbar model =
 -- Shared slider + number input component.
 
 
-viewSlider : String -> Float -> Float -> Float -> Float -> (String -> Msg) -> Html Msg
-viewSlider name min_ max_ step_ val toMsg =
-    label [ class "slider-row" ]
-        [ text (name ++ " ")
-        , input
-            [ type_ "range"
-            , Html.Attributes.min (String.fromFloat min_)
-            , Html.Attributes.max (String.fromFloat max_)
-            , step (String.fromFloat step_)
-            , value (String.fromFloat val)
-            , onInput toMsg
+viewSlider : Model -> String -> String -> Maybe String -> Float -> Float -> Float -> Float -> (String -> Msg) -> Html Msg
+viewSlider model key name description min_ max_ step_ val toMsg =
+    let
+        labelAttrs =
+            case description of
+                Just _ ->
+                    [ class "slider-label-help"
+                    , onClick (ToggleDescription key)
+                    ]
+
+                Nothing ->
+                    []
+
+        descriptionDiv =
+            case description of
+                Just desc ->
+                    if Set.member key model.expandedDescriptions then
+                        div [ class "slider-description" ] [ text desc ]
+
+                    else
+                        text ""
+
+                Nothing ->
+                    text ""
+    in
+    div []
+        [ label [ class "slider-row" ]
+            [ span labelAttrs [ text (name ++ " ") ]
+            , input
+                [ type_ "range"
+                , Html.Attributes.min (String.fromFloat min_)
+                , Html.Attributes.max (String.fromFloat max_)
+                , step (String.fromFloat step_)
+                , value (String.fromFloat val)
+                , onInput toMsg
+                ]
+                []
+            , input
+                [ type_ "number"
+                , class "num-input"
+                , Html.Attributes.min (String.fromFloat min_)
+                , Html.Attributes.max (String.fromFloat max_)
+                , step (String.fromFloat step_)
+                , value (String.fromFloat val)
+                , onInput toMsg
+                ]
+                []
             ]
-            []
-        , input
-            [ type_ "number"
-            , class "num-input"
-            , Html.Attributes.min (String.fromFloat min_)
-            , Html.Attributes.max (String.fromFloat max_)
-            , step (String.fromFloat step_)
-            , value (String.fromFloat val)
-            , onInput toMsg
-            ]
-            []
+        , descriptionDiv
         ]
 
 
@@ -1675,13 +1717,13 @@ viewHeartbeatCard model index hb =
             ]
         , div [ class "card-body" ]
             [ viewPlaybackCycler hb.playback (CyclePlayback index)
-            , viewSlider "Offset" model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
+            , viewSlider model ("slider:Offset:" ++ String.fromInt index) "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
             , if hb.playback == "continuous" || hb.playback == "loop" then
-                viewSlider "Crossfade ms" model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
+                viewSlider model ("slider:CrossfadeMs:" ++ String.fromInt index) "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
 
               else
                 text ""
-            , viewSlider "Value" model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
+            , viewSlider model ("slider:Value:" ++ String.fromInt index) "Value" (Just "Current metric severity. Override to freeze at a fixed value.") model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
             , div [ class "value-status-row" ]
                 [ span
                     [ class
@@ -1742,8 +1784,8 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
               else
                 text ""
             ]
-        , viewSlider "Volume" model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteSlider NoteVolume hbIdx noteIdx)
-        , viewSlider "Offset" model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteSlider NoteOffset hbIdx noteIdx)
+        , viewSlider model ("slider:NoteVolume:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx) "Volume" (Just "Relative volume of this note within the heartbeat.") model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteSlider NoteVolume hbIdx noteIdx)
+        , viewSlider model ("slider:NoteOffset:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx) "Offset" (Just "Delay before this note plays, in seconds.") model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteSlider NoteOffset hbIdx noteIdx)
         , viewNoteTransitionEdit model.sliderRanges patchNames hbIdx noteIdx note.transition
         ]
 
@@ -2270,19 +2312,20 @@ viewPatchEditor model =
                         , headerExtra
                         , div [ class "param-grid" ]
                             (List.map
-                                (viewParamSlider patchName patchValues maybeOverride)
+                                (viewParamSlider model patchName patchValues maybeOverride)
                                 model.patchParamMeta
                             )
                         ]
 
 
 viewParamSlider :
-    String
+    Model
+    -> String
     -> Dict String Float
     -> Maybe OverrideInfo
     -> PatchParamMeta
     -> Html Msg
-viewParamSlider patchName patchValues maybeOverride meta =
+viewParamSlider model patchName patchValues maybeOverride meta =
     let
         val =
             Dict.get meta.name patchValues
@@ -2306,6 +2349,25 @@ viewParamSlider patchName patchValues maybeOverride meta =
 
                 Nothing ->
                     ( False, text "" )
+
+        descKey =
+            "param:" ++ patchName ++ ":" ++ meta.name
+
+        labelAttrs =
+            if String.isEmpty meta.description then
+                [ class "param-label" ]
+
+            else
+                [ class "param-label slider-label-help"
+                , onClick (ToggleDescription descKey)
+                ]
+
+        descriptionDiv =
+            if not (String.isEmpty meta.description) && Set.member descKey model.expandedDescriptions then
+                div [ class "slider-description" ] [ text meta.description ]
+
+            else
+                text ""
     in
     div
         [ class
@@ -2316,7 +2378,7 @@ viewParamSlider patchName patchValues maybeOverride meta =
                 "param-slider"
             )
         ]
-        [ label [ class "param-label", title meta.description ]
+        [ label labelAttrs
             [ text meta.name ]
         , input
             [ type_ "range"
@@ -2338,6 +2400,7 @@ viewParamSlider patchName patchValues maybeOverride meta =
             ]
             []
         , resetBtn
+        , descriptionDiv
         ]
 
 

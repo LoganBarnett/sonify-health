@@ -301,7 +301,7 @@ showing "(overridden)" or "(live)".  Rename the clear button from
 
 Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~
 
-* TODO Click-to-expand descriptions on controls
+* DONE Click-to-expand descriptions on controls
 Replace ~title~ attribute tooltips with a click-to-expand pattern.
 Add ~expandedDescriptions : Set String~ to the Elm model.  Clicking
 a label with a description toggles a ~div.slider-description~ below

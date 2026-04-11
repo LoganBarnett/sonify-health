@@ -347,6 +347,17 @@ a:hover {
   color: var(--color-degraded-text);
 }
 
+.slider-label-help {
+  cursor: help;
+}
+
+.slider-description {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  padding: var(--space-xs) 0;
+  line-height: 1.4;
+}
+
 .num-input {
   width: 60px;
   font-size: var(--font-sm);
