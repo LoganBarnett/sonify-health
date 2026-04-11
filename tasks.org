@@ -292,7 +292,7 @@ Update ~hb.playback~ locally before sending ~encodeSetPlayback~.
 
 Files: ~frontend/src/Main.elm~
 
-* TODO Rename Override to Value with status label
+* DONE Rename Override to Value with status label
 The "Override" slider label is confusing — it always shows the
 current metric value whether overridden or live.  Rename the slider
 label to "Value".  Add a decorated status indicator to the right

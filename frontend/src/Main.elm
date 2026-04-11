@@ -1681,16 +1681,35 @@ viewHeartbeatCard model index hb =
 
               else
                 text ""
-            , viewSlider "Override" model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
-            , if hb.overridden then
-                button
-                    [ class "btn btn-sm"
-                    , onClick (ClearOverride index)
-                    ]
-                    [ text "Live" ]
+            , viewSlider "Value" model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
+            , div [ class "value-status-row" ]
+                [ span
+                    [ class
+                        (if hb.overridden then
+                            "value-status value-status-overridden"
 
-              else
-                text ""
+                         else
+                            "value-status"
+                        )
+                    ]
+                    [ text
+                        (if hb.overridden then
+                            "(overridden)"
+
+                         else
+                            "(live)"
+                        )
+                    ]
+                , if hb.overridden then
+                    button
+                        [ class "btn btn-sm"
+                        , onClick (ClearOverride index)
+                        ]
+                        [ text "Track Live" ]
+
+                  else
+                    text ""
+                ]
             , div [ class "notes-section" ]
                 (List.indexedMap (viewNoteEditor model index (List.length hb.notes)) hb.notes
                     ++ [ button

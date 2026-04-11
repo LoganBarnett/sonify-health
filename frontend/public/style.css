@@ -331,6 +331,22 @@ a:hover {
   accent-color: var(--color-accent);
 }
 
+.value-status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.value-status {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.value-status-overridden {
+  color: var(--color-degraded-text);
+}
+
 .num-input {
   width: 60px;
   font-size: var(--font-sm);
