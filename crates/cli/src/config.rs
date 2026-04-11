@@ -50,20 +50,20 @@ pub enum ConfigError {
   },
 
   #[error(
-    "Failed to read extra patches file at {path:?}: \
+    "Failed to read patch library file at {path:?}: \
      {source}"
   )]
-  ExtraPatchesRead {
+  PatchLibraryRead {
     path: PathBuf,
     #[source]
     source: std::io::Error,
   },
 
   #[error(
-    "Failed to parse extra patches file at {path:?}: \
+    "Failed to parse patch library file at {path:?}: \
      {source}"
   )]
-  ExtraPatchesParse {
+  PatchLibraryParse {
     path: PathBuf,
     #[source]
     source: toml::de::Error,
@@ -179,7 +179,6 @@ pub(crate) struct ConfigFileRaw {
   listen: Option<String>,
   audio_device: Option<String>,
   frontend_path: Option<PathBuf>,
-  extra_patches_file: Option<PathBuf>,
   #[serde(default)]
   patches: HashMap<String, toml::Value>,
   #[serde(default)]
@@ -239,7 +238,7 @@ impl Config {
     listen: Option<&str>,
     frontend_path: Option<&Path>,
     config_path: Option<&Path>,
-    extra_patches_file: Option<&Path>,
+    patch_libraries: &[PathBuf],
     base_url: Option<&str>,
     oidc_issuer: Option<&str>,
     oidc_client_id: Option<&str>,
@@ -309,20 +308,21 @@ impl Config {
       }
     }
 
-    // Extra patches file (CLI flag or config).
-    let epf = extra_patches_file
-      .map(PathBuf::from)
-      .or(file.extra_patches_file);
-    if let Some(path) = &epf {
+    // Patch library files (CLI flag, repeatable).  Last-in wins
+    // for overlapping names; the main config file's patches (above)
+    // have already been inserted and will be overwritten by library
+    // files.  Config-file patches are re-inserted in the override
+    // pass below, so the main config always wins.
+    for path in patch_libraries {
       let contents = std::fs::read_to_string(path).map_err(|source| {
-        ConfigError::ExtraPatchesRead {
+        ConfigError::PatchLibraryRead {
           path: path.clone(),
           source,
         }
       })?;
       let extra: HashMap<String, Patch> =
         toml::from_str(&contents).map_err(|source| {
-          ConfigError::ExtraPatchesParse {
+          ConfigError::PatchLibraryParse {
             path: path.clone(),
             source,
           }
@@ -678,7 +678,7 @@ mod tests {
       None,
       None,
       Some(cfg_path.as_path()),
-      None,
+      &[],
       None,
       None,
       None,
@@ -698,7 +698,16 @@ mod tests {
   #[test]
   fn missing_heartbeats_defaults() {
     let config = Config::from_args(
-      None, None, None, None, None, None, None, None, None, None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
     )
     .unwrap();
     assert!(config.heartbeats.is_empty());
@@ -707,7 +716,16 @@ mod tests {
   #[test]
   fn library_includes_builtins() {
     let config = Config::from_args(
-      None, None, None, None, None, None, None, None, None, None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
     )
     .unwrap();
     assert!(config.library.contains_key("sine"));
@@ -785,7 +803,7 @@ mod tests {
       None,
       None,
       Some(tmp.as_path()),
-      None,
+      &[],
       None,
       None,
       None,
@@ -824,7 +842,7 @@ mod tests {
       None,
       None,
       Some(tmp2.as_path()),
-      None,
+      &[],
       None,
       None,
       None,
@@ -948,7 +966,7 @@ mod tests {
       None,
       None,
       Some(tmp.path()),
-      None,
+      &[],
       None,
       None,
       None,
@@ -973,7 +991,7 @@ mod tests {
       None,
       None,
       Some(tmp2.path()),
-      None,
+      &[],
       None,
       None,
       None,
@@ -1208,7 +1226,7 @@ mod tests {
       None,
       None,
       Some(tmp.path()),
-      None,
+      &[],
       None,
       None,
       None,
@@ -1251,7 +1269,7 @@ mod tests {
       None,
       None,
       Some(tmp2.path()),
-      None,
+      &[],
       None,
       None,
       None,

@@ -84,9 +84,11 @@ struct Cli {
   #[arg(short, long, env = "CONFIG_FILE")]
   config: Option<std::path::PathBuf>,
 
-  /// Path to an additional TOML file of patch definitions.
-  #[arg(long, env = "EXTRA_PATCHES_FILE")]
-  extra_patches_file: Option<std::path::PathBuf>,
+  /// Path to a TOML file of patch definitions.  May be repeated;
+  /// last-in wins for overlapping patch names.  The main config
+  /// file always wins over CLI-supplied patch libraries.
+  #[arg(long)]
+  patch_library: Vec<std::path::PathBuf>,
 
   /// Base URL of this service (e.g. https://sonify.example.com),
   /// used to construct the OIDC redirect URI.
@@ -152,7 +154,7 @@ async fn main() -> Result<(), ApplicationError> {
     cli.listen.as_deref(),
     cli.frontend_path.as_deref(),
     cli.config.as_deref(),
-    cli.extra_patches_file.as_deref(),
+    &cli.patch_library,
     cli.base_url.as_deref(),
     cli.oidc_issuer.as_deref(),
     cli.oidc_client_id.as_deref(),

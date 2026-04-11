@@ -250,7 +250,7 @@ permissions on startup and expose the result to the frontend.  If
 the file is not writable, do not show the button (or show it
 disabled with a tooltip explaining why).
 
-* TODO Replace =extra_patches_file= with repeatable =--patch-library=
+* DONE Replace =extra_patches_file= with repeatable =--patch-library=
 Remove the =extra_patches_file= config key.  Instead, allow
 =--patch-library= to be specified multiple times on the CLI, each
 pointing to a patch file.  Last-in wins for overlapping patch
