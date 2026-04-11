@@ -269,3 +269,84 @@ Add a clipboard-copy button next to the exported config text.  Use
 the Clipboard API (=navigator.clipboard.writeText=).  Provide
 brief visual feedback on success (e.g., the button text changes to
 "Copied!" for a moment).
+
+* TODO Skip wall-clock alignment for non-clock playback modes
+Loop and Continuous play threads currently wait for the wall-clock
+grid (~seconds_until_next~) before the first play, same as Clock
+mode.  Only Clock mode benefits from this alignment.  Wrap the
+initial sleep in ~if cfg.playback == Playback::Clock~ so Loop and
+Continuous start playing immediately on daemon startup.
+
+Files: ~crates/cli/src/daemon.rs~
+
+* TODO Make override slider and playback cycler optimistic
+The override slider (~OverrideHeartbeat~) sends to the server
+without updating local state — the UI waits for ~override_changed~
+to move the slider, causing visible lag.  Change to the same
+optimistic+debounce pattern used by heartbeat sliders: update
+~hb.metric~ and ~hb.overridden~ locally, debounce the server send
+at 150 ms.  Add ~OverrideDebounce~ msg variant.
+
+The playback cycler (~CyclePlayback~) also waits for the server.
+Update ~hb.playback~ locally before sending ~encodeSetPlayback~.
+
+Files: ~frontend/src/Main.elm~
+
+* TODO Rename Override to Value with status label
+The "Override" slider label is confusing — it always shows the
+current metric value whether overridden or live.  Rename the slider
+label to "Value".  Add a decorated status indicator to the right
+showing "(overridden)" or "(live)".  Rename the clear button from
+"Live" to "Track Live".  Keep the header badge unchanged.
+
+Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~
+
+* TODO Click-to-expand descriptions on controls
+Replace ~title~ attribute tooltips with a click-to-expand pattern.
+Add ~expandedDescriptions : Set String~ to the Elm model.  Clicking
+a label with a description toggles a ~div.slider-description~ below
+the control.  Labels with descriptions show ~cursor: help~.
+
+Change ~viewSlider~ signature to accept ~Model~, a unique key, and
+~Maybe String~ description.  Update all call sites.  Apply the same
+pattern to ~viewParamSlider~ for patch params (remove ~title
+meta.description~, add click-to-expand).
+
+Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~
+
+* TODO Per-heartbeat trigger that plays immediately
+Replace the global ~heartbeat_trigger: AtomicBool~ with a
+~mixer_handle: RwLock<Option<MixerHandle>>~ on ~PreviewState~.
+Add ~trigger_immediate_play(&self, index)~ that resolves notes,
+builds a one-shot graph, adds it to the mixer, and spawns a thread
+to remove the slot after the sound finishes.
+
+Change the ~"trigger_heartbeat"~ WebSocket handler to accept an
+~index~ field and call ~trigger_immediate_play~.  Remove the old
+trigger flag checks in ~play_loop~ and ~play_oneshot_once~.
+
+Move the trigger button from the global toolbar to each heartbeat
+card.  Change ~TriggerHeartbeat~ to carry an ~Int~ index.
+
+Files: ~crates/cli/src/preview_state.rs~,
+~crates/cli/src/daemon.rs~, ~crates/cli/src/websocket.rs~,
+~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~
+
+* TODO Play-on-change checkbox for patches
+Add an ephemeral (not persisted) "Play on change" checkbox per
+patch.  When checked, any parameter change triggers a one-shot play
+of that patch.
+
+Backend: add ~"play_patch"~ WebSocket handler and
+~play_patch_immediate(&self, name)~ on ~PreviewState~ (uses the
+~mixer_handle~ from the trigger task).  Resolves the patch, builds
+a single-note graph, plays fire-and-forget.
+
+Frontend: add ~playOnChange : Set String~ to the model.  In
+~PatchParamDebounce~, if the patch is in the set, also send
+~encodePlayPatch~.  Add ~encodePlayPatch : String -> String~ in
+~Protocol.elm~.
+
+Files: ~crates/cli/src/preview_state.rs~,
+~crates/cli/src/websocket.rs~, ~frontend/src/Protocol.elm~,
+~frontend/src/Main.elm~
