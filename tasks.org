@@ -70,11 +70,11 @@ time a heartbeat sound is played.
 ** DONE Add =probe_value= =GaugeVec= labeled by heartbeat name
    Set to current metric value in poll threads after each probe.
 
-* TODO Voice-level detune
+* TODO Patch-level detune
 User-facing detune offset (cents) applied to all boops, independent of
 severity.  Creates chorus-like thickness on healthy tones.
 
-* TODO Voice-level harshness offset
+* TODO Patch-level harshness offset
 User-facing offset added to severity-driven harshness.  Lets user push healthy
 tones buzzier or pull down tones smoother.
 
