@@ -258,7 +258,7 @@ names.  The config file itself always wins over CLI-supplied patch
 libraries.  When saving, new patches and patch modifications are
 written into the main config file.
 
-* TODO Export in JSON and Nix formats
+* DONE Export in JSON and Nix formats
 The export currently emits TOML only.  Add JSON and Nix as
 additional export format options.  The Nix output should assume it
 is already inside the =sonify-health= config section (i.e., produce

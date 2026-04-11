@@ -1,4 +1,6 @@
-use crate::config::{build_save_toml, OverrideInfo};
+use crate::config::{
+  build_save_json, build_save_nix, build_save_toml, OverrideInfo,
+};
 use crate::preview_state::PreviewState;
 use axum::{
   extract::{
@@ -470,14 +472,24 @@ fn handle_client_message(
     }
 
     "export_config" => {
+      let format = msg.get("format").and_then(|v| v.as_str()).unwrap_or("toml");
       let lib = preview.library.read().unwrap();
       let ovr = preview.overrides.read().unwrap();
       let hb_configs = preview.heartbeat_configs.read().unwrap();
-      match build_save_toml(&lib, &ovr, &hb_configs, &preview.slider_ranges) {
-        Ok(toml_str) => Some(
+      let result = match format {
+        "json" => {
+          build_save_json(&lib, &ovr, &hb_configs, &preview.slider_ranges)
+        }
+        "nix" => {
+          build_save_nix(&lib, &ovr, &hb_configs, &preview.slider_ranges)
+        }
+        _ => build_save_toml(&lib, &ovr, &hb_configs, &preview.slider_ranges),
+      };
+      match result {
+        Ok(content) => Some(
           json!({
             "type": "config_export",
-            "toml": toml_str,
+            "content": content,
           })
           .to_string(),
         ),

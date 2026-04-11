@@ -648,7 +648,7 @@ probeLogDecoder =
 
 configExportDecoder : D.Decoder ServerMsg
 configExportDecoder =
-    D.map ConfigExport (D.field "toml" D.string)
+    D.map ConfigExport (D.field "content" D.string)
 
 
 importErrorDecoder : D.Decoder ServerMsg
@@ -794,9 +794,12 @@ encodeRevertAll =
         |> E.encode 0
 
 
-encodeExportConfig : String
-encodeExportConfig =
-    E.object [ ( "type", E.string "export_config" ) ]
+encodeExportConfig : String -> String
+encodeExportConfig format =
+    E.object
+        [ ( "type", E.string "export_config" )
+        , ( "format", E.string format )
+        ]
         |> E.encode 0
 
 

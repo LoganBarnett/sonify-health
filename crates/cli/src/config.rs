@@ -503,6 +503,164 @@ pub fn build_save_toml(
   toml::to_string_pretty(&doc).map_err(ConfigSaveError::Serialize)
 }
 
+/// Build an intermediate JSON value representing the full config.
+/// Shared by `build_save_json` and `build_save_nix`.
+fn build_save_value(
+  library: &PatchLibrary,
+  overrides: &HashMap<String, OverrideInfo>,
+  heartbeats: &[HeartbeatConfig],
+  slider_ranges: &SliderRanges,
+) -> Result<serde_json::Value, ConfigSaveError> {
+  let builtins = builtin_library();
+  let mut doc = serde_json::Map::new();
+
+  let mut patches = serde_json::Map::new();
+  for (name, patch) in library {
+    if builtins.contains_key(name) && !overrides.contains_key(name) {
+      continue;
+    }
+    if let Some(info) = overrides.get(name) {
+      let mut obj = serde_json::Map::new();
+      obj.insert(
+        "overrides".into(),
+        serde_json::Value::String(info.base.clone()),
+      );
+      for (param, val) in &info.delta {
+        obj.insert(param.clone(), serde_json::Value::from(*val));
+      }
+      patches.insert(name.clone(), serde_json::Value::Object(obj));
+    } else {
+      patches.insert(
+        name.clone(),
+        serde_json::to_value(patch).map_err(ConfigSaveError::JsonSerialize)?,
+      );
+    }
+  }
+  if !patches.is_empty() {
+    doc.insert("patches".into(), serde_json::Value::Object(patches));
+  }
+
+  let hb_val =
+    serde_json::to_value(heartbeats).map_err(ConfigSaveError::JsonSerialize)?;
+  if let serde_json::Value::Array(ref arr) = hb_val {
+    if !arr.is_empty() {
+      doc.insert("heartbeats".into(), hb_val);
+    }
+  }
+
+  let default_ranges = SliderRanges::default();
+  if slider_ranges != &default_ranges {
+    let sr_val = serde_json::to_value(slider_ranges)
+      .map_err(ConfigSaveError::JsonSerialize)?;
+    doc.insert("slider_ranges".into(), sr_val);
+  }
+
+  Ok(serde_json::Value::Object(doc))
+}
+
+/// Serialize the current runtime state to a JSON config string.
+pub fn build_save_json(
+  library: &PatchLibrary,
+  overrides: &HashMap<String, OverrideInfo>,
+  heartbeats: &[HeartbeatConfig],
+  slider_ranges: &SliderRanges,
+) -> Result<String, ConfigSaveError> {
+  let val = build_save_value(library, overrides, heartbeats, slider_ranges)?;
+  serde_json::to_string_pretty(&val).map_err(ConfigSaveError::JsonSerialize)
+}
+
+/// Serialize the current runtime state to Nix attribute set body.
+/// The output assumes it is already inside the `sonify-health`
+/// config section — no top-level module wrapper is emitted.
+pub fn build_save_nix(
+  library: &PatchLibrary,
+  overrides: &HashMap<String, OverrideInfo>,
+  heartbeats: &[HeartbeatConfig],
+  slider_ranges: &SliderRanges,
+) -> Result<String, ConfigSaveError> {
+  let val = build_save_value(library, overrides, heartbeats, slider_ranges)?;
+  Ok(nix_body(&val))
+}
+
+/// Ensure a float string contains a decimal point so Nix parses
+/// it as a float, not an integer.
+fn nix_float(v: f64) -> String {
+  let s = v.to_string();
+  if s.contains('.') || s.contains('e') || s.contains('E') {
+    s
+  } else {
+    format!("{s}.0")
+  }
+}
+
+/// Escape a string for Nix double-quoted literals.
+fn nix_escape(s: &str) -> String {
+  s.replace('\\', "\\\\")
+    .replace('"', "\\\"")
+    .replace("${", "\\${")
+}
+
+/// Format a string as a Nix attribute name, quoting if needed.
+fn nix_attr(name: &str) -> String {
+  let valid = !name.is_empty()
+    && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+    && name
+      .chars()
+      .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '\'');
+  if valid {
+    name.to_string()
+  } else {
+    format!("\"{}\"", nix_escape(name))
+  }
+}
+
+/// Convert a serde_json value to Nix expression syntax.
+fn nix_value(val: &serde_json::Value, indent: usize) -> String {
+  let pad = "  ".repeat(indent);
+  let inner_pad = "  ".repeat(indent + 1);
+  match val {
+    serde_json::Value::Null => "null".to_string(),
+    serde_json::Value::Bool(b) => b.to_string(),
+    serde_json::Value::Number(n) => {
+      n.as_f64().map(nix_float).unwrap_or_else(|| n.to_string())
+    }
+    serde_json::Value::String(s) => {
+      format!("\"{}\"", nix_escape(s))
+    }
+    serde_json::Value::Array(arr) if arr.is_empty() => "[ ]".to_string(),
+    serde_json::Value::Array(arr) => {
+      let items: Vec<String> = arr
+        .iter()
+        .map(|v| format!("{inner_pad}{}", nix_value(v, indent + 1)))
+        .collect();
+      format!("[\n{}\n{pad}]", items.join("\n"))
+    }
+    serde_json::Value::Object(map) if map.is_empty() => "{ }".to_string(),
+    serde_json::Value::Object(map) => {
+      let items: Vec<String> = map
+        .iter()
+        .map(|(k, v)| {
+          format!("{inner_pad}{} = {};", nix_attr(k), nix_value(v, indent + 1),)
+        })
+        .collect();
+      format!("{{\n{}\n{pad}}}", items.join("\n"))
+    }
+  }
+}
+
+/// Convert a top-level JSON object to Nix attribute set body
+/// (without outer braces).
+fn nix_body(val: &serde_json::Value) -> String {
+  match val {
+    serde_json::Value::Object(map) => map
+      .iter()
+      .map(|(k, v)| format!("{} = {};", nix_attr(k), nix_value(v, 0)))
+      .collect::<Vec<_>>()
+      .join("\n"),
+    _ => nix_value(val, 0),
+  }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigSaveError {
   #[error("Failed to serialize patch {0:?}: {1}")]
@@ -516,6 +674,9 @@ pub enum ConfigSaveError {
 
   #[error("Failed to serialize config: {0}")]
   Serialize(toml::ser::Error),
+
+  #[error("Failed to serialize config to JSON: {0}")]
+  JsonSerialize(serde_json::Error),
 }
 
 /// Returns the path to the `oidc-client-secret` credential file inside

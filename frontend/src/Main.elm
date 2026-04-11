@@ -66,6 +66,7 @@ type alias Model =
     , muted : Bool
     , masterVolume : Float
     , probeLog : List ProbeLogEntry
+    , exportFormat : String
     , exportData : Maybe String
     , debounces : Dict String Int
     , nextDebounce : Int
@@ -118,6 +119,7 @@ type Msg
     | SelectPatch String
     | Export
     | DismissExport
+    | SetExportFormat String
     | SetImportText String
     | SubmitImport
     | SetHeartbeatSlider HeartbeatSlider Int String
@@ -179,6 +181,7 @@ init _ url key =
       , muted = False
       , masterVolume = 1.0
       , probeLog = []
+      , exportFormat = "toml"
       , exportData = Nothing
       , debounces = Dict.empty
       , nextDebounce = 0
@@ -674,10 +677,13 @@ update msg model =
             ( { model | selectedPatch = Just name }, Cmd.none )
 
         Export ->
-            ( model, Ports.websocketSend encodeExportConfig )
+            ( model, Ports.websocketSend (encodeExportConfig model.exportFormat) )
 
         DismissExport ->
-            ( { model | exportData = Nothing }, Cmd.none )
+            ( { model | exportData = Nothing, exportFormat = "toml" }, Cmd.none )
+
+        SetExportFormat fmt ->
+            ( { model | exportFormat = fmt }, Cmd.none )
 
         SetImportText txt ->
             ( { model | importText = txt, importError = Nothing }, Cmd.none )
@@ -1879,6 +1885,14 @@ viewToolbar model =
 
             Nothing ->
                 text ""
+        , select
+            [ class "export-format-select"
+            , onInput SetExportFormat
+            ]
+            [ option [ value "toml", selected (model.exportFormat == "toml") ] [ text "TOML" ]
+            , option [ value "json", selected (model.exportFormat == "json") ] [ text "JSON" ]
+            , option [ value "nix", selected (model.exportFormat == "nix") ] [ text "Nix" ]
+            ]
         , button [ class "btn", onClick Export ]
             [ text "Export" ]
         ]
@@ -2959,15 +2973,21 @@ viewExportInline model =
         Nothing ->
             text ""
 
-        Just tomlText ->
+        Just exportText ->
             div [ class "export-inline" ]
                 [ div [ class "export-inline-header" ]
-                    [ span [] [ text "Exported Configuration" ]
+                    [ span []
+                        [ text
+                            ("Exported Configuration ("
+                                ++ String.toUpper model.exportFormat
+                                ++ ")"
+                            )
+                        ]
                     , button [ class "btn btn-sm", onClick DismissExport ]
                         [ text "Close" ]
                     ]
                 , pre [ class "export-pre" ]
-                    [ text tomlText ]
+                    [ text exportText ]
                 ]
 
 
