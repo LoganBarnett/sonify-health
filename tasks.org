@@ -24,22 +24,9 @@ Also include any commits that land after =c3d6e14= before this task is started.
 
 After syncing, update =rust-template.json= with the final synced hash.
 
-* TODO Pre-commit hook formats entire tree instead of staged files only
-The =.cargo-husky/hooks/pre-commit= hook passes staged filenames as
-positional arguments to =treefmt=, but treefmt may ignore positional arguments
-and use its own tree walker.  This means =treefmt $STAGED_FILES= could format
-every file in the repository, not just the staged ones.  Unstaged files get
-reformatted on disk but are not re-staged, leaving dirty working tree
-artifacts that have to be committed separately.
-
-Forward-ported from rust-template (=420397e=).  The current treefmt version
-shows =<paths>...= as a positional argument in =treefmt --help=, so the bug
-may already be resolved.  Verify before implementing a fix.
-
-Fix (if needed): use =treefmt --paths= (or the appropriate flag for limiting
-treefmt to specific files) so only staged files are reformatted.  If treefmt
-does not support per-file invocation, consider an alternative approach such as
-running the language-specific formatters directly on the staged files.
+* DONE Pre-commit hook formats entire tree instead of staged files only
+Verified: treefmt v2.4.0 correctly respects positional path arguments
+(=traversed 1 files= when given a single file).  Bug is already resolved.
 
 * DONE Add protocol contract test for state snapshot
   Write a Rust test that deserializes =state_snapshot()= JSON through
@@ -74,6 +61,14 @@ threads.  Currently only =muted= is updated; the =heartbeats_played=
 counter is registered but never incremented.  Add per-heartbeat probe
 metric gauges and poll counters, and increment =heartbeats_played= each
 time a heartbeat sound is played.
+
+** TODO Add =Metrics= to =DaemonContext= and thread through from =main.rs=
+** TODO Replace =heartbeats_played= with =IntCounterVec= labeled by heartbeat name
+   Increment in play threads after each heartbeat plays.
+** TODO Add =probes_completed= =IntCounterVec= labeled by heartbeat name
+   Increment in poll threads after each successful probe.
+** TODO Add =probe_value= =GaugeVec= labeled by heartbeat name
+   Set to current metric value in poll threads after each probe.
 
 * TODO Voice-level detune
 User-facing detune offset (cents) applied to all boops, independent of

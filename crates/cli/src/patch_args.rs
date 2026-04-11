@@ -127,6 +127,10 @@ pub(crate) struct CliPatchOverrides {
   /// Override downsample (lo-fi sample rate reduction).
   #[arg(long, help_heading = "Patch overrides")]
   downsample: Option<f64>,
+
+  /// Override loop repeat gap (seconds added to content duration).
+  #[arg(long, help_heading = "Patch overrides")]
+  gap: Option<f64>,
 }
 
 impl CliPatchOverrides {
@@ -162,6 +166,7 @@ impl CliPatchOverrides {
       fm_ratio: self.fm_ratio,
       fm_depth: self.fm_depth,
       downsample: self.downsample,
+      gap: self.gap,
     }
   }
 

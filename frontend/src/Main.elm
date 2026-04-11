@@ -114,6 +114,7 @@ type Msg
     | SubmitImport
     | SetHeartbeatSlider HeartbeatSlider Int String
     | HeartbeatSliderDebounce HeartbeatSlider Int Int Float
+    | CreatePatch
     | CreateOverride String
     | StartRename String
     | SetRenameInput String
@@ -658,6 +659,22 @@ update msg model =
 
             else
                 ( model, Cmd.none )
+
+        CreatePatch ->
+            let
+                candidate =
+                    "new-patch"
+
+                name =
+                    if Dict.member candidate model.library then
+                        findUniqueName candidate 2 model.library
+
+                    else
+                        candidate
+            in
+            ( { model | selectedPatch = Just name }
+            , Ports.websocketSend (encodeCreatePatch name)
+            )
 
         CreateOverride base ->
             let
@@ -2044,7 +2061,15 @@ viewPatchList model =
             List.partition (\n -> List.member n activePatchNames) allNames
     in
     div [ class "section" ]
-        [ h2 [] [ text "Patch Library" ]
+        [ div [ class "section-header" ]
+            [ h2 [] [ text "Patch Library" ]
+            , button
+                [ class "patch-action-btn"
+                , onClick CreatePatch
+                , title "New patch"
+                ]
+                [ text "+" ]
+            ]
         , div [ class "patch-list" ]
             (List.map (viewPatchItem model) active
                 ++ List.map (viewPatchItem model) rest

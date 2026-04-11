@@ -383,6 +383,23 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       }
     }
 
+    "create_patch" => {
+      let name = msg.get("name").and_then(|v| v.as_str())?;
+      {
+        let lib = preview.library.read().unwrap();
+        if lib.contains_key(name) {
+          return None;
+        }
+      }
+      {
+        let mut lib = preview.library.write().unwrap();
+        lib.insert(name.to_string(), Patch::default());
+      }
+      let snapshot = preview.state_snapshot();
+      let _ = preview.broadcast_tx.send(snapshot);
+      None
+    }
+
     "create_override" => {
       let base = msg.get("base").and_then(|v| v.as_str())?;
       let name = msg.get("name").and_then(|v| v.as_str())?;

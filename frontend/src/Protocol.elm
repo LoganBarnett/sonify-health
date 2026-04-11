@@ -15,6 +15,7 @@ module Protocol exposing
     , encodeAddNote
     , encodeClearOverride
     , encodeCreateOverride
+    , encodeCreatePatch
     , encodeExportConfig
     , encodeGetState
     , encodeHeartbeatSlider
@@ -811,6 +812,15 @@ encodeTransition trans =
                 , ( "patches", E.list E.string info.patches )
                 , ( "segments", E.list encodeLerpStrategy info.segments )
                 ]
+
+
+encodeCreatePatch : String -> String
+encodeCreatePatch name =
+    E.object
+        [ ( "type", E.string "create_patch" )
+        , ( "name", E.string name )
+        ]
+        |> E.encode 0
 
 
 encodeCreateOverride : String -> String -> String

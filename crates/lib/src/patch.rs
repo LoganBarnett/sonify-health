@@ -259,6 +259,14 @@ pub struct Patch {
     description = "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier."
   )]
   pub downsample: f64,
+
+  #[patch_param(
+    min = -5.0,
+    max = 5.0,
+    step = 0.01,
+    description = "Seconds added to content duration for loop repeat timing. Positive = silence between repetitions, negative = overlapping re-triggers via crossfade."
+  )]
+  pub gap: f64,
 }
 
 impl Default for Patch {
@@ -294,6 +302,7 @@ impl Default for Patch {
       fm_ratio: 0.0,
       fm_depth: 0.0,
       downsample: 0.0,
+      gap: 0.0,
     }
   }
 }
@@ -430,7 +439,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 30);
+    assert_eq!(Patch::PARAMS.len(), 31);
   }
 
   #[test]

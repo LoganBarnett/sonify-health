@@ -74,10 +74,13 @@ pub fn heartbeat_duration(patches: &[Patch]) -> Duration {
 }
 
 /// Content-only duration of a heartbeat phrase: attack ramps, boop
-/// bodies, and inter-boop gaps.  Excludes the release tail, echo
-/// decay, and safety margin.  Used for gap=0 drone looping so
-/// `replace()` fires while the last note is still sustaining,
-/// letting the crossfade overlap sound with sound.
+/// bodies, inter-boop gaps, and the patch's loop-repeat gap.
+/// Excludes the release tail, echo decay, and safety margin.
+/// Used for drone looping so `replace()` fires while the last note
+/// is still sustaining, letting the crossfade overlap sound with
+/// sound.  The patch `gap` shifts repeat timing: positive adds
+/// silence, negative causes overlapping re-triggers.  The result
+/// is clamped to a 0.05 s floor to prevent a tight loop.
 pub fn heartbeat_content_duration(patches: &[Patch]) -> Duration {
   if patches.is_empty() {
     return Duration::ZERO;
@@ -95,7 +98,8 @@ pub fn heartbeat_content_duration(patches: &[Patch]) -> Duration {
     .map(|w| gap_between(w[0].duration, w[1].duration, max_dur))
     .sum();
 
-  Duration::from_secs_f64(attack_total + decay_total + boop_sum + gap_sum)
+  let total = attack_total + decay_total + boop_sum + gap_sum + patches[0].gap;
+  Duration::from_secs_f64(total.max(0.05))
 }
 
 /// Total wall-clock duration of a multi-note heartbeat.  Each note
@@ -125,10 +129,13 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
 }
 
 /// Content-only duration of a multi-note heartbeat: the maximum
-/// across all notes of `offset + attack + duration`.  Excludes
-/// release tails, echo decay, and safety margin so that
+/// across all notes of `offset + attack + decay + duration + gap`.
+/// Excludes release tails, echo decay, and safety margin so that
 /// `replace()` fires while the last note is still sustaining,
-/// letting the crossfade overlap sound with sound.
+/// letting the crossfade overlap sound with sound.  The per-note
+/// `gap` shifts repeat timing: positive adds silence between
+/// repetitions, negative causes overlapping re-triggers.  The
+/// result is clamped to a 0.05 s floor to prevent a tight loop.
 pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
   if notes.is_empty() {
     return Duration::ZERO;
@@ -138,10 +145,10 @@ pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
     .map(|n| {
       let attack = n.patch.attack_ms / 1000.0;
       let decay = n.patch.decay_ms / 1000.0;
-      n.offset + attack + decay + n.patch.duration
+      n.offset + attack + decay + n.patch.duration + n.patch.gap
     })
     .fold(0.0f64, f64::max);
-  Duration::from_secs_f64(max)
+  Duration::from_secs_f64(max.max(0.05))
 }
 
 /// Build a complete stereo graph for a single note.  All synthesis
