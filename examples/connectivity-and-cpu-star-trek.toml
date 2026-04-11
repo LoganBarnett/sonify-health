@@ -109,17 +109,6 @@ type = "gradient"
 intensity = 2.0
 strategy = "ease-in"
 
-[[heartbeats.notes]]
-offset = 0.0
-volume = 0.0
-
-[heartbeats.notes.transition]
-type = "discrete"
-
-[[heartbeats.notes.transition.states]]
-patch = "sine-test"
-threshold = 1.01
-
 [patches.sine-test]
 amplitude = 1.0
 attack_ms = 20.0
@@ -195,32 +184,32 @@ overrides = "warpdrive-cpu-lo"
 
 [patches.warpdrive-cpu-lo]
 amplitude = 1.0
-attack_ms = 30.0
-brightness = 0.11
+attack_ms = 5.0
+brightness = 0.2
 chirp_ratio = 1.0
 crush = 0.0
-decay_ms = 1209.0
+decay_ms = 400.0
 downsample = 0.0
-drive = 19.91
-duration = 0.54
-echo_delay = 0.01
-echo_mix = 0.0
-fm_depth = 1.5
-fm_ratio = 0.17
-freq = 55.0
+drive = 0.01
+duration = 1.68
+echo_delay = 0.08
+echo_mix = 0.15
+fm_depth = 0.0
+fm_ratio = 0.0
+freq = 60.0
 highpass = 0.0
-noise_mix = 0.18
-release_ms = 16.0
-resonance = 0.1
-reverb_mix = 0.0
+noise_mix = 1.0
+release_ms = 200.0
+resonance = 5.0
+reverb_mix = 0.25
 saw_ratio = 0.0
-sine_ratio = 0.08
-square_ratio = 0.2
+sine_ratio = 0.0
+square_ratio = 0.0
 stereo_pan = 0.0
-sub_octave = 1.0
-sustain = 0.09
-tremolo_depth = 0.5
-tremolo_rate = 40.0
+sub_octave = 0.0
+sustain = 0.39
+tremolo_depth = 0.0
+tremolo_rate = 0.0
 tri_ratio = 0.0
 vibrato_depth = 0.0
 vibrato_rate = 0.0
