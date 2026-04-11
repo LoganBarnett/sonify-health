@@ -90,8 +90,10 @@
             })
           hb.notes;
         }
-        // lib.optionalAttrs hb.continuous {
-          continuous = true;
+        // {
+          playback = hb.playback;
+          cycle_offset_secs = hb.cycleOffsetSecs;
+          crossfade_ms = hb.crossfadeMs;
         }
         // lib.optionalAttrs (hb.phraseGap != 0.0) {
           phrase_gap = hb.phraseGap;
@@ -170,10 +172,25 @@
         '';
       };
 
-      continuous = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Whether this heartbeat plays continuously (drone-style).";
+      playback = lib.mkOption {
+        type = lib.types.enum ["clock" "loop" "continuous"];
+        default = "clock";
+        description = ''
+          Playback mode.  "clock" fires once per cycle, "loop" repeats
+          the phrase back-to-back, "continuous" sustains a drone.
+        '';
+      };
+
+      cycleOffsetSecs = lib.mkOption {
+        type = lib.types.number;
+        default = 0.0;
+        description = "Seconds to offset this heartbeat within the cycle.";
+      };
+
+      crossfadeMs = lib.mkOption {
+        type = lib.types.number;
+        default = 0.0;
+        description = "Crossfade duration in milliseconds between patches.";
       };
 
       phraseGap = lib.mkOption {
@@ -358,7 +375,7 @@ in {
             name = "cpu";
             command = "sh -c 'uptime | awk ...'";
             resultMode = "stdout";
-            continuous = true;
+            playback = "continuous";
             notes = [
               {
                 volume = 0.2;
