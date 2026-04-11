@@ -702,7 +702,7 @@ mod tests {
       [[heartbeats]]
       name = "gateway"
       command = "ping -c 1 8.8.8.8"
-      result_mode = "exit-code-severity"
+      result_mode = "exit-code"
 
       [[heartbeats.notes]]
       volume = 0.3
@@ -736,7 +736,7 @@ mod tests {
     let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
     assert_eq!(raw.heartbeats.len(), 2);
     assert_eq!(raw.heartbeats[0].name, "gateway");
-    assert_eq!(raw.heartbeats[0].result_mode, ResultMode::ExitCodeSeverity);
+    assert_eq!(raw.heartbeats[0].result_mode, ResultMode::ExitCode);
     assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
     assert_eq!(raw.heartbeats[0].notes.len(), 1);
     assert_eq!(raw.heartbeats[1].name, "cpu");
@@ -937,7 +937,7 @@ mod tests {
       [[heartbeats]]
       name = "test-hb"
       command = "echo 0"
-      result_mode = "exit-code-severity"
+      result_mode = "exit-code"
       playback = "continuous"
 
       [[heartbeats.notes]]
@@ -1203,7 +1203,7 @@ mod tests {
         [[heartbeats]]
         name = "net"
         command = "ping -c1 localhost"
-        result_mode = "exit-code-severity"
+        result_mode = "exit-code"
         cycle_secs = 10
         cycle_offset_secs = 2.5
 
@@ -1276,7 +1276,7 @@ mod tests {
         [[heartbeats]]
         name = "hb-one"
         command = "echo 0"
-        result_mode = "exit-code-severity"
+        result_mode = "exit-code"
         playback = "continuous"
         poll_interval_secs = 5.0
 
@@ -1293,7 +1293,7 @@ mod tests {
         [[heartbeats]]
         name = "hb-two"
         command = "exit 0"
-        result_mode = "exit-code-severity"
+        result_mode = "exit-code"
         cycle_secs = 30
 
         [[heartbeats.notes]]
@@ -1365,7 +1365,7 @@ mod tests {
       [[heartbeats]]
       name = "test"
       command = "echo 0"
-      result_mode = "exit-code-severity"
+      result_mode = "exit-code"
 
       [[heartbeats.notes]]
       volume = 0.4

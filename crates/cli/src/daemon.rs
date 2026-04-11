@@ -86,11 +86,6 @@ pub fn spawn_heartbeat_threads(
   let cfg = preview.heartbeat_configs.read().unwrap()[i].clone();
 
   // -- Poll thread: runs probe command, updates metric.
-  let poll_cfg_name = cfg.name.clone();
-  let poll_command = cfg.command.clone();
-  let poll_mode = cfg.result_mode.clone();
-  let poll_tiers = cfg.tiers.clone();
-  let poll_interval = Duration::from_secs_f64(cfg.poll_interval_secs);
   let poll_running = Arc::clone(&preview.running);
   let poll_preview = Arc::clone(preview);
   let poll_counter = preview
@@ -101,43 +96,73 @@ pub fn spawn_heartbeat_threads(
 
   let poll_handle = thread::spawn(move || {
     while poll_running.load(Ordering::Relaxed) {
+      // Re-read config each iteration so live UI edits take effect.
+      let (cfg_name, command, mode, tiers, interval) = {
+        let configs = poll_preview.heartbeat_configs.read().unwrap();
+        let cfg = &configs[i];
+        (
+          cfg.name.clone(),
+          cfg.command.clone(),
+          cfg.result_mode.clone(),
+          cfg.tiers.clone(),
+          Duration::from_secs_f64(cfg.poll_interval_secs),
+        )
+      };
+
       let overridden = {
         let hbs = poll_preview.heartbeats.read().unwrap();
         let val = hbs[i].override_value.read().unwrap().clone();
         val
       };
 
-      if let Some(metric) = overridden {
+      let resolved = if let Some(metric) = overridden {
         let clamped = metric.clamp(0.0, 1.0);
         {
           let hbs = poll_preview.heartbeats.read().unwrap();
           hbs[i].metric.set_value(clamped);
         }
-        let label = metric_label(clamped, &poll_tiers);
-        send_probe_log(&poll_preview, &poll_cfg_name, &label, true);
+        send_probe_log(
+          &poll_preview,
+          &cfg_name,
+          &metric_label(clamped, &tiers),
+          true,
+        );
         poll_counter.inc();
         poll_gauge.set(clamped as f64);
+        Some(clamped)
       } else {
-        match probe::run_probe(&poll_cfg_name, &poll_command, &poll_mode) {
+        match probe::run_probe(&cfg_name, &command, &mode) {
           Ok(metric) => {
-            let label = metric_label(metric, &poll_tiers);
-            info!(heartbeat = poll_cfg_name, result = label, "Probe completed");
+            let label = metric_label(metric, &tiers);
+            info!(heartbeat = cfg_name, result = label, "Probe completed");
             {
               let hbs = poll_preview.heartbeats.read().unwrap();
               hbs[i].metric.set_value(metric);
             }
-            send_probe_log(&poll_preview, &poll_cfg_name, &label, false);
+            send_probe_log(&poll_preview, &cfg_name, &label, false);
             poll_counter.inc();
             poll_gauge.set(metric as f64);
+            Some(metric)
           }
           Err(e) => {
             warn!(
-              heartbeat = poll_cfg_name,
+              heartbeat = cfg_name,
               error = %e,
               "Probe failed, retaining previous metric"
             );
+            None
           }
         }
+      };
+
+      if let Some(val) = resolved {
+        let label = metric_label(val, &tiers);
+        info!(
+          heartbeat = cfg_name,
+          result = label,
+          overridden = overridden.is_some(),
+          "Metric resolved"
+        );
       }
 
       // Broadcast metric change.
@@ -154,7 +179,7 @@ pub fn spawn_heartbeat_threads(
         .to_string(),
       );
 
-      sleep_checking(&poll_running, poll_interval);
+      sleep_checking(&poll_running, interval);
     }
   });
 

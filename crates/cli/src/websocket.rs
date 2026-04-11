@@ -270,6 +270,7 @@ fn handle_client_message(
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let value = msg.get("value").and_then(|v| v.as_f64())? as f32;
       let clamped = value.clamp(0.0, 1.0);
+      tracing::info!(index, value = clamped, "Override heartbeat");
       {
         let hbs = preview.heartbeats.read().unwrap();
         let hb = hbs.get(index)?;

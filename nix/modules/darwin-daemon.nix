@@ -12,7 +12,7 @@
 #       {
 #         name = "gateway";
 #         command = "/path/to/check-lan";
-#         resultMode = "exit-code-severity";
+#         resultMode = "exit-code";
 #         notes = [
 #           {
 #             transition = {
@@ -159,12 +159,11 @@
       };
 
       resultMode = lib.mkOption {
-        type = lib.types.enum ["exit-code" "stdout" "exit-code-severity"];
-        default = "exit-code-severity";
+        type = lib.types.enum ["exit-code" "stdout"];
+        default = "exit-code";
         description = ''
-          How to read the command result.  "exit-code" maps 0..255 linearly
-          to 0.0..1.0.  "exit-code-severity" maps 0/1/2 to 0.0/0.5/1.0.
-          "stdout" reads a float from stdout.
+          How to read the command result.  "exit-code" maps exit 0 to 0.0
+          and non-zero to 1.0.  "stdout" reads a float from stdout.
         '';
       };
 
@@ -330,7 +329,7 @@ in {
           {
             name = "lan";
             command = "''${pkgs.fping}/bin/fping -q -t 4000 -r 1 10.0.0.1 10.0.0.2";
-            resultMode = "exit-code-severity";
+            resultMode = "exit-code";
             notes = [
               {
                 transition = {

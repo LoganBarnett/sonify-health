@@ -2090,7 +2090,6 @@ viewHeartbeatCard model index hb =
                         ]
                         [ option [ value "stdout", selected (hb.resultMode == "stdout") ] [ text "stdout" ]
                         , option [ value "exit-code", selected (hb.resultMode == "exit-code") ] [ text "exit-code" ]
-                        , option [ value "exit-code-severity", selected (hb.resultMode == "exit-code-severity") ] [ text "exit-code-severity" ]
                         ]
                     ]
                 , viewPlaybackCycler hb.playback (CyclePlayback index)

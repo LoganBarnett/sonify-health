@@ -1,5 +1,5 @@
 [[heartbeats]]
-command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
+command = "true"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
@@ -26,7 +26,6 @@ threshold = 0.5
 patch = "medbay-error"
 threshold = 1.01
 
-# OpenDNS resolver.
 [[heartbeats]]
 command = "ping -c 1 -W 4 208.67.222.222 >/dev/null 2>&1"
 crossfade_ms = 6.0
