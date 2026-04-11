@@ -190,7 +190,7 @@ the heartbeat name and its current metric state (the colored status
 badge).  Heartbeats should be expanded by default.  A simple
 chevron or toggle in the card header is sufficient.
 
-* TODO Eliminate all modals — inline-expand UI pattern
+* DONE Eliminate all modals — inline-expand UI pattern
 Do not use modals anywhere in the UI.  Replace every modal with an
 inline expansion that keeps surrounding context visible.
 

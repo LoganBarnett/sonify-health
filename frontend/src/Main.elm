@@ -1784,7 +1784,7 @@ viewHome model =
                 , viewPatchEditor model
                 ]
             ]
-        , viewExportModal model
+        , viewExportInline model
         , viewProtocolError model
         ]
 
@@ -2914,28 +2914,24 @@ viewImport model =
 
 
 
--- Export modal
+-- Export inline
 
 
-viewExportModal : Model -> Html Msg
-viewExportModal model =
+viewExportInline : Model -> Html Msg
+viewExportInline model =
     case model.exportData of
         Nothing ->
             text ""
 
         Just tomlText ->
-            div [ class "modal-backdrop", onClick DismissExport ]
-                [ div
-                    [ class "modal"
-                    , Html.Events.stopPropagationOn "click"
-                        (Decode.succeed ( NoOp, True ))
-                    ]
-                    [ h2 [] [ text "Exported Configuration" ]
-                    , pre [ class "export-pre" ]
-                        [ text tomlText ]
-                    , button [ class "btn", onClick DismissExport ]
+            div [ class "export-inline" ]
+                [ div [ class "export-inline-header" ]
+                    [ span [] [ text "Exported Configuration" ]
+                    , button [ class "btn btn-sm", onClick DismissExport ]
                         [ text "Close" ]
                     ]
+                , pre [ class "export-pre" ]
+                    [ text tomlText ]
                 ]
 
 

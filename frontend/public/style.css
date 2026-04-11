@@ -824,30 +824,22 @@ a:hover {
 
 /* Modal */
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+/* Inline export */
+
+.export-inline {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  margin: var(--space-md) 0;
+  background: var(--color-surface);
+}
+
+.export-inline-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  padding: 1.5rem;
-  max-width: 700px;
-  width: 90%;
-  max-height: 80vh;
-  overflow-y: auto;
-}
-
-.modal h2 {
-  margin: 0 0 var(--space-xl);
-  font-size: 1rem;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+  font-weight: 600;
 }
 
 .export-pre {
