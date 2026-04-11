@@ -270,6 +270,18 @@ a:hover {
   gap: var(--space-sm);
 }
 
+/* Card collapse */
+
+.card-collapse-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--font-base);
+  color: var(--color-text-muted);
+  line-height: 1;
+}
+
 /* Heartbeat field rows */
 
 .card-name-input {

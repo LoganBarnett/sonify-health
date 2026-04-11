@@ -184,7 +184,7 @@ local timezone.  Display the timezone abbreviation and UTC offset (e.g., =CST
 (UTC−06:00)=) in the probe log header line so the user knows which
 zone the timestamps refer to.
 
-* TODO Collapsible heartbeat cards
+* DONE Collapsible heartbeat cards
 Allow heartbeat cards to be collapsed.  When collapsed, still show
 the heartbeat name and its current metric state (the colored status
 badge).  Heartbeats should be expanded by default.  A simple

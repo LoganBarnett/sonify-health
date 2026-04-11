@@ -82,6 +82,7 @@ type alias Model =
     , playOnChange : Set String
     , metricHistory : Dict Int (List Float)
     , timezone : Time.Zone
+    , collapsedHeartbeats : Set Int
     }
 
 
@@ -134,6 +135,7 @@ type Msg
     | ToggleDescription String
     | TogglePlayOnChange String
     | GotTimezone Time.Zone
+    | ToggleHeartbeatCollapse Int
     | SetHeartbeatName Int String
     | SetHeartbeatCommand Int String
     | SetHeartbeatResultMode Int String
@@ -192,6 +194,7 @@ init _ url key =
       , playOnChange = Set.empty
       , metricHistory = Dict.empty
       , timezone = Time.utc
+      , collapsedHeartbeats = Set.empty
       }
     , Cmd.batch [ cmdForRoute route, Task.perform GotTimezone Time.here ]
     )
@@ -832,6 +835,18 @@ update msg model =
 
         GotTimezone zone ->
             ( { model | timezone = zone }, Cmd.none )
+
+        ToggleHeartbeatCollapse index ->
+            ( { model
+                | collapsedHeartbeats =
+                    if Set.member index model.collapsedHeartbeats then
+                        Set.remove index model.collapsedHeartbeats
+
+                    else
+                        Set.insert index model.collapsedHeartbeats
+              }
+            , Cmd.none
+            )
 
         SetHeartbeatName hbIdx val ->
             ( { model
@@ -1943,9 +1958,25 @@ viewHeartbeats model =
 
 viewHeartbeatCard : Model -> Int -> HeartbeatInfo -> Html Msg
 viewHeartbeatCard model index hb =
+    let
+        collapsed =
+            Set.member index model.collapsedHeartbeats
+
+        chevron =
+            if collapsed then
+                "▸"
+
+            else
+                "▾"
+    in
     div [ class "card" ]
         [ div [ class "card-header" ]
-            [ input
+            [ button
+                [ class "card-collapse-btn"
+                , onClick (ToggleHeartbeatCollapse index)
+                ]
+                [ text chevron ]
+            , input
                 [ class "card-name-input"
                 , type_ "text"
                 , value hb.name
@@ -1965,87 +1996,91 @@ viewHeartbeatCard model index hb =
               else
                 text ""
             ]
-        , div [ class "card-body" ]
-            [ div [ class "hb-field-row" ]
-                [ label [ class "hb-field-label" ] [ text "Command" ]
-                , input
-                    [ class "hb-field-input"
-                    , type_ "text"
-                    , value hb.command
-                    , onInput (SetHeartbeatCommand index)
-                    ]
-                    []
-                ]
-            , div [ class "hb-field-row" ]
-                [ label [ class "hb-field-label" ] [ text "Result mode" ]
-                , select
-                    [ class "hb-field-select"
-                    , onInput (SetHeartbeatResultMode index)
-                    ]
-                    [ option [ value "stdout", selected (hb.resultMode == "stdout") ] [ text "stdout" ]
-                    , option [ value "exit-code", selected (hb.resultMode == "exit-code") ] [ text "exit-code" ]
-                    , option [ value "exit-code-severity", selected (hb.resultMode == "exit-code-severity") ] [ text "exit-code-severity" ]
-                    ]
-                ]
-            , viewPlaybackCycler hb.playback (CyclePlayback index)
-            , button [ class "btn btn-sm", onClick (TriggerHeartbeat index) ]
-                [ text "Trigger" ]
-            , viewSlider model ("slider:PollInterval:" ++ String.fromInt index) "Poll interval" (Just "Seconds between probe command executions.") 1.0 300.0 1.0 hb.pollIntervalSecs (SetHeartbeatSlider PollInterval index)
-            , viewSlider model ("slider:CycleSecs:" ++ String.fromInt index) "Cycle" (Just "Seconds between plays for one-shot heartbeats.") 1.0 120.0 0.5 hb.cycleSecs (SetHeartbeatSlider CycleSecs index)
-            , viewSlider model ("slider:Offset:" ++ String.fromInt index) "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
-            , if hb.playback == "continuous" || hb.playback == "loop" then
-                viewSlider model ("slider:CrossfadeMs:" ++ String.fromInt index) "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
+        , if collapsed then
+            text ""
 
-              else
-                text ""
-            , if hb.playback == "continuous" then
-                div []
-                    [ viewSlider model ("slider:PhraseGap:" ++ String.fromInt index) "Phrase gap" (Just "Seconds of silence between phrase repetitions.") 0.0 10.0 0.1 hb.phraseGap (SetHeartbeatSlider PhraseGap index)
-                    , viewSlider model ("slider:RepeatRate:" ++ String.fromInt index) "Repeat rate" (Just "Speed multiplier on phrase repetition.") 0.01 5.0 0.01 hb.repeatRate (SetHeartbeatSlider RepeatRate index)
-                    ]
-
-              else
-                text ""
-            , viewSlider model ("slider:Value:" ++ String.fromInt index) "Value" (Just "Current metric severity. Override to freeze at a fixed value.") model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
-            , div [ class "value-status-row" ]
-                [ span
-                    [ class
-                        (if hb.overridden then
-                            "value-status value-status-overridden"
-
-                         else
-                            "value-status"
-                        )
-                    ]
-                    [ text
-                        (if hb.overridden then
-                            "(overridden)"
-
-                         else
-                            "(live)"
-                        )
-                    ]
-                , if hb.overridden then
-                    button
-                        [ class "btn btn-sm"
-                        , onClick (ClearOverride index)
+          else
+            div [ class "card-body" ]
+                [ div [ class "hb-field-row" ]
+                    [ label [ class "hb-field-label" ] [ text "Command" ]
+                    , input
+                        [ class "hb-field-input"
+                        , type_ "text"
+                        , value hb.command
+                        , onInput (SetHeartbeatCommand index)
                         ]
-                        [ text "Track Live" ]
+                        []
+                    ]
+                , div [ class "hb-field-row" ]
+                    [ label [ class "hb-field-label" ] [ text "Result mode" ]
+                    , select
+                        [ class "hb-field-select"
+                        , onInput (SetHeartbeatResultMode index)
+                        ]
+                        [ option [ value "stdout", selected (hb.resultMode == "stdout") ] [ text "stdout" ]
+                        , option [ value "exit-code", selected (hb.resultMode == "exit-code") ] [ text "exit-code" ]
+                        , option [ value "exit-code-severity", selected (hb.resultMode == "exit-code-severity") ] [ text "exit-code-severity" ]
+                        ]
+                    ]
+                , viewPlaybackCycler hb.playback (CyclePlayback index)
+                , button [ class "btn btn-sm", onClick (TriggerHeartbeat index) ]
+                    [ text "Trigger" ]
+                , viewSlider model ("slider:PollInterval:" ++ String.fromInt index) "Poll interval" (Just "Seconds between probe command executions.") 1.0 300.0 1.0 hb.pollIntervalSecs (SetHeartbeatSlider PollInterval index)
+                , viewSlider model ("slider:CycleSecs:" ++ String.fromInt index) "Cycle" (Just "Seconds between plays for one-shot heartbeats.") 1.0 120.0 0.5 hb.cycleSecs (SetHeartbeatSlider CycleSecs index)
+                , viewSlider model ("slider:Offset:" ++ String.fromInt index) "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
+                , if hb.playback == "continuous" || hb.playback == "loop" then
+                    viewSlider model ("slider:CrossfadeMs:" ++ String.fromInt index) "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
 
                   else
                     text ""
-                ]
-            , div [ class "notes-section" ]
-                (List.indexedMap (viewNoteEditor model index (List.length hb.notes)) hb.notes
-                    ++ [ button
+                , if hb.playback == "continuous" then
+                    div []
+                        [ viewSlider model ("slider:PhraseGap:" ++ String.fromInt index) "Phrase gap" (Just "Seconds of silence between phrase repetitions.") 0.0 10.0 0.1 hb.phraseGap (SetHeartbeatSlider PhraseGap index)
+                        , viewSlider model ("slider:RepeatRate:" ++ String.fromInt index) "Repeat rate" (Just "Speed multiplier on phrase repetition.") 0.01 5.0 0.01 hb.repeatRate (SetHeartbeatSlider RepeatRate index)
+                        ]
+
+                  else
+                    text ""
+                , viewSlider model ("slider:Value:" ++ String.fromInt index) "Value" (Just "Current metric severity. Override to freeze at a fixed value.") model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
+                , div [ class "value-status-row" ]
+                    [ span
+                        [ class
+                            (if hb.overridden then
+                                "value-status value-status-overridden"
+
+                             else
+                                "value-status"
+                            )
+                        ]
+                        [ text
+                            (if hb.overridden then
+                                "(overridden)"
+
+                             else
+                                "(live)"
+                            )
+                        ]
+                    , if hb.overridden then
+                        button
                             [ class "btn btn-sm"
-                            , onClick (AddNote index)
+                            , onClick (ClearOverride index)
                             ]
-                            [ text "Add note" ]
-                       ]
-                )
-            , viewTierEditor index hb.tiers
-            ]
+                            [ text "Track Live" ]
+
+                      else
+                        text ""
+                    ]
+                , div [ class "notes-section" ]
+                    (List.indexedMap (viewNoteEditor model index (List.length hb.notes)) hb.notes
+                        ++ [ button
+                                [ class "btn btn-sm"
+                                , onClick (AddNote index)
+                                ]
+                                [ text "Add note" ]
+                           ]
+                    )
+                , viewTierEditor index hb.tiers
+                ]
         ]
 
 
