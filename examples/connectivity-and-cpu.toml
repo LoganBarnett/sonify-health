@@ -13,12 +13,16 @@
 log_level = "info"
 log_format = "text"
 
+# Ping flags use short forms for BSD (macOS) compatibility.
+# -c 1: send one packet (--count).  -W N: seconds to wait for a
+# reply (--linger).
+#
 # Gateway reachability.  Replace 192.168.1.1 with your actual gateway
 # address (`ip route | awk '/default/ {print $3}'` on Linux,
 # `netstat -nr | awk '/default/ {print $2; exit}'` on macOS).
 [[heartbeats]]
 name = "gateway"
-command = "ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1"
+command = "ping -c 1 -W 2 192.168.1.1"
 result_mode = "exit-code"
 cycle_secs = 15
 cycle_offset_secs = 0
@@ -39,7 +43,7 @@ patch = "alarm"
 # Internet connectivity via OpenDNS (208.67.222.222).
 [[heartbeats]]
 name = "internet"
-command = "ping -c 1 -W 4 208.67.222.222 >/dev/null 2>&1"
+command = "ping -c 1 -W 4 208.67.222.222"
 result_mode = "exit-code"
 cycle_secs = 15
 cycle_offset_secs = 5

@@ -1,5 +1,5 @@
 [[heartbeats]]
-command = "true"
+command = "ping -c 1 -W 4 192.168.254.254"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
@@ -27,7 +27,7 @@ patch = "medbay-error"
 threshold = 1.01
 
 [[heartbeats]]
-command = "ping -c 1 -W 4 208.67.222.222 >/dev/null 2>&1"
+command = "ping -c 1 -W 4 208.67.222.222"
 crossfade_ms = 6.0
 cycle_offset_secs = 0.6
 cycle_secs = 15.0
@@ -89,7 +89,7 @@ volume = 0.55
 [heartbeats.notes.transition]
 patches = [
     "medbay-cpu-lo",
-    "medbay-cpu-lo",
+    "medbay-cpu-hi",
 ]
 type = "gradient"
 
@@ -98,13 +98,13 @@ intensity = 2.0
 strategy = "ease-in"
 
 [patches.medbay-cpu-hi]
-freq = 18.0
+freq = 182.0
 overrides = "medbay-cpu-lo"
 
 [patches.medbay-cpu-lo]
 amplitude = 0.3
 attack_ms = 2000.0
-brightness = 1.47
+brightness = 0.54
 chirp_ratio = 1.0
 crush = 0.0
 decay_ms = 2000.0
@@ -116,13 +116,13 @@ echo_delay = 0.01
 echo_mix = 0.18
 fm_depth = 0.7
 fm_ratio = 0.0
-freq = 85.0
+freq = 55.0
 gap = 0.0
 harshness_offset = 0.0
 highpass = 0.0
 noise_mix = 1.0
 release_ms = 100.0
-resonance = 3.78
+resonance = 3.87
 reverb_mix = 0.0
 saw_ratio = 0.0
 sine_ratio = 1.32

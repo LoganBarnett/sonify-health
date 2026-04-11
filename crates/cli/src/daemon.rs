@@ -12,7 +12,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -77,26 +77,23 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   Ok(())
 }
 
-/// Spawn poll and play threads for heartbeat at `index`.  Reads
-/// the config snapshot and prometheus labels at spawn time.
-pub fn spawn_heartbeat_threads(
+/// Spawn a poll thread for heartbeat at `index`.  Re-reads config
+/// each iteration so live UI edits take effect.
+pub fn spawn_poll_thread(
   preview: &Arc<PreviewState>,
   i: usize,
-) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
-  let cfg = preview.heartbeat_configs.read().unwrap()[i].clone();
-
-  // -- Poll thread: runs probe command, updates metric.
+) -> thread::JoinHandle<()> {
   let poll_running = Arc::clone(&preview.running);
   let poll_preview = Arc::clone(preview);
+  let cfg = preview.heartbeat_configs.read().unwrap()[i].clone();
   let poll_counter = preview
     .metrics
     .probes_completed
     .with_label_values(&[&cfg.name]);
   let poll_gauge = preview.metrics.probe_value.with_label_values(&[&cfg.name]);
 
-  let poll_handle = thread::spawn(move || {
+  thread::spawn(move || {
     while poll_running.load(Ordering::Relaxed) {
-      // Re-read config each iteration so live UI edits take effect.
       let (cfg_name, command, mode, tiers, interval) = {
         let configs = poll_preview.heartbeat_configs.read().unwrap();
         let cfg = &configs[i];
@@ -132,24 +129,47 @@ pub fn spawn_heartbeat_threads(
         Some(clamped)
       } else {
         match probe::run_probe(&cfg_name, &command, &mode) {
-          Ok(metric) => {
-            let label = metric_label(metric, &tiers);
+          Ok(output) => {
+            if !output.stderr.is_empty() {
+              debug!(
+                heartbeat = cfg_name,
+                stderr = output.stderr,
+                "Probe stderr"
+              );
+            }
+            let label = metric_label(output.metric, &tiers);
             info!(heartbeat = cfg_name, result = label, "Probe completed");
             {
               let hbs = poll_preview.heartbeats.read().unwrap();
-              hbs[i].metric.set_value(metric);
+              hbs[i].metric.set_value(output.metric);
             }
             send_probe_log(&poll_preview, &cfg_name, &label, false);
             poll_counter.inc();
-            poll_gauge.set(metric as f64);
-            Some(metric)
+            poll_gauge.set(output.metric as f64);
+            Some(output.metric)
           }
           Err(e) => {
-            warn!(
-              heartbeat = cfg_name,
-              error = %e,
-              "Probe failed, retaining previous metric"
-            );
+            let stderr = match &e {
+              probe::ProbeError::ProbeSignaled { stderr, .. }
+              | probe::ProbeError::ProbeInvalidStdout { stderr, .. } => {
+                Some(stderr.as_str())
+              }
+              probe::ProbeError::ProbeExecution { .. } => None,
+            };
+            if let Some(text) = stderr.filter(|s| !s.is_empty()) {
+              warn!(
+                heartbeat = cfg_name,
+                error = %e,
+                stderr = text,
+                "Probe failed, retaining previous metric"
+              );
+            } else {
+              warn!(
+                heartbeat = cfg_name,
+                error = %e,
+                "Probe failed, retaining previous metric"
+              );
+            }
             None
           }
         }
@@ -165,7 +185,6 @@ pub fn spawn_heartbeat_threads(
         );
       }
 
-      // Broadcast metric change.
       let metric_val = {
         let hbs = poll_preview.heartbeats.read().unwrap();
         hbs[i].metric.value()
@@ -181,7 +200,16 @@ pub fn spawn_heartbeat_threads(
 
       sleep_checking(&poll_running, interval);
     }
-  });
+  })
+}
+
+/// Spawn poll and play threads for heartbeat at `index`.  Reads
+/// the config snapshot and prometheus labels at spawn time.
+pub fn spawn_heartbeat_threads(
+  preview: &Arc<PreviewState>,
+  i: usize,
+) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
+  let poll_handle = spawn_poll_thread(preview, i);
 
   // -- Play thread.
   let play_running = Arc::clone(&preview.running);
@@ -192,10 +220,11 @@ pub fn spawn_heartbeat_threads(
     .unwrap()
     .clone()
     .expect("Mixer handle must be set before spawning threads");
+  let cfg_name = preview.heartbeat_configs.read().unwrap()[i].name.clone();
   let play_counter = preview
     .metrics
     .heartbeats_played
-    .with_label_values(&[&cfg.name]);
+    .with_label_values(&[&cfg_name]);
 
   let play_handle = thread::spawn(move || {
     // Align to the wall-clock grid before the first play so that
