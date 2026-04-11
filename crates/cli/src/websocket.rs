@@ -1,4 +1,4 @@
-use crate::config::OverrideInfo;
+use crate::config::{build_save_toml, OverrideInfo};
 use crate::preview_state::PreviewState;
 use axum::{
   extract::{
@@ -529,6 +529,86 @@ fn handle_client_message(preview: &PreviewState, text: &str) -> Option<String> {
       broadcast_library(preview);
       broadcast_overrides(preview);
       None
+    }
+
+    "save_config" => {
+      let config_path = match (&preview.config_path, preview.config_writable) {
+        (Some(p), true) => p.clone(),
+        _ => {
+          return Some(
+            json!({
+              "type": "save_error",
+              "message": "No writable config file available.",
+            })
+            .to_string(),
+          );
+        }
+      };
+
+      let lib = preview.library.read().unwrap();
+      let ovr = preview.overrides.read().unwrap();
+      let hb_configs = preview.heartbeat_configs.read().unwrap();
+
+      let toml_str = match build_save_toml(
+        &lib,
+        &ovr,
+        &hb_configs,
+        &preview.slider_ranges,
+      ) {
+        Ok(s) => s,
+        Err(e) => {
+          return Some(
+            json!({
+              "type": "save_error",
+              "message": format!("Serialization failed: {e}"),
+            })
+            .to_string(),
+          );
+        }
+      };
+      drop(lib);
+      drop(ovr);
+      drop(hb_configs);
+
+      // Atomic write: temp file + rename.
+      let dir = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+      match tempfile::NamedTempFile::new_in(dir) {
+        Ok(mut tmp) => {
+          use std::io::Write;
+          if let Err(e) = tmp.write_all(toml_str.as_bytes()) {
+            return Some(
+              json!({
+                "type": "save_error",
+                "message": format!("Write failed: {e}"),
+              })
+              .to_string(),
+            );
+          }
+          if let Err(e) = tmp.persist(&config_path) {
+            return Some(
+              json!({
+                "type": "save_error",
+                "message": format!("Rename failed: {e}"),
+              })
+              .to_string(),
+            );
+          }
+          tracing::info!(path = %config_path.display(), "Config saved");
+          let _ = preview
+            .broadcast_tx
+            .send(json!({"type": "config_saved"}).to_string());
+          None
+        }
+        Err(e) => Some(
+          json!({
+            "type": "save_error",
+            "message": format!("Failed to create temp file: {e}"),
+          })
+          .to_string(),
+        ),
+      }
     }
 
     _ => None,

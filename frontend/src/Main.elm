@@ -74,6 +74,9 @@ type alias Model =
     , sliderRanges : SliderRanges
     , renamingPatch : Maybe String
     , renameInput : String
+    , configWritable : Bool
+    , configPath : Maybe String
+    , saveStatus : Maybe String
     }
 
 
@@ -120,6 +123,8 @@ type Msg
     | ConfirmRename String
     | CancelRename
     | ResetOverrideParam String String
+    | SaveConfig
+    | DismissSaveStatus
     | DismissProtocolError
     | NoOp
 
@@ -165,6 +170,9 @@ init _ url key =
       , sliderRanges = defaultSliderRanges
       , renamingPatch = Nothing
       , renameInput = ""
+      , configWritable = False
+      , configPath = Nothing
+      , saveStatus = Nothing
       }
     , cmdForRoute route
     )
@@ -728,6 +736,12 @@ update msg model =
             , Ports.websocketSend (encodeResetOverrideParam patchName param)
             )
 
+        SaveConfig ->
+            ( model, Ports.websocketSend encodeSaveConfig )
+
+        DismissSaveStatus ->
+            ( { model | saveStatus = Nothing }, Cmd.none )
+
         DismissProtocolError ->
             ( { model | protocolError = Nothing }, Cmd.none )
 
@@ -748,6 +762,8 @@ handleServerMsg msg model =
                 , heartbeatLoop = state.heartbeatLoop
                 , heartbeats = state.heartbeats
                 , sliderRanges = state.sliderRanges
+                , configWritable = state.configWritable
+                , configPath = state.configPath
                 , selectedPatch =
                     case model.selectedPatch of
                         Nothing ->
@@ -894,6 +910,15 @@ handleServerMsg msg model =
 
         ImportError err ->
             ( { model | importError = Just err }, Cmd.none )
+
+        ConfigSaved ->
+            ( { model | saveStatus = Just "Saved" }
+            , Process.sleep 2000
+                |> Task.perform (\_ -> DismissSaveStatus)
+            )
+
+        SaveError err ->
+            ( { model | saveStatus = Just err }, Cmd.none )
 
         Connected ->
             ( { model | connected = True }
@@ -1463,6 +1488,39 @@ viewToolbar model =
             ]
         , button [ class "btn", onClick RevertAll ]
             [ text "Revert" ]
+        , button
+            (if model.configWritable then
+                [ class "btn", onClick SaveConfig ]
+
+             else
+                [ class "btn"
+                , Html.Attributes.disabled True
+                , title
+                    (case model.configPath of
+                        Just p ->
+                            "Save disabled: " ++ p ++ " is not writable"
+
+                        Nothing ->
+                            "Save disabled: no config file"
+                    )
+                ]
+            )
+            [ text "Save" ]
+        , case model.saveStatus of
+            Just status ->
+                span
+                    [ class
+                        (if status == "Saved" then
+                            "save-status"
+
+                         else
+                            "save-status save-status-error"
+                        )
+                    ]
+                    [ text status ]
+
+            Nothing ->
+                text ""
         , button [ class "btn", onClick Export ]
             [ text "Export" ]
         ]

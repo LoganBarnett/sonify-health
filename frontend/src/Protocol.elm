@@ -22,6 +22,7 @@ module Protocol exposing
     , encodeRenamePatch
     , encodeResetOverrideParam
     , encodeRevertAll
+    , encodeSaveConfig
     , encodeSetCycleOffset
     , encodeSetHeartbeatLoop
     , encodeSetMasterVolume
@@ -119,6 +120,8 @@ type ServerMsg
         , heartbeats : List HeartbeatInfo
         , sliderRanges : SliderRanges
         , overrides : Dict String OverrideInfo
+        , configWritable : Bool
+        , configPath : Maybe String
         }
     | PatchParamChanged String String Float
     | MuteChanged Bool
@@ -136,6 +139,8 @@ type ServerMsg
     | ProbeLog ProbeLogEntry
     | ConfigExport (Dict String (Dict String Float)) (Dict String OverrideInfo)
     | ImportError String
+    | ConfigSaved
+    | SaveError String
     | Connected
     | Disconnected
 
@@ -203,6 +208,12 @@ serverMsgDecoder =
                     "import_error" ->
                         importErrorDecoder
 
+                    "config_saved" ->
+                        D.succeed ConfigSaved
+
+                    "save_error" ->
+                        saveErrorDecoder
+
                     "connected" ->
                         D.succeed Connected
 
@@ -222,7 +233,7 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map6
         (\pp lib muted mv hbLoop hbs ->
-            \sr ovr ->
+            \sr ovr cw cp ->
                 StateMsg
                     { patchParams = pp
                     , library = lib
@@ -232,6 +243,8 @@ stateDecoder =
                     , heartbeats = hbs
                     , sliderRanges = sr
                     , overrides = ovr
+                    , configWritable = cw
+                    , configPath = cp
                     }
         )
         (D.field "patch_params" (D.list patchParamMetaDecoder))
@@ -242,9 +255,15 @@ stateDecoder =
         (D.field "heartbeats" (D.list heartbeatInfoDecoder))
         |> D.andThen
             (\buildState ->
-                D.map2 buildState
+                D.map4 buildState
                     (D.field "slider_ranges" sliderRangesDecoder)
                     (D.field "overrides" overridesDecoder)
+                    (D.oneOf
+                        [ D.field "config_writable" D.bool
+                        , D.succeed False
+                        ]
+                    )
+                    (D.maybe (D.field "config_path" D.string))
             )
 
 
@@ -535,6 +554,11 @@ importErrorDecoder =
     D.map ImportError (D.field "message" D.string)
 
 
+saveErrorDecoder : D.Decoder ServerMsg
+saveErrorDecoder =
+    D.map SaveError (D.field "message" D.string)
+
+
 
 -- Client messages (outgoing)
 
@@ -669,6 +693,12 @@ encodeRevertAll =
 encodeExportConfig : String
 encodeExportConfig =
     E.object [ ( "type", E.string "export_config" ) ]
+        |> E.encode 0
+
+
+encodeSaveConfig : String
+encodeSaveConfig =
+    E.object [ ( "type", E.string "save_config" ) ]
         |> E.encode 0
 
 

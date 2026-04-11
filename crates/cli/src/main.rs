@@ -271,12 +271,18 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new();
 
+  let config_writable = config.config_path.as_ref().map_or(false, |p| {
+    std::fs::metadata(p).map_or(false, |m| !m.permissions().readonly())
+  });
+
   let preview = Arc::new(preview_state::PreviewState::new(
     config.library.clone(),
     config.overrides.clone(),
     config.heartbeats.clone(),
     Arc::clone(&muted),
     config.slider_ranges.clone(),
+    config.config_path.clone(),
+    config_writable,
   ));
 
   // Perform OIDC provider discovery when configured.

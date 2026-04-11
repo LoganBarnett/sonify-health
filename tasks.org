@@ -243,7 +243,7 @@ neutral beep patch for severity 0 and alarm for severity 1 as
 defaults.  The new heartbeat must be fully editable immediately
 after creation and must round-trip through export/save.
 
-* TODO Save button (write config back to source file)
+* DONE Save button (write config back to source file)
 Add a save button that writes the current full configuration back
 to the config file the program was launched with.  Only show the
 save button when the config file is writable — check file

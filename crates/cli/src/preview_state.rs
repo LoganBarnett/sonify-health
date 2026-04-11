@@ -4,6 +4,7 @@ use fundsp::shared::Shared;
 use serde_json::json;
 use sonify_health_lib::{HeartbeatConfig, Patch, PatchLibrary};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
   Arc, RwLock,
@@ -34,6 +35,8 @@ pub struct PreviewState {
   pub heartbeat_loop: AtomicBool,
   pub heartbeat_trigger: AtomicBool,
   pub slider_ranges: SliderRanges,
+  pub config_path: Option<PathBuf>,
+  pub config_writable: bool,
   pub broadcast_tx: broadcast::Sender<String>,
   pub probe_log_tx: broadcast::Sender<String>,
 }
@@ -45,6 +48,8 @@ impl PreviewState {
     heartbeat_configs: Vec<HeartbeatConfig>,
     muted: Arc<AtomicBool>,
     slider_ranges: SliderRanges,
+    config_path: Option<PathBuf>,
+    config_writable: bool,
   ) -> Self {
     let (broadcast_tx, _) = broadcast::channel(256);
     let (probe_log_tx, _) = broadcast::channel(256);
@@ -68,6 +73,8 @@ impl PreviewState {
       heartbeats,
       muted,
       slider_ranges,
+      config_path,
+      config_writable,
       master_volume: shared(1.0),
       heartbeat_loop: AtomicBool::new(false),
       heartbeat_trigger: AtomicBool::new(false),
@@ -176,6 +183,8 @@ impl PreviewState {
       "heartbeats": heartbeats_json,
       "slider_ranges": serde_json::to_value(&self.slider_ranges).unwrap_or_default(),
       "overrides": overrides_json,
+      "config_writable": self.config_writable,
+      "config_path": self.config_path.as_ref().map(|p| p.display().to_string()),
     })
     .to_string()
   }

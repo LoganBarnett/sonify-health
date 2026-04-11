@@ -613,6 +613,16 @@ a:hover {
   color: var(--color-down-text);
 }
 
+/* Save status */
+
+.save-status {
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+}
+.save-status-error {
+  color: var(--color-error);
+}
+
 /* Import */
 
 .import-textarea {

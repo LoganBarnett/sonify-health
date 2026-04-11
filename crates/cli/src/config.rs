@@ -98,14 +98,14 @@ pub struct OidcConfig {
   pub client_secret: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SliderRange {
   pub min: f64,
   pub max: f64,
   pub step: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SliderRanges {
   pub master_volume: SliderRange,
@@ -220,6 +220,7 @@ pub struct Config {
   pub heartbeats: Vec<HeartbeatConfig>,
   pub slider_ranges: SliderRanges,
   pub oidc: Option<OidcConfig>,
+  pub config_path: Option<PathBuf>,
 }
 
 impl Config {
@@ -238,14 +239,14 @@ impl Config {
     oidc_client_id: Option<&str>,
     oidc_client_secret_file: Option<&Path>,
   ) -> Result<Self, ConfigError> {
-    let file = match config_path {
-      Some(p) => ConfigFileRaw::from_file(p)?,
+    let (file, resolved_config_path) = match config_path {
+      Some(p) => (ConfigFileRaw::from_file(p)?, Some(p.to_path_buf())),
       None => {
         let default = PathBuf::from("config.toml");
         if default.exists() {
-          ConfigFileRaw::from_file(&default)?
+          (ConfigFileRaw::from_file(&default)?, Some(default))
         } else {
-          ConfigFileRaw::default()
+          (ConfigFileRaw::default(), None)
         }
       }
     };
@@ -422,8 +423,88 @@ impl Config {
       heartbeats: file.heartbeats,
       slider_ranges: file.slider_ranges,
       oidc,
+      config_path: resolved_config_path,
     })
   }
+}
+
+/// Serialize the current runtime state to a TOML config string that
+/// can be loaded back via `Config::from_args`.  Override patches emit
+/// the compact `overrides = "base"` form with only delta fields;
+/// standalone patches serialize as full `Patch` tables.  Builtin
+/// patches are omitted.
+pub fn build_save_toml(
+  library: &PatchLibrary,
+  overrides: &HashMap<String, OverrideInfo>,
+  heartbeats: &[HeartbeatConfig],
+  slider_ranges: &SliderRanges,
+) -> Result<String, ConfigSaveError> {
+  let builtins = builtin_library();
+  let mut doc = toml::Table::new();
+
+  // Patches: only user-defined (non-builtin) entries.
+  let mut patches_table = toml::Table::new();
+  for (name, patch) in library {
+    if builtins.contains_key(name) && !overrides.contains_key(name) {
+      continue;
+    }
+    if let Some(info) = overrides.get(name) {
+      // Override patch: emit compact form.
+      let mut tbl = toml::Table::new();
+      tbl.insert(
+        "overrides".to_string(),
+        toml::Value::String(info.base.clone()),
+      );
+      for (param, val) in &info.delta {
+        tbl.insert(param.clone(), toml::Value::Float(*val));
+      }
+      patches_table.insert(name.clone(), toml::Value::Table(tbl));
+    } else {
+      // Standalone patch: full serialization.
+      let val = toml::Value::try_from(patch)
+        .map_err(|e| ConfigSaveError::PatchSerialize(name.clone(), e))?;
+      patches_table.insert(name.clone(), val);
+    }
+  }
+  if !patches_table.is_empty() {
+    doc.insert("patches".to_string(), toml::Value::Table(patches_table));
+  }
+
+  // Heartbeats.
+  let hb_val = toml::Value::try_from(heartbeats)
+    .map_err(ConfigSaveError::HeartbeatSerialize)?;
+  if let toml::Value::Array(ref arr) = hb_val {
+    if !arr.is_empty() {
+      doc.insert("heartbeats".to_string(), hb_val);
+    }
+  }
+
+  // Slider ranges (only if non-default).
+  let default_ranges = SliderRanges::default();
+  let sr_val = toml::Value::try_from(slider_ranges)
+    .map_err(ConfigSaveError::SliderRangesSerialize)?;
+  let default_sr_val = toml::Value::try_from(&default_ranges)
+    .map_err(ConfigSaveError::SliderRangesSerialize)?;
+  if sr_val != default_sr_val {
+    doc.insert("slider_ranges".to_string(), sr_val);
+  }
+
+  toml::to_string_pretty(&doc).map_err(ConfigSaveError::Serialize)
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigSaveError {
+  #[error("Failed to serialize patch {0:?}: {1}")]
+  PatchSerialize(String, toml::ser::Error),
+
+  #[error("Failed to serialize heartbeats: {0}")]
+  HeartbeatSerialize(toml::ser::Error),
+
+  #[error("Failed to serialize slider ranges: {0}")]
+  SliderRangesSerialize(toml::ser::Error),
+
+  #[error("Failed to serialize config: {0}")]
+  Serialize(toml::ser::Error),
 }
 
 /// Returns the path to the `oidc-client-secret` credential file inside
@@ -591,5 +672,155 @@ mod tests {
           .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
       }
     }
+  }
+
+  #[test]
+  fn save_round_trip() {
+    // Build a config with a standalone patch, an override, a
+    // heartbeat, and non-default slider ranges.
+    let toml_str = r#"
+      [patches.my-base]
+      freq = 440.0
+      duration = 0.5
+
+      [patches.my-override]
+      overrides = "my-base"
+      freq = 880.0
+
+      [slider_ranges.master_volume]
+      min = 0.0
+      max = 2.0
+      step = 0.05
+
+      [[heartbeats]]
+      name = "test-hb"
+      command = "echo 0"
+      result_mode = "exit-code-severity"
+
+      [[heartbeats.notes]]
+      volume = 0.4
+
+      [heartbeats.notes.transition]
+      type = "discrete"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 0.5
+      patch = "my-base"
+
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "my-override"
+    "#;
+
+    let tmp = std::env::temp_dir().join("sonify_save_rt.toml");
+    std::fs::write(&tmp, toml_str).unwrap();
+
+    let config = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(tmp.as_path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+
+    // Mutate: change a param on the override delta and on a
+    // standalone patch.
+    let mut library = config.library.clone();
+    let mut overrides = config.overrides.clone();
+    library.get_mut("my-base").unwrap().duration = 0.8;
+    library.get_mut("my-override").unwrap().duration = 0.8;
+    overrides
+      .get_mut("my-override")
+      .unwrap()
+      .delta
+      .insert("amplitude".to_string(), 0.9);
+    library.get_mut("my-override").unwrap().amplitude = 0.9;
+
+    // Serialize and reload.
+    let saved = build_save_toml(
+      &library,
+      &overrides,
+      &config.heartbeats,
+      &config.slider_ranges,
+    )
+    .unwrap();
+
+    let tmp2 = std::env::temp_dir().join("sonify_save_rt2.toml");
+    std::fs::write(&tmp2, &saved).unwrap();
+
+    let reloaded = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(tmp2.as_path()),
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .unwrap();
+
+    // Verify patches.
+    assert_eq!(reloaded.library["my-base"].freq, 440.0);
+    assert_eq!(reloaded.library["my-base"].duration, 0.8);
+    assert_eq!(reloaded.library["my-override"].freq, 880.0);
+    assert_eq!(reloaded.library["my-override"].amplitude, 0.9);
+    // Inherited duration from mutated base.
+    assert_eq!(reloaded.library["my-override"].duration, 0.8);
+
+    // Verify override delta.
+    assert!(reloaded.overrides.contains_key("my-override"));
+    assert_eq!(reloaded.overrides["my-override"].base, "my-base");
+    assert!(reloaded.overrides["my-override"].delta.contains_key("freq"));
+    assert!(reloaded.overrides["my-override"]
+      .delta
+      .contains_key("amplitude"));
+
+    // Verify heartbeat.
+    assert_eq!(reloaded.heartbeats.len(), 1);
+    assert_eq!(reloaded.heartbeats[0].name, "test-hb");
+
+    // Verify slider ranges.
+    assert_eq!(reloaded.slider_ranges.master_volume.max, 2.0);
+    assert_eq!(reloaded.slider_ranges.master_volume.step, 0.05);
+
+    std::fs::remove_file(&tmp).ok();
+    std::fs::remove_file(&tmp2).ok();
+  }
+
+  #[test]
+  fn config_writable_flag() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = std::env::temp_dir().join("sonify_writable_test.toml");
+    std::fs::write(&tmp, "").unwrap();
+
+    // Make read-only.
+    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
+    perms.set_mode(0o444);
+    std::fs::set_permissions(&tmp, perms).unwrap();
+
+    let readonly_flag =
+      std::fs::metadata(&tmp).map_or(false, |m| !m.permissions().readonly());
+    assert!(!readonly_flag, "Should be non-writable");
+
+    // Make writable again.
+    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
+    perms.set_mode(0o644);
+    std::fs::set_permissions(&tmp, perms).unwrap();
+
+    let writable_flag =
+      std::fs::metadata(&tmp).map_or(false, |m| !m.permissions().readonly());
+    assert!(writable_flag, "Should be writable");
+
+    std::fs::remove_file(&tmp).ok();
   }
 }
