@@ -2055,7 +2055,6 @@ viewHeartbeatCard model index hb =
                 ]
                 []
             , metricBadge hb.metric hb.tiers
-            , viewSparkline (Dict.get index model.metricHistory |> Maybe.withDefault [])
             , if hb.playback /= "clock" then
                 span [ class "badge" ] [ text hb.playback ]
 
@@ -2066,6 +2065,7 @@ viewHeartbeatCard model index hb =
 
               else
                 text ""
+            , viewSparkline (Dict.get index model.metricHistory |> Maybe.withDefault [])
             ]
         , if collapsed then
             text ""
@@ -2523,42 +2523,65 @@ viewStrategySvg strat =
 
 viewSparkline : List Float -> Html msg
 viewSparkline values =
-    if List.length values < 2 then
-        text ""
+    let
+        h =
+            20.0
 
-    else
-        let
-            w =
-                toFloat (List.length values) * 3.0
-
-            h =
-                20.0
-
-            points =
-                values
-                    |> List.indexedMap
-                        (\i v ->
-                            String.fromFloat (toFloat i * 3.0)
-                                ++ ","
-                                ++ String.fromFloat (h - v * h)
-                        )
-                    |> String.join " "
-        in
-        Svg.svg
-            [ SA.width (String.fromFloat w)
-            , SA.height (String.fromFloat h)
-            , SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
-            , Html.Attributes.style "vertical-align" "middle"
-            , Html.Attributes.style "margin-left" "var(--space-sm)"
-            ]
-            [ Svg.polyline
-                [ SA.points points
-                , SA.fill "none"
-                , SA.stroke "var(--color-accent)"
-                , SA.strokeWidth "1.5"
-                ]
+        children =
+            if List.length values < 2 then
                 []
-            ]
+
+            else
+                let
+                    linePoints =
+                        values
+                            |> List.indexedMap
+                                (\i v ->
+                                    String.fromFloat (toFloat i * 3.0)
+                                        ++ ","
+                                        ++ String.fromFloat (h - v * h)
+                                )
+                            |> String.join " "
+
+                    fillPoints =
+                        "0,"
+                            ++ String.fromFloat h
+                            ++ " "
+                            ++ linePoints
+                            ++ " "
+                            ++ String.fromFloat ((toFloat (List.length values) - 1) * 3.0)
+                            ++ ","
+                            ++ String.fromFloat h
+                in
+                [ Svg.polygon
+                    [ SA.points fillPoints
+                    , SA.fill "var(--color-accent)"
+                    , SA.fillOpacity "0.1"
+                    , SA.stroke "none"
+                    ]
+                    []
+                , Svg.polyline
+                    [ SA.points linePoints
+                    , SA.fill "none"
+                    , SA.stroke "var(--color-accent)"
+                    , SA.strokeWidth "1.5"
+                    ]
+                    []
+                ]
+
+        w =
+            toFloat (List.length values) * 3.0 |> Basics.max 1.0
+    in
+    Svg.svg
+        [ SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
+        , Html.Attributes.attribute "preserveAspectRatio" "none"
+        , Html.Attributes.style "flex" "1"
+        , Html.Attributes.style "margin-left" "auto"
+        , Html.Attributes.style "height" "24px"
+        , Html.Attributes.style "border" "1px solid var(--color-border)"
+        , Html.Attributes.style "border-radius" "4px"
+        ]
+        children
 
 
 resolveTier : Float -> List TierInfo -> Maybe TierInfo
