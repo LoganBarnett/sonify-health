@@ -9,7 +9,10 @@ pub mod probe;
 pub mod timing;
 pub mod transition;
 
-pub use continuous::{continuous_graph, ContinuousControls, StructuralParams};
+pub use continuous::{
+  continuous_graph, continuous_graph_with_notes, ContinuousControls,
+  StructuralParams,
+};
 pub use heartbeat::ResolvedNote;
 pub use heartbeat_config::{HeartbeatConfig, NoteConfig, Playback};
 pub use library::{builtin_library, PatchLibrary};

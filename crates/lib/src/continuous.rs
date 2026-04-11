@@ -1,5 +1,6 @@
 use crate::heartbeat::MAX_CUTOFF;
 use crate::patch::Patch;
+use fundsp::net::Net;
 use fundsp::prelude32::*;
 use fundsp::shared::Shared;
 
@@ -263,6 +264,56 @@ pub fn continuous_graph(
     >> reverb_stereo(0.3, 0.8, structural.reverb_mix);
 
   Box::new(stereo)
+}
+
+/// Multi-note continuous graph: one independent `continuous_graph`
+/// per note, with per-note volume baked into the amplitude control,
+/// summed via `Net::wrap` + `reduce`.
+///
+/// Returns a tuple of `(graph, controls_vec, structural_vec)` so
+/// the caller can update controls and detect structural changes
+/// per-note.
+pub fn continuous_graph_with_notes(
+  patches: &[(Patch, f64)],
+  smoothing_secs: f64,
+  external_volume: Option<&Shared>,
+) -> (Box<dyn AudioUnit>, Vec<ContinuousControls>, Vec<StructuralParams>) {
+  if patches.is_empty() {
+    let ext = match external_volume {
+      Some(s) => s.clone(),
+      None => shared(1.0),
+    };
+    return (
+      Box::new(dc(0.0) * var(&ext) | dc(0.0) * var(&ext)),
+      Vec::new(),
+      Vec::new(),
+    );
+  }
+
+  let mut all_controls = Vec::with_capacity(patches.len());
+  let mut all_structural = Vec::with_capacity(patches.len());
+
+  let net = patches
+    .iter()
+    .map(|(patch, volume)| {
+      let mut p = patch.clone();
+      p.amplitude *= *volume;
+      let controls = ContinuousControls::from_patch(&p);
+      let structural = StructuralParams::from_patch(&p);
+      let graph = continuous_graph(
+        &controls,
+        smoothing_secs,
+        &structural,
+        external_volume,
+      );
+      all_controls.push(controls);
+      all_structural.push(structural);
+      Net::wrap(graph)
+    })
+    .reduce(|acc, n| acc + n)
+    .unwrap();
+
+  (Box::new(net), all_controls, all_structural)
 }
 
 #[cfg(test)]

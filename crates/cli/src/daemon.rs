@@ -3,7 +3,7 @@ use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer, MixerHandle},
-  continuous_graph, heartbeat, probe, seconds_until_next, ContinuousControls,
+  continuous_graph_with_notes, heartbeat, probe, seconds_until_next, Patch,
   Playback, ResolvedNote, StructuralParams,
 };
 use std::sync::{
@@ -202,29 +202,41 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   Ok(())
 }
 
-/// Resolve the first note's patch from the current metric and
-/// transition config.  Returns `None` if no notes resolve.
-fn resolve_first_patch(
-  preview: &PreviewState,
-  i: usize,
-) -> Option<(sonify_health_lib::Patch, f64)> {
+/// Resolve all notes for heartbeat `i` from the current metric
+/// and transition config.  Shared by loop, oneshot, and continuous
+/// playback.
+fn resolve_notes(preview: &PreviewState, i: usize) -> Vec<ResolvedNote> {
   let metric = preview.heartbeats[i].metric.value() as f64;
   let note_configs = {
     let cfg = &preview.heartbeat_configs.read().unwrap()[i];
     cfg.notes.clone()
   };
   let lib = preview.library.read().unwrap();
-  let nc = note_configs.first()?;
-  let mut patch = nc.transition.resolve(metric, &lib)?;
-  patch.amplitude *= nc.volume;
-  Some((patch, metric))
+  note_configs
+    .iter()
+    .filter_map(|nc| {
+      let patch = nc.transition.resolve(metric, &lib)?;
+      Some(ResolvedNote {
+        patch,
+        volume: nc.volume,
+        offset: nc.offset,
+      })
+    })
+    .collect()
 }
 
-/// Continuous morph playback: build the graph once with `Shared`
-/// controls, then update those controls as the metric changes.
-/// Only rebuilds the graph when structural parameters change.
-/// Returns when the daemon is shutting down or the playback mode
-/// changes away from `Continuous`.
+/// Build `(Patch, f64)` pairs for `continuous_graph_with_notes`
+/// from resolved notes (patch with volume baked in is handled
+/// inside `continuous_graph_with_notes`, so we pass raw volume).
+fn notes_to_continuous_pairs(notes: &[ResolvedNote]) -> Vec<(Patch, f64)> {
+  notes.iter().map(|n| (n.patch.clone(), n.volume)).collect()
+}
+
+/// Continuous morph playback: build a multi-note graph with
+/// `Shared` controls, then update those controls as the metric
+/// changes.  Rebuilds the graph when structural parameters or
+/// note count change.  Returns when the daemon is shutting down
+/// or the playback mode changes away from `Continuous`.
 fn play_continuous_tick(
   running: &AtomicBool,
   preview: &PreviewState,
@@ -232,8 +244,8 @@ fn play_continuous_tick(
   i: usize,
   counter: &prometheus::IntCounter,
 ) {
-  // Wait for a valid initial patch.
-  let (patch, _) = loop {
+  // Wait for at least one valid note.
+  let initial_notes = loop {
     if !running.load(Ordering::Relaxed) {
       return;
     }
@@ -242,8 +254,9 @@ fn play_continuous_tick(
     {
       return;
     }
-    if let Some(result) = resolve_first_patch(preview, i) {
-      break result;
+    let notes = resolve_notes(preview, i);
+    if !notes.is_empty() {
+      break notes;
     }
     thread::sleep(Duration::from_secs(1));
   };
@@ -254,15 +267,15 @@ fn play_continuous_tick(
   };
   let smoothing = crossfade_ms / 1000.0;
 
-  let controls = ContinuousControls::from_patch(&patch);
-  let mut structural = StructuralParams::from_patch(&patch);
+  let pairs = notes_to_continuous_pairs(&initial_notes);
   preview.update_effective_volume(i);
-  let graph = continuous_graph(
-    &controls,
-    smoothing,
-    &structural,
-    Some(&preview.heartbeats[i].effective_volume),
-  );
+  let (graph, mut all_controls, mut all_structural) =
+    continuous_graph_with_notes(
+      &pairs,
+      smoothing,
+      Some(&preview.heartbeats[i].effective_volume),
+    );
+  let mut note_count = pairs.len();
   let sid = play_mix.add(graph);
   counter.inc();
 
@@ -273,38 +286,67 @@ fn play_continuous_tick(
       break;
     }
 
-    // Break out if the user switched away from continuous mode.
     if preview.heartbeat_configs.read().unwrap()[i].playback
       != Playback::Continuous
     {
       break;
     }
 
-    // Re-read crossfade_ms in case the user changed it.
     let crossfade_ms = {
       let cfg = &preview.heartbeat_configs.read().unwrap()[i];
       cfg.crossfade_ms
     };
 
-    if let Some((patch, _)) = resolve_first_patch(preview, i) {
-      controls.update_from_patch(&patch);
-      preview.update_effective_volume(i);
+    let notes = resolve_notes(preview, i);
+    if notes.is_empty() {
+      continue;
+    }
 
-      // Rebuild graph only if structural params changed.
-      let new_structural = StructuralParams::from_patch(&patch);
-      if new_structural != structural {
-        let smoothing = crossfade_ms / 1000.0;
-        let graph = continuous_graph(
-          &controls,
-          smoothing,
-          &new_structural,
-          Some(&preview.heartbeats[i].effective_volume),
-        );
-        let cf =
-          ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-        play_mix.replace(sid, graph, cf);
-        structural = new_structural;
+    preview.update_effective_volume(i);
+    let pairs = notes_to_continuous_pairs(&notes);
+
+    // Full rebuild if note count changed.
+    if pairs.len() != note_count {
+      let smoothing = crossfade_ms / 1000.0;
+      let (graph, new_controls, new_structural) = continuous_graph_with_notes(
+        &pairs,
+        smoothing,
+        Some(&preview.heartbeats[i].effective_volume),
+      );
+      let cf =
+        ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
+      play_mix.replace(sid, graph, cf);
+      all_controls = new_controls;
+      all_structural = new_structural;
+      note_count = pairs.len();
+      continue;
+    }
+
+    // Update each note's controls; check for structural changes.
+    let mut needs_rebuild = false;
+    for (j, (patch, volume)) in pairs.iter().enumerate() {
+      let mut p = patch.clone();
+      p.amplitude *= volume;
+      all_controls[j].update_from_patch(&p);
+      let new_structural = StructuralParams::from_patch(&p);
+      if new_structural != all_structural[j] {
+        all_structural[j] = new_structural;
+        needs_rebuild = true;
       }
+    }
+
+    if needs_rebuild {
+      let smoothing = crossfade_ms / 1000.0;
+      let (graph, new_controls, new_structural) = continuous_graph_with_notes(
+        &pairs,
+        smoothing,
+        Some(&preview.heartbeats[i].effective_volume),
+      );
+      let cf =
+        ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
+      play_mix.replace(sid, graph, cf);
+      all_controls = new_controls;
+      all_structural = new_structural;
     }
   }
 
@@ -324,25 +366,7 @@ fn play_loop(
   i: usize,
   counter: &prometheus::IntCounter,
 ) {
-  let metric = preview.heartbeats[i].metric.value() as f64;
-  let note_configs = {
-    let cfg = &preview.heartbeat_configs.read().unwrap()[i];
-    cfg.notes.clone()
-  };
-  let lib = preview.library.read().unwrap();
-  let notes: Vec<ResolvedNote> = note_configs
-    .iter()
-    .filter_map(|nc| {
-      let patch = nc.transition.resolve(metric, &lib)?;
-      Some(ResolvedNote {
-        patch,
-        volume: nc.volume,
-        offset: nc.offset,
-      })
-    })
-    .collect();
-  drop(lib);
-
+  let notes = resolve_notes(preview, i);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
     return;
@@ -360,36 +384,19 @@ fn play_loop(
   sleep_checking(running, content_dur);
 
   while running.load(Ordering::Relaxed) {
-    // Break out if the user switched away from loop mode.
     if preview.heartbeat_configs.read().unwrap()[i].playback != Playback::Loop {
       break;
     }
 
-    // Check for manual trigger — break so the outer loop
-    // re-enters and fires immediately.
     if preview.heartbeat_trigger.swap(false, Ordering::Relaxed) {
       break;
     }
 
-    let metric = preview.heartbeats[i].metric.value() as f64;
-    let (note_configs, crossfade_ms) = {
+    let crossfade_ms = {
       let cfg = &preview.heartbeat_configs.read().unwrap()[i];
-      (cfg.notes.clone(), cfg.crossfade_ms)
+      cfg.crossfade_ms
     };
-    let lib = preview.library.read().unwrap();
-    let notes: Vec<ResolvedNote> = note_configs
-      .iter()
-      .filter_map(|nc| {
-        let patch = nc.transition.resolve(metric, &lib)?;
-        Some(ResolvedNote {
-          patch,
-          volume: nc.volume,
-          offset: nc.offset,
-        })
-      })
-      .collect();
-    drop(lib);
-
+    let notes = resolve_notes(preview, i);
     if notes.is_empty() {
       break;
     }
@@ -421,25 +428,11 @@ fn play_oneshot_once(
   wait_for_clock: bool,
   counter: &prometheus::IntCounter,
 ) {
-  let metric = preview.heartbeats[i].metric.value() as f64;
-  let (note_configs, cycle_secs, cycle_offset) = {
+  let (cycle_secs, cycle_offset) = {
     let cfg = &preview.heartbeat_configs.read().unwrap()[i];
-    (cfg.notes.clone(), cfg.cycle_secs, cfg.cycle_offset_secs)
+    (cfg.cycle_secs, cfg.cycle_offset_secs)
   };
-  let lib = preview.library.read().unwrap();
-  let notes: Vec<ResolvedNote> = note_configs
-    .iter()
-    .filter_map(|nc| {
-      let patch = nc.transition.resolve(metric, &lib)?;
-      Some(ResolvedNote {
-        patch,
-        volume: nc.volume,
-        offset: nc.offset,
-      })
-    })
-    .collect();
-  drop(lib);
-
+  let notes = resolve_notes(preview, i);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
     return;

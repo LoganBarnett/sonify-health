@@ -18,7 +18,7 @@ use logging::init_logging;
 use patch_args::CliPatchOverrides;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer, AudioOutput},
-  heartbeat,
+  heartbeat, ResolvedNote,
 };
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -207,9 +207,13 @@ fn run_preview(
   if continuous {
     run_continuous_preview(patch, config.audio_device.as_deref())
   } else {
-    let patches = [patch];
-    let graph = heartbeat::heartbeat_graph(&patches);
-    let dur = heartbeat::heartbeat_duration(&patches);
+    let notes = [ResolvedNote {
+      patch,
+      volume: 1.0,
+      offset: 0.0,
+    }];
+    let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
+    let dur = heartbeat::heartbeat_notes_duration(&notes);
     AudioOutput::play_for(graph, dur, config.audio_device.as_deref())
       .map_err(ApplicationError::AudioPlayback)
   }
@@ -232,9 +236,13 @@ fn run_continuous_preview(
   let handle = mixer.handle();
   let play_handle = std::thread::spawn(move || {
     while play_run.load(Ordering::Relaxed) {
-      let patches = [patch.clone()];
-      let graph = heartbeat::heartbeat_graph(&patches);
-      let dur = heartbeat::heartbeat_duration(&patches);
+      let notes = [ResolvedNote {
+        patch: patch.clone(),
+        volume: 1.0,
+        offset: 0.0,
+      }];
+      let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
+      let dur = heartbeat::heartbeat_notes_duration(&notes);
       let slot = handle.add(graph);
       std::thread::sleep(dur);
       handle.remove(slot);
