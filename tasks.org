@@ -74,7 +74,7 @@ time a heartbeat sound is played.
 User-facing detune offset (cents) applied to all boops, independent of
 severity.  Creates chorus-like thickness on healthy tones.
 
-* TODO Patch-level harshness offset
+* DONE Patch-level harshness offset
 User-facing offset added to severity-driven harshness.  Lets user push healthy
 tones buzzier or pull down tones smoother.
 

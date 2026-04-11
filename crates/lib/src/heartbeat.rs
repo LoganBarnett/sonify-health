@@ -110,9 +110,10 @@ fn note_graph(
     1.0
   } as f32;
 
-  let sine_w = patch.sine_ratio as f32 * norm;
+  let h = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
+  let sine_w = (patch.sine_ratio as f32 * norm * (1.0 - h)).max(0.0);
   let tri_w = patch.tri_ratio as f32 * norm;
-  let saw_w = patch.saw_ratio as f32 * norm;
+  let saw_w = (patch.saw_ratio as f32 * norm + h).max(0.0);
   let square_w = patch.square_ratio as f32 * norm;
 
   // Frequency LFO with offset gating.
@@ -261,7 +262,7 @@ pub fn heartbeat_graph_with_notes(
 pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
   let amp = patch.amplitude as f32;
-  let harshness = 0.0_f32;
+  let harshness = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
   let attack = (patch.attack_ms / 1000.0) as f32;
   let decay = (patch.decay_ms / 1000.0) as f32;
   let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
@@ -275,9 +276,9 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
     1.0
   } as f32;
 
-  let sine_w = patch.sine_ratio as f32 * norm * (1.0 - harshness);
+  let sine_w = (patch.sine_ratio as f32 * norm * (1.0 - harshness)).max(0.0);
   let tri_w = patch.tri_ratio as f32 * norm;
-  let saw_w = patch.saw_ratio as f32 * norm + harshness;
+  let saw_w = (patch.saw_ratio as f32 * norm + harshness).max(0.0);
   let square_w = patch.square_ratio as f32 * norm;
 
   let drive = (patch.drive as f32).max(0.01);

@@ -275,6 +275,14 @@ pub struct Patch {
     description = "Pitch offset in cents applied to all oscillators. Creates chorus-like thickness."
   )]
   pub detune: f64,
+
+  #[patch_param(
+    min = -1.0,
+    max = 1.0,
+    step = 0.01,
+    description = "Offset added to waveform harshness. Positive shifts sine toward saw, negative does the reverse."
+  )]
+  pub harshness_offset: f64,
 }
 
 impl Default for Patch {
@@ -312,6 +320,7 @@ impl Default for Patch {
       downsample: 0.0,
       gap: 0.0,
       detune: 0.0,
+      harshness_offset: 0.0,
     }
   }
 }
@@ -448,7 +457,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 32);
+    assert_eq!(Patch::PARAMS.len(), 33);
   }
 
   #[test]

@@ -135,6 +135,10 @@ pub(crate) struct CliPatchOverrides {
   /// Override detune offset in cents.
   #[arg(long, help_heading = "Patch overrides")]
   detune: Option<f64>,
+
+  /// Override harshness offset (-1 to 1).
+  #[arg(long, help_heading = "Patch overrides")]
+  harshness_offset: Option<f64>,
 }
 
 impl CliPatchOverrides {
@@ -172,6 +176,7 @@ impl CliPatchOverrides {
       downsample: self.downsample,
       gap: self.gap,
       detune: self.detune,
+      harshness_offset: self.harshness_offset,
     }
   }
 
