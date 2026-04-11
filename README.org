@@ -1,6 +1,8 @@
 #+title:     sonify-health
 #+language:  en
 
+[[file:assets/sonify-health-icon-01.png]]
+
 * Introduction
 
 sonify-health turns infrastructure health into ambient sound.  Each machine
