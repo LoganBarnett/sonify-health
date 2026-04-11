@@ -1,3 +1,4 @@
+use crate::metrics::Metrics;
 use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
@@ -26,6 +27,7 @@ pub struct DaemonContext<'a> {
   pub muted: Arc<AtomicBool>,
   pub running: Arc<AtomicBool>,
   pub preview: Arc<PreviewState>,
+  pub metrics: Metrics,
 }
 
 /// Run the daemon's main loop: spawn per-heartbeat poll/play threads,
@@ -37,6 +39,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     muted,
     running,
     preview,
+    metrics,
   } = ctx;
 
   let mixer = AudioMixer::new(audio_device)?;

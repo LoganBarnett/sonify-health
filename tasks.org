@@ -62,7 +62,7 @@ counter is registered but never incremented.  Add per-heartbeat probe
 metric gauges and poll counters, and increment =heartbeats_played= each
 time a heartbeat sound is played.
 
-** TODO Add =Metrics= to =DaemonContext= and thread through from =main.rs=
+** DONE Add =Metrics= to =DaemonContext= and thread through from =main.rs=
 ** TODO Replace =heartbeats_played= with =IntCounterVec= labeled by heartbeat name
    Increment in play threads after each heartbeat plays.
 ** TODO Add =probes_completed= =IntCounterVec= labeled by heartbeat name

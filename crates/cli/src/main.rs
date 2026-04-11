@@ -372,6 +372,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
       muted: daemon_muted,
       running: daemon_running,
       preview: daemon_preview,
+      metrics: metrics.clone(),
     })
   });
 
