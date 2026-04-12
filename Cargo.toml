@@ -41,7 +41,7 @@ tokio-tungstenite = "0.26"
 
 # Audio
 fundsp = "0.23"
-cpal = "0.15"
+cpal = "0.17"
 
 # Voice generation
 sha2 = "0.10"

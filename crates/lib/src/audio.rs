@@ -112,7 +112,7 @@ impl AudioOutput {
     device_name: Option<&str>,
   ) -> Result<Self, AudioError> {
     let (device, stream_config) = resolve_device(device_name)?;
-    let sample_rate = stream_config.sample_rate.0 as f64;
+    let sample_rate = stream_config.sample_rate as f64;
     let channels = stream_config.channels as usize;
 
     graph.set_sample_rate(sample_rate);
@@ -325,7 +325,7 @@ impl AudioMixer {
     {
       stream_config.buffer_size = cpal::BufferSize::Fixed(MIXER_BUFFER_FRAMES);
     }
-    let sample_rate = stream_config.sample_rate.0 as f64;
+    let sample_rate = stream_config.sample_rate as f64;
     let channels = stream_config.channels as usize;
 
     let inner = Arc::new(MixerInner {
