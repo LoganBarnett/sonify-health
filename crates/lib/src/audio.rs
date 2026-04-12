@@ -59,7 +59,14 @@ fn resolve_device(
           .unwrap_or(false)
       });
       match matched {
-        Some(d) => d,
+        Some(d) => {
+          tracing::info!(
+            requested = name,
+            selected = d.name().unwrap_or_default(),
+            "Audio device selected"
+          );
+          d
+        }
         None => {
           let available: Vec<String> = host
             .output_devices()
@@ -82,6 +89,12 @@ fn resolve_device(
   let supported = device
     .default_output_config()
     .map_err(AudioError::OutputConfigUnavailable)?;
+  tracing::info!(
+    sample_rate = supported.sample_rate(),
+    channels = supported.channels(),
+    sample_format = %supported.sample_format(),
+    "Audio device config"
+  );
   let mut stream_config: cpal::StreamConfig = supported.into();
 
   // macOS CoreAudio defaults to tiny buffers that underrun with
