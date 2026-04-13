@@ -4,65 +4,61 @@
 log_level = "info"   # trace, debug, info, warn, error
 log_format = "text"  # text, json
 listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
+# audio_device = "My USB DAC"  # Omit to use system default
 
-# Override hostname-derived voice parameters.
-# Omitted fields use the hash-derived default.
-# [voice]
-# freq = 523.0
-# sine_ratio = 0.8
-# tri_ratio = 0.1
-# saw_ratio = 0.05
-# square_ratio = 0.0
-# attack_ms = 40.0
-# release_ms = 150.0
-# chirp_ratio = 1.2    # Onset pitch sweep (1.0 = none, 1.5 = perfect fifth)
-# stereo_pan = 0.0     # Drone stereo placement (-0.3..0.3)
-# reverb_mix = 0.4     # Wet/dry reverb blend (0.3..0.6)
-
-# Heartbeat timing and checks (used by `daemon` subcommand).
-[heartbeat]
-slot = 0                  # This machine's slot in the cycle.
-cycle_duration_secs = 14  # Total cycle covering all machines.
-slot_duration_secs = 2    # Time budget per machine.
-
-# Each check maps to one boop.
-# result_mode: "exit-code" (0/1/2) or "stdout" (prints value).
-
-# [[heartbeat.checks]]
-# name = "local"
-# command = "/path/to/check-lan"
-# result_mode = "exit-code"
-
-# [[heartbeat.checks]]
-# name = "external"
-# command = "/path/to/check-external"
-# result_mode = "stdout"
-
-# [[heartbeat.checks]]
-# name = "purpose"
-# command = "/path/to/check-gpu"
-# result_mode = "exit-code"
-
-# Drone layer: continuous stress sonification.
-# [drone]
-# poll_interval_secs = 5  # How often to run metric commands.
-#
-# [[drone.metrics]]
-# name = "gpu"
-# command = "/path/to/gpu-load"
-# result_mode = "stdout"
-#
-# [[drone.metrics]]
-# name = "memory"
-# command = "/path/to/mem-pressure"
-# result_mode = "stdout"
-
-# Drone profiles: lo (metric=0) and hi (metric=1) voice profiles.
-# The system interpolates between lo and hi based on the metric value.
-# [drone_profiles.gpu.lo]
+# Custom patch definitions.  Each key is a patch name.
+# [patches.warm]
 # freq = 220.0
-# amplitude = 0.2
+# sine_ratio = 0.9
+# attack_ms = 60.0
+# release_ms = 300.0
+
+# Each [[heartbeats]] entry defines a probe command and one or more
+# notes that map its metric to patches from the library.
 #
-# [drone_profiles.gpu.hi]
-# freq = 880.0
-# amplitude = 0.5
+# playback modes:
+#   "clock"      — one-shot on a wall-clock cycle (default)
+#   "loop"       — repeats with a configurable phrase gap
+#   "continuous" — streams audio, crossfading on metric changes
+#
+# result_mode:
+#   "exit-code" — exit 0/1/2 maps to thresholds
+#   "stdout"    — command prints a metric value (0.0–1.0)
+
+# [[heartbeats]]
+# name = "gateway"
+# command = "ping -c 1 8.8.8.8"
+# result_mode = "exit-code"
+# # playback = "clock"  (default)
+# # cycle_secs = 15.0
+# # cycle_offset_secs = 0.0
+#
+# [[heartbeats.notes]]
+# volume = 0.3
+# offset = 0.0
+#
+# [heartbeats.notes.transition]
+# type = "discrete"
+#
+# [[heartbeats.notes.transition.states]]
+# threshold = 0.5
+# patch = "sine"
+#
+# [[heartbeats.notes.transition.states]]
+# threshold = 1.01
+# patch = "alarm"
+
+# [[heartbeats]]
+# name = "cpu"
+# command = "/path/to/cpu-load"
+# result_mode = "stdout"
+# playback = "continuous"
+# poll_interval_secs = 5.0
+# crossfade_ms = 6.0
+#
+# [[heartbeats.notes]]
+# volume = 0.2
+#
+# [heartbeats.notes.transition]
+# type = "gradient"
+# patches = ["warm", "sharp"]

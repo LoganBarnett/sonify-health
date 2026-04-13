@@ -5,19 +5,24 @@
 
 * Introduction
 
-sonify-health turns infrastructure health into ambient sound.  Each machine
-self-reports via a two-layer audio model:
+sonify-health turns infrastructure health into ambient sound.  Each
+machine self-reports via a heartbeat model: probe commands run
+periodically, and their results select patches from a sound library.
+Each heartbeat can contain multiple notes, and each note maps a metric
+to patches via discrete thresholds or smooth gradients.
 
-- *Heartbeat* — percussive boops played in a time-slotted cycle.  Each boop
-  encodes one subsystem check as healthy (baseline), degraded (minor third
-  shift), or down (tritone shift).  The boop count matches the number of
-  configured checks, and each boop plays a distinct pentatonic note.
-- *Drone* — a continuous stress layer whose timbre, roughness, and volume shift
-  in real time with system metrics like GPU load or memory pressure.
+Heartbeats support three playback modes:
 
-The result is a Star Trek bridge feel: rhythmic pulses and tonal shifts that
-encode real meaning into peripheral awareness without requiring visual
-attention.  Physical speaker placement gives spatial location for free.
+- *Clock* — one-shot plays on a wall-clock cycle, enabling
+  time-slotted multi-machine ensembles.
+- *Loop* — repeats a phrase with a configurable gap.
+- *Continuous* — streams audio that crossfades on metric changes,
+  useful for stress layers like CPU or memory pressure.
+
+The result is a Star Trek bridge feel: rhythmic pulses and tonal
+shifts that encode real meaning into peripheral awareness without
+requiring visual attention.  Physical speaker placement gives spatial
+location for free.
 
 See [[file:sonification.org][sonification.org]] for the full design rationale.
 
@@ -37,78 +42,106 @@ The binary is at =target/release/sonify-health=.
 nix build
 #+end_src
 
+The result symlink contains =bin/sonify-health=.
+
+** Nix run (without installing)
+
+#+begin_src sh :results none :exports code
+nix run .#cli
+#+end_src
+
+* Nix flake exports
+
+The flake exposes several outputs for integration into NixOS and
+nix-darwin configurations:
+
+- =packages.${system}.default= — full workspace build.
+- =packages.${system}.cli= — just the CLI/daemon binary.
+- =apps.${system}.cli= — runnable app entry point.
+- =devShells.${system}.default= — development shell with Rust
+  toolchain, Elm, formatters, and task runner.
+- =nixosModules.daemon= — NixOS service module.
+- =darwinModules.daemon= — nix-darwin service module.
+
 * Usage
 
-** Preview sounds
+** Preview a patch
 
-*** Heartbeat
-
-Play one or more boops at the given severity levels (0 = healthy,
-1 = degraded, 2 = down):
+Play a named patch from the built-in library:
 
 #+begin_src sh :results none :exports code
-sonify-health preview 0                  # single boop, healthy
-sonify-health preview 0 0 0              # three boops, all healthy
-sonify-health preview 0 1 2 0 1          # five boops, mixed severity
-sonify-health preview --heartbeat 2 2 2  # explicit --heartbeat flag
+sonify-health preview --patch-name sine
+sonify-health preview --patch-name alarm --freq 880
+sonify-health preview --continuous --patch-name warm
 #+end_src
 
-*** Drone
+Any patch parameter can be overridden on the command line.  Run
+=sonify-health preview --help= for the full list.
 
-Play a continuous stress drone at a given metric value (0.0–1.0):
+** Print the patch library
 
-#+begin_src sh :results none :exports code
-sonify-health preview --drone 0.8
-sonify-health preview --drone --register low 0.5
-sonify-health preview --drone --register high --duration 8 0.5
-#+end_src
-
-** Inspect a machine's voice
-
-Print the hostname-derived voice parameters:
+Export the patch library in a paste-ready format:
 
 #+begin_src sh :results none :exports code
-sonify-health voice
-sonify-health voice --hostname silicon
+sonify-health print --format toml
+sonify-health print --format nix
+sonify-health print --format cli --patch-name sine
 #+end_src
 
 ** Run the daemon
 
-Long-running mode that spawns check commands, updates shared state, and plays
-the heartbeat at the configured time slot:
+Long-running mode that spawns probe commands, updates shared state,
+plays heartbeats, and serves the web frontend:
 
 #+begin_src sh :results none :exports code
-sonify-health daemon --config config.toml
+sonify-health -c config.toml daemon
 #+end_src
 
 Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
 
+Note that =--config= / =-c= is a global option and must appear
+*before* the subcommand.
+
 * Configuration
 
-Copy =config.example.toml= to =config.toml=.  All fields are optional; the
-daemon runs with sensible defaults (slot 0, 14-second cycle, no checks).
+Copy =config.example.toml= to =config.toml=.  All fields are
+optional; the daemon runs with sensible defaults.
 
-Key sections:
+Top-level keys:
 
 - =log_level= / =log_format= — logging control.
-- =[voice]= — override any hostname-derived voice parameter.
-- =[heartbeat]= — timing slot and check commands.
-- =[drone]= — continuous stress sonification metrics (see =config.example.toml=).
+- =listen= — web server bind address.
+- =audio_device= — audio output device name (default: system default).
+- =[patches]= — named patch definitions for the sound library.
 
-Each =[[heartbeat.checks]]= entry maps to one boop in the heartbeat.  The
-=result_mode= field determines how the command result is read:
+Each =[[heartbeats]]= entry defines a probe and one or more notes.
+The =playback= field selects the mode (=clock=, =loop=, or
+=continuous=; defaults to =clock=).  The =result_mode= field
+determines how the command output is read:
 
-- =exit-code= — exit code 0/1/2 maps to healthy/degraded/down.
-- =stdout= — command prints the severity value to stdout.
+- =exit-code= — exit code 0/1/2 maps to discrete thresholds.
+- =stdout= — command prints a metric value (0.0–1.0) to stdout.
+
+Each note within a heartbeat carries a =transition= that maps the
+probe metric to patches:
+
+- =discrete= — selects the first state whose =threshold= exceeds the
+  metric.
+- =gradient= — interpolates between adjacent patches.
 
 * Gotchas
 
-- *Audio device access* — the daemon opens the default audio output.  On Linux
-  this requires ALSA or PipeWire.  On macOS, CoreAudio is used directly.
-- *NTP precision* — multi-machine timing relies on wall-clock synchronization.
-  NTP provides ~10 ms accuracy, sufficient for 2-second slots.
-- *Nix sandbox* — =nix build= runs tests in a sandbox without audio hardware.
-  Integration tests that play sound are skipped in the sandbox build.
+- *Audio device access* — the daemon opens the default audio output.
+  On Linux this requires ALSA or PipeWire.  On macOS, CoreAudio is
+  used directly.
+- *NTP precision* — multi-machine timing relies on wall-clock
+  synchronization.  NTP provides ~10 ms accuracy, sufficient for
+  the default cycle duration.
+- *Nix sandbox* — =nix build= runs tests in a sandbox without audio
+  hardware.  Integration tests that play sound are skipped in the
+  sandbox build.
+- *Global options* — flags like =-c=, =--log-level=, and =--listen=
+  must appear before the subcommand, not after it.
 
 * Contributing
 
@@ -117,8 +150,8 @@ nix develop --command cargo test --workspace
 nix develop --command cargo clippy --workspace
 #+end_src
 
-The pre-commit hook runs =rustfmt=.  Commits must go through the Nix devshell
-so the correct toolchain is in =PATH=:
+The pre-commit hook runs =rustfmt=.  Commits must go through the Nix
+devshell so the correct toolchain is in =PATH=:
 
 #+begin_src sh :results none :exports code
 nix develop --command git commit -m "your message"
