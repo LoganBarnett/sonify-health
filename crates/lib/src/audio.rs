@@ -1,8 +1,9 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use fundsp::audiounit::BigBlockAdapter;
 use fundsp::prelude32::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use thiserror::Error;
 
 /// Preferred buffer size in frames for a single-graph stream.
@@ -18,6 +19,13 @@ const BUFFER_FRAMES: u32 = 2048;
 /// headroom — enough for two 32-channel FDN reverbs even in an
 /// unoptimized debug build.
 const MIXER_BUFFER_FRAMES: u32 = 4096;
+
+/// Number of stream errors before the error callback starts throttling.
+const STREAM_ERROR_THRESHOLD: u64 = 10;
+
+/// Sleep duration injected into the error callback once the threshold
+/// is exceeded.  Caps CPU at roughly 1 % instead of 100 %.
+const ERROR_THROTTLE: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Error)]
 pub enum AudioError {
@@ -207,6 +215,10 @@ struct MixerInner {
   nan_frames: AtomicU64,
   /// Peak callback duration in microseconds.
   peak_callback_us: AtomicU64,
+  /// Cumulative stream-error count from the cpal error callback.
+  stream_errors: AtomicU64,
+  /// Set to `true` once `stream_errors` exceeds `STREAM_ERROR_THRESHOLD`.
+  stream_failed: AtomicBool,
 }
 
 /// A single cpal output stream that mixes multiple fundsp graphs
@@ -217,6 +229,7 @@ pub struct AudioMixer {
   _stream: cpal::Stream,
   inner: Arc<MixerInner>,
   sample_rate: f64,
+  device_name: Option<String>,
 }
 
 /// Thread-safe handle to the mixer's slot table.  Unlike
@@ -326,6 +339,25 @@ fn mixer_callback(
   }
 }
 
+/// Build the cpal error callback for the mixer stream.  Increments
+/// `stream_errors` on every call, logs the first `STREAM_ERROR_THRESHOLD`
+/// errors individually, then sets `stream_failed` and sleeps to throttle
+/// the spin-loop.
+fn build_error_callback(
+  inner: Arc<MixerInner>,
+) -> impl FnMut(cpal::StreamError) {
+  move |err| {
+    let n = inner.stream_errors.fetch_add(1, Ordering::Relaxed) + 1;
+    if n <= STREAM_ERROR_THRESHOLD {
+      tracing::error!(count = n, "Audio mixer stream error: {}", err);
+    }
+    if n >= STREAM_ERROR_THRESHOLD {
+      inner.stream_failed.store(true, Ordering::Relaxed);
+      std::thread::sleep(ERROR_THROTTLE);
+    }
+  }
+}
+
 impl AudioMixer {
   /// Open one cpal output stream on the given device.  All graphs
   /// added via `add` are mixed together in the audio callback.
@@ -346,9 +378,9 @@ impl AudioMixer {
       lock_failures: AtomicU64::new(0),
       nan_frames: AtomicU64::new(0),
       peak_callback_us: AtomicU64::new(0),
+      stream_errors: AtomicU64::new(0),
+      stream_failed: AtomicBool::new(false),
     });
-
-    let err_cb = |err| tracing::error!("Audio mixer stream error: {}", err);
 
     // Try fixed buffer size first; fall back to the device default
     // if the hardware rejects it.
@@ -356,7 +388,7 @@ impl AudioMixer {
       .build_output_stream(
         &stream_config,
         mixer_callback(Arc::clone(&inner), channels),
-        err_cb,
+        build_error_callback(Arc::clone(&inner)),
         None,
       )
       .or_else(|e| {
@@ -369,7 +401,7 @@ impl AudioMixer {
         device.build_output_stream(
           &stream_config,
           mixer_callback(Arc::clone(&inner), channels),
-          |err| tracing::error!("Audio mixer stream error: {}", err),
+          build_error_callback(Arc::clone(&inner)),
           None,
         )
       })
@@ -381,6 +413,7 @@ impl AudioMixer {
       _stream: stream,
       inner,
       sample_rate,
+      device_name: device_name.map(|s| s.to_string()),
     })
   }
 
@@ -522,6 +555,68 @@ impl AudioMixer {
   pub fn reset_peak_callback_us(&self) {
     self.inner.peak_callback_us.store(0, Ordering::Relaxed);
   }
+
+  /// Cumulative stream-error count from the cpal error callback.
+  pub fn stream_errors(&self) -> u64 {
+    self.inner.stream_errors.load(Ordering::Relaxed)
+  }
+
+  /// Whether the error threshold has been exceeded, indicating
+  /// the stream is broken and should be recovered.
+  pub fn stream_failed(&self) -> bool {
+    self.inner.stream_failed.load(Ordering::Relaxed)
+  }
+
+  /// Drop the current cpal stream, re-resolve the audio device,
+  /// and build a new stream reusing the same `MixerInner`.  All
+  /// existing `MixerHandle` clones continue working because they
+  /// share the same `Arc<MixerInner>`.
+  pub fn try_recover(&mut self) -> Result<(), AudioError> {
+    let (device, mut stream_config) =
+      resolve_device(self.device_name.as_deref())?;
+
+    #[cfg(target_os = "macos")]
+    {
+      stream_config.buffer_size = cpal::BufferSize::Fixed(MIXER_BUFFER_FRAMES);
+    }
+    let channels = stream_config.channels as usize;
+    self.sample_rate = stream_config.sample_rate as f64;
+
+    let stream = device
+      .build_output_stream(
+        &stream_config,
+        mixer_callback(Arc::clone(&self.inner), channels),
+        build_error_callback(Arc::clone(&self.inner)),
+        None,
+      )
+      .or_else(|e| {
+        tracing::warn!(
+          error = %e,
+          buffer_frames = MIXER_BUFFER_FRAMES,
+          "Fixed buffer size rejected during recovery, \
+           falling back to device default"
+        );
+        stream_config.buffer_size = cpal::BufferSize::Default;
+        device.build_output_stream(
+          &stream_config,
+          mixer_callback(Arc::clone(&self.inner), channels),
+          build_error_callback(Arc::clone(&self.inner)),
+          None,
+        )
+      })
+      .map_err(AudioError::StreamBuildFailed)?;
+
+    stream.play().map_err(AudioError::PlaybackStartFailed)?;
+
+    // Reset error state so the daemon stops retrying.
+    self.inner.stream_errors.store(0, Ordering::Relaxed);
+    self.inner.stream_failed.store(false, Ordering::Relaxed);
+
+    // Assign the new stream, dropping the old one (joins its
+    // worker thread, typically ≤100 ms).
+    self._stream = stream;
+    Ok(())
+  }
 }
 
 impl MixerHandle {
@@ -637,6 +732,16 @@ impl MixerHandle {
   pub fn reset_peak_callback_us(&self) {
     self.inner.peak_callback_us.store(0, Ordering::Relaxed);
   }
+
+  /// Cumulative stream-error count from the cpal error callback.
+  pub fn stream_errors(&self) -> u64 {
+    self.inner.stream_errors.load(Ordering::Relaxed)
+  }
+
+  /// Whether the error threshold has been exceeded.
+  pub fn stream_failed(&self) -> bool {
+    self.inner.stream_failed.load(Ordering::Relaxed)
+  }
 }
 
 #[cfg(test)]
@@ -733,5 +838,55 @@ mod tests {
     assert_eq!(handle.nan_frames(), 0);
     handle.reset_peak_callback_us();
     assert_eq!(handle.peak_callback_us(), 0);
+
+    // New stream-health accessors.
+    assert_eq!(mixer.stream_errors(), 0);
+    assert!(!mixer.stream_failed());
+    assert_eq!(handle.stream_errors(), 0);
+    assert!(!handle.stream_failed());
+  }
+
+  #[test]
+  fn stream_error_flag_is_settable() {
+    let inner = MixerInner {
+      slots: Mutex::new(Vec::new()),
+      lock_failures: AtomicU64::new(0),
+      nan_frames: AtomicU64::new(0),
+      peak_callback_us: AtomicU64::new(0),
+      stream_errors: AtomicU64::new(0),
+      stream_failed: AtomicBool::new(false),
+    };
+    assert!(!inner.stream_failed.load(Ordering::Relaxed));
+    inner.stream_failed.store(true, Ordering::Relaxed);
+    assert!(inner.stream_failed.load(Ordering::Relaxed));
+    assert_eq!(inner.stream_errors.load(Ordering::Relaxed), 0);
+    inner.stream_errors.fetch_add(1, Ordering::Relaxed);
+    assert_eq!(inner.stream_errors.load(Ordering::Relaxed), 1);
+  }
+
+  #[test]
+  fn error_callback_throttle_sets_failed_flag() {
+    let inner = Arc::new(MixerInner {
+      slots: Mutex::new(Vec::new()),
+      lock_failures: AtomicU64::new(0),
+      nan_frames: AtomicU64::new(0),
+      peak_callback_us: AtomicU64::new(0),
+      stream_errors: AtomicU64::new(0),
+      stream_failed: AtomicBool::new(false),
+    });
+
+    let mut cb = build_error_callback(Arc::clone(&inner));
+
+    // Fire errors up to threshold — flag should be set.
+    for _ in 0..STREAM_ERROR_THRESHOLD {
+      cb(cpal::StreamError::DeviceNotAvailable);
+    }
+    assert!(
+      inner.stream_failed.load(Ordering::Relaxed),
+      "stream_failed should be set after threshold errors"
+    );
+    assert!(
+      inner.stream_errors.load(Ordering::Relaxed) >= STREAM_ERROR_THRESHOLD,
+    );
   }
 }

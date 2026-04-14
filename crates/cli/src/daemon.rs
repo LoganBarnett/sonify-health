@@ -136,7 +136,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     preview,
   } = ctx;
 
-  let mixer = AudioMixer::new(audio_device)?;
+  let mut mixer = AudioMixer::new(audio_device)?;
   preview.set_mixer_handle(mixer.handle());
 
   let mut supervised: Vec<SupervisedThread> = Vec::new();
@@ -152,6 +152,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   }
 
   info!(heartbeats = hb_count, "Daemon started");
+
+  // Stream recovery state (exponential backoff).
+  const MAX_RECOVERY_BACKOFF: Duration = Duration::from_secs(60);
+  let mut recovery_backoff = Duration::from_secs(1);
+  let mut next_recovery_at: Option<Instant> = None;
+  let mut recovery_attempts: u64 = 0;
 
   // Main loop: handle mute transitions + supervision + health.
   let mut was_muted = preview.muted.load(Ordering::Relaxed);
@@ -246,6 +252,44 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         mixer.clear();
         return Err(DaemonError::ThreadBudgetExhausted { heartbeat, role });
       }
+
+      // -- Stream recovery: if the audio stream has failed, attempt
+      //    to rebuild it with exponential backoff.
+      if mixer.stream_failed() {
+        let should_try = match next_recovery_at {
+          Some(t) => Instant::now() >= t,
+          None => true,
+        };
+        if should_try {
+          recovery_attempts += 1;
+          preview
+            .metrics
+            .audio_recovery_attempts
+            .set(recovery_attempts as i64);
+          match mixer.try_recover() {
+            Ok(()) => {
+              info!(
+                attempts = recovery_attempts,
+                "Audio stream recovered successfully"
+              );
+              recovery_backoff = Duration::from_secs(1);
+              next_recovery_at = None;
+            }
+            Err(e) => {
+              let next = Instant::now() + recovery_backoff;
+              error!(
+                error = %e,
+                next_retry_secs = recovery_backoff.as_secs(),
+                attempts = recovery_attempts,
+                "Audio stream recovery failed"
+              );
+              recovery_backoff =
+                (recovery_backoff * 2).min(MAX_RECOVERY_BACKOFF);
+              next_recovery_at = Some(next);
+            }
+          }
+        }
+      }
     }
 
     // -- Health logging (~every 30 s).
@@ -253,17 +297,26 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       let lock_fail = mixer.lock_failures();
       let nan = mixer.nan_frames();
       let peak_us = mixer.peak_callback_us();
+      let stream_errs = mixer.stream_errors();
+      let stream_fail = mixer.stream_failed();
 
       preview.metrics.audio_lock_failures.set(lock_fail as i64);
       preview.metrics.audio_nan_frames.set(nan as i64);
       preview.metrics.audio_peak_callback_us.set(peak_us as i64);
+      preview.metrics.audio_stream_errors.set(stream_errs as i64);
+      preview
+        .metrics
+        .audio_stream_failed
+        .set(i64::from(stream_fail));
       mixer.reset_peak_callback_us();
 
-      if lock_fail > 0 || nan > 0 {
+      if lock_fail > 0 || nan > 0 || stream_fail {
         warn!(
           lock_failures = lock_fail,
           nan_frames = nan,
           peak_callback_us = peak_us,
+          stream_errors = stream_errs,
+          stream_failed = stream_fail,
           "Audio health"
         );
       } else {
@@ -271,6 +324,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           lock_failures = lock_fail,
           nan_frames = nan,
           peak_callback_us = peak_us,
+          stream_errors = stream_errs,
+          stream_failed = stream_fail,
           "Audio health"
         );
       }

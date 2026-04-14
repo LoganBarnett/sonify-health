@@ -14,6 +14,9 @@ pub struct Metrics {
   pub audio_lock_failures: IntGauge,
   pub audio_nan_frames: IntGauge,
   pub audio_peak_callback_us: IntGauge,
+  pub audio_stream_errors: IntGauge,
+  pub audio_stream_failed: IntGauge,
+  pub audio_recovery_attempts: IntGauge,
 }
 
 impl Default for Metrics {
@@ -78,6 +81,24 @@ impl Metrics {
     )
     .expect("Failed to create audio_peak_callback_us gauge");
 
+    let audio_stream_errors = IntGauge::new(
+      "sonify_health_audio_stream_errors_total",
+      "Cumulative stream errors from the cpal error callback.",
+    )
+    .expect("Failed to create audio_stream_errors gauge");
+
+    let audio_stream_failed = IntGauge::new(
+      "sonify_health_audio_stream_failed",
+      "Whether the audio stream has failed (1=failed, 0=ok).",
+    )
+    .expect("Failed to create audio_stream_failed gauge");
+
+    let audio_recovery_attempts = IntGauge::new(
+      "sonify_health_audio_recovery_attempts_total",
+      "Total number of audio stream recovery attempts.",
+    )
+    .expect("Failed to create audio_recovery_attempts gauge");
+
     registry
       .register(Box::new(heartbeats_played.clone()))
       .expect("Failed to register heartbeats_played");
@@ -99,6 +120,15 @@ impl Metrics {
     registry
       .register(Box::new(audio_peak_callback_us.clone()))
       .expect("Failed to register audio_peak_callback_us");
+    registry
+      .register(Box::new(audio_stream_errors.clone()))
+      .expect("Failed to register audio_stream_errors");
+    registry
+      .register(Box::new(audio_stream_failed.clone()))
+      .expect("Failed to register audio_stream_failed");
+    registry
+      .register(Box::new(audio_recovery_attempts.clone()))
+      .expect("Failed to register audio_recovery_attempts");
 
     Self {
       registry: Arc::new(registry),
@@ -109,6 +139,9 @@ impl Metrics {
       audio_lock_failures,
       audio_nan_frames,
       audio_peak_callback_us,
+      audio_stream_errors,
+      audio_stream_failed,
+      audio_recovery_attempts,
     }
   }
 }
