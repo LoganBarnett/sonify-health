@@ -570,6 +570,11 @@ in {
         Restart = "on-failure";
         RestartSec = "5s";
 
+        # Allow the cpal audio thread to use real-time scheduling
+        # (SCHED_FIFO).  Without this the request fails silently and
+        # the callback thread runs at normal priority.
+        LimitRTPRIO = "99";
+
         # Hardening.
         NoNewPrivileges = true;
         PrivateTmp = true;

@@ -1,0 +1,223 @@
+#+title:     Audio Output Corruption (Long-Running Sessions)
+#+language:  en
+
+* Summary
+
+After several hours of continuous operation (typically >4 h, exact onset
+unknown), all heartbeat audio degrades into scratchy, clicking noise.
+Restarting the service restores clean output immediately.
+
+* Affected hosts
+
+| Host             | Arch         | NixOS  | Audio stack          | Affected? |
+|------------------+--------------+--------+----------------------+-----------|
+| titanium.proton  | x86_64-linux | 25.11  | plughw:CARD=0 (direct ALSA, bypasses PipeWire) | Yes       |
+| silicon.proton   | x86_64-linux | 25.11  | PipeWire (presumed)  | No        |
+
+Titanium has additional gaming-related packages that silicon does not.
+This may affect audio routing, real-time scheduling, or PipeWire
+configuration (e.g. lower-latency session settings imposed by gaming
+software, extra PipeWire filter chains, or WirePlumber policy
+differences).
+
+* Symptoms
+
+- Clean audio on fresh start.
+- Gradual (unconfirmed) or sudden switch to corrupted output after hours.
+- Corruption sounds scratchy and clicky; uncertain whether the original
+  rhythm is preserved underneath.
+- All heartbeats are affected simultaneously, suggesting the issue is in
+  the shared audio path (the mixer stream or the system audio layer)
+  rather than in individual DSP graphs.
+
+* Dependency versions (confirmed latest as of 2026-04-13)
+
+| Crate   | Version | Latest on crates.io | Status     |
+|---------+---------+---------------------+------------|
+| cpal    |  0.17.3 | 0.17.3              | Up to date |
+| fundsp  |  0.23.0 | 0.23.0              | Up to date |
+| alsa    |  0.11.0 | 0.11.0              | Up to date |
+
+* Relevant cpal history
+
+The upgrade from cpal 0.15.3 to 0.17.3 (commit =9027a44=) resolved the
+ALSA MMAP spin-loop bug and brought substantial ALSA stability
+improvements.  Key fixes in the 0.17 series:
+
+- POLLERR/POLLHUP spin-loop on capture overruns (=#730=, fixed in 0.17.0).
+- Capacity overflow panic in ALSA output on ARM (=#591=, fixed in 0.17.0).
+- Non-monotonic =StreamInstant= at startup (fixed in 0.17.0).
+- Buffer underrun/overrun now reported via =StreamError::BufferUnderrun=.
+- Real-time thread priority set for audio callback threads.
+- Audio callback stalling when ALSA start threshold not met (fixed in
+  0.17.2).
+- Device enumeration interference between input/output (fixed in 0.17.2).
+- Race condition on stream drop (fixed in 0.17.2).
+
+No open cpal issues describe progressive audio corruption during
+long-running ALSA/PipeWire playback.  The maintainer situation has
+stabilised with active contributions since mid-2025.
+
+* Hypotheses
+
+** H1: Floating-point state drift in fundsp graphs
+
+fundsp graphs (especially IIR filters, FDN reverb) maintain internal
+floating-point state that is advanced every sample.  Over hours at
+44.1 kHz, that is >600 million iterations.  Accumulated numerical
+error in filter coefficients or delay-line indices could eventually
+push output into degenerate territory — not NaN (which the mixer
+callback guards against), but values that alias or clip in ways
+that sound like crackling.
+
+This would explain why restarting fixes it (fresh graph state) and
+why all heartbeats degrade together if they share structural
+parameters like reverb.
+
+*Diagnostic*: Log the peak and RMS amplitude of each slot's output
+alongside the existing =nan_frames= counter.  If amplitude drifts
+monotonically upward before corruption, this is the likely cause.
+
+** H2: PipeWire buffer/resampling mismatch
+
+PipeWire interposes an ALSA compatibility layer.  If titanium's
+PipeWire session uses a different quantum (buffer size) or sample rate
+than the native device, PipeWire resamples on the fly.  Long-running
+resampler state or buffer recycling bugs in PipeWire could cause
+degradation over time.
+
+Gaming packages often pull in PipeWire configuration that lowers the
+quantum for low-latency game audio.  This could conflict with the
+larger buffer sizes that sonify-health prefers.
+
+*Diagnostic*: Compare =pw-top= and =pw-cli info= output on titanium
+vs silicon.  Check whether the PipeWire quantum matches what cpal
+reports at stream open time.  Try setting an explicit
+=PIPEWIRE_QUANTUM= override for the sonify-health service.
+
+** H3: ALSA period/buffer negotiation drift
+
+On Linux, the code does not set =BufferSize::Fixed= (only macOS does).
+The ALSA backend in cpal uses device defaults, which PipeWire's ALSA
+plugin may change over the lifetime of the process as the session graph
+is reconfigured (e.g. when a game opens or closes an audio stream).
+
+If the effective period size changes while the cpal stream is live, the
+callback would receive differently-sized buffers than expected.  The
+code handles variable-sized callbacks via =resize()=, but the fundsp
+=BigBlockAdapter= processes in fixed-size blocks internally and may
+not cope well with a sudden period change.
+
+*Diagnostic*: Log the =data.len()= received by each audio callback
+invocation.  A sudden change in callback buffer size preceding the
+corruption would confirm this.
+
+** H4: Real-time scheduling starvation
+
+cpal 0.17 sets real-time priority on the audio callback thread, but
+the systemd unit does not grant =CAP_SYS_NICE= or set =LimitRTPRIO=.
+If the real-time priority request fails silently, the callback thread
+runs at normal priority.  On titanium, gaming workloads with their own
+real-time audio threads could starve the callback, causing persistent
+underruns that manifest as clicking.
+
+*Diagnostic*: Check whether the cpal thread actually achieved
+real-time priority (=/proc/<pid>/sched= or =chrt -p=).  Add
+=LimitRTPRIO=infinity= and =AmbientCapabilities=CAP_SYS_NICE= to
+the systemd unit and re-test.
+
+** H5: Lock contention under sustained load
+
+The mixer uses =try_lock()= in the audio callback and outputs silence
+on failure.  The =lock_failures= counter tracks this.  Under sustained
+probe/play activity over hours, if lock contention increases, the
+periodic silence gaps would produce clicking.
+
+The existing health logging (every ~30 s) already reports
+=lock_failures=.  If this counter climbs over time, lock contention
+is the cause.
+
+*Diagnostic*: Review logs from a long-running session for increasing
+=lock_failures=.
+
+** H6: Memory fragmentation or leak in the allocator
+
+Repeated graph allocation/deallocation (every heartbeat cycle in clock
+and loop modes) creates many short-lived =BigBlockAdapter= and =Vec=
+allocations.  Over hours, allocator fragmentation could push the
+callback's working set out of cache or cause allocation latency spikes
+in the main thread that hold the mutex longer.
+
+*Diagnostic*: Monitor RSS growth via =/proc/<pid>/status= or Prometheus
+=process_resident_memory_bytes= over the session lifetime.
+
+* Ruling-out checklist
+
+| #  | Check                                            | Result      | Date       |
+|----+--------------------------------------------------+-------------+------------|
+|  1 | cpal, fundsp, alsa at latest versions             | Yes         | 2026-04-13 |
+|  2 | =lock_failures= stays near zero in long session   | Yes (9/21h) | 2026-04-14 |
+|  3 | =nan_frames= stays near zero in long session      | Yes (0)     | 2026-04-14 |
+|  4 | Callback buffer size is stable over time           |             |            |
+|  5 | RT priority achieved by audio thread               | *No*        | 2026-04-14 |
+|  6 | PipeWire quantum matches on both hosts             | N/A         | 2026-04-14 |
+|  7 | RSS stable over session lifetime                   | Yes (14 MB) | 2026-04-14 |
+|  8 | Peak callback duration stays below budget          | Yes         | 2026-04-14 |
+|  9 | Reproduction with PipeWire bypassed (raw ALSA)     | N/A         | 2026-04-14 |
+| 10 | Lock contention rules out H5 (cross-host)          | Yes         | 2026-04-14 |
+| 11 | ALSA period/buffer sizes match across hosts         | *No*        | 2026-04-14 |
+
+* Observation log
+
+| Date       | Host     | Duration | Outcome                | Notes                                         |
+|------------+----------+----------+------------------------+-----------------------------------------------|
+| 2026-04-13 |          |          |                        | Issue tracking started; no timed runs yet.     |
+|            |          |          |                        | cpal bumped 0.15.3 -> 0.17.3 on 2026-04-12.   |
+| 2026-04-14 | titanium | ~21 h    | Corrupt (still running)| Journald analysis of PID 3278780 (started      |
+|            |          |          |                        | 2026-04-13 11:55 PDT).  Audio device is        |
+|            |          |          |                        | =plughw:CARD=0,DEV=0= (direct ALSA, bypasses   |
+|            |          |          |                        | PipeWire).  44100 Hz, 2ch, f32→S32_LE via       |
+|            |          |          |                        | plughw.  ALSA period=16384, buffer=32768.       |
+|            |          |          |                        | =lock_failures=9=, =nan_frames=0=,             |
+|            |          |          |                        | =peak_callback_us= stable 45–55 ms,            |
+|            |          |          |                        | =stream_errors=0=, RSS 14 MB.  No metric shows |
+|            |          |          |                        | degradation over time.  Audio thread (TID       |
+|            |          |          |                        | 3278842) is =SCHED_OTHER= — RT priority failed  |
+|            |          |          |                        | silently (no =LimitRTPRIO= in unit).  Unlikely  |
+|            |          |          |                        | causal given 371 ms period budget.  PipeWire    |
+|            |          |          |                        | and WirePlumber running system-wide but not      |
+|            |          |          |                        | touching card 0 playback.  Checks #6 and #9     |
+|            |          |          |                        | marked N/A: service already bypasses PipeWire.   |
+|            |          |          |                        | User played a game during this run using the    |
+|            |          |          |                        | headset (card 2, USB Kingston HyperX) for game  |
+|            |          |          |                        | audio — no device contention with card 0, and   |
+|            |          |          |                        | corruption persisted.  Further rules out H4.    |
+| 2026-04-14 | silicon  | ~21 h    | Clean                  | Journald analysis of PID 1019593 (started       |
+|            |          |          |                        | 2026-04-13 18:54 UTC).  No PipeWire on host.    |
+|            |          |          |                        | =audio_device=None= (cpal default).  HW runs    |
+|            |          |          |                        | at 48000 Hz; ALSA resamples from app's 44100.   |
+|            |          |          |                        | ALSA period=1024, buffer=16384.                 |
+|            |          |          |                        | =lock_failures=93=, =nan_frames=0=,            |
+|            |          |          |                        | =peak_callback_us= stable 2.7–7.4 ms,          |
+|            |          |          |                        | =stream_errors=0=, RSS 5 MB, 13 threads.       |
+|            |          |          |                        | Key contrast: silicon has 10x more lock         |
+|            |          |          |                        | failures but clean audio — confirms lock        |
+|            |          |          |                        | contention (H5) is not causal.  Period is 16x   |
+|            |          |          |                        | smaller (1024 vs 16384); each callback drives   |
+|            |          |          |                        | 16 fundsp sub-blocks vs titanium's 256.         |
+
+* Next steps
+
+1. Add per-slot peak and RMS amplitude logging to the 30 s health
+   snapshots.  This is the only way to detect H1 (fundsp float drift)
+   with the current architecture.  If amplitude drifts monotonically
+   upward before corruption onset, H1 is confirmed.
+2. Add callback buffer-size logging (=data.len()= on each invocation)
+   behind a debug flag to detect period renegotiation (check #4).
+3. Add =LimitRTPRIO=99= to the systemd unit as debugging hygiene.
+   Unlikely to fix the corruption (period budget is 371 ms) but
+   eliminates a variable and is correct regardless.  Prefer
+   =LimitRTPRIO= over =CAP_SYS_NICE= — it grants only RT scheduling
+   permission, not broader privileges like renicing other processes.
+4. Run titanium with the above instrumentation and capture the full
+   log from start through corruption onset.
