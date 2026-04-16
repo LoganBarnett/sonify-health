@@ -254,6 +254,7 @@ pub fn continuous_graph(
     (main_osc + sub_osc) >> drive_map >> (pass() + (pink() * noise_mix_smooth));
   let mono = (signal | cutoff_smooth | q_smooth)
     >> (moog() * amp_smooth * trem_mod * ext_vol)
+    >> dcblock()
     >> crush_map
     >> hold_hz(ds_rate, 0.0);
   let with_echo = mono

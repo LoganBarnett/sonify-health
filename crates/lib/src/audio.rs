@@ -329,6 +329,14 @@ fn mixer_callback(
         inner.slot_rms[slot_idx].fetch_max(rms.to_bits(), Ordering::Relaxed);
       }
 
+      // Hard-clamp per-slot samples to [-1, 1].  This prevents a
+      // blown-up IIR filter (e.g. Moog ladder drift) from producing
+      // ear-damaging output even though the root cause persists until
+      // the graph is rebuilt.
+      for s in slot.left.iter_mut().chain(slot.right.iter_mut()) {
+        *s = s.clamp(-1.0, 1.0);
+      }
+
       // Crossfade: blend the previous graph out while the new
       // graph fades in over CROSSFADE_FRAMES.
       if let Some(prev) = slot.prev.as_mut() {

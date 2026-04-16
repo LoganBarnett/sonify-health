@@ -34,6 +34,11 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(300); // 5 min
 /// pushed to Prometheus.
 const HEALTH_LOG_INTERVAL: u32 = 300; // ~30 s
 
+/// How often the continuous graph is forcibly rebuilt to reset IIR
+/// filter state and prevent numerical drift (e.g. Moog ladder
+/// instability).
+const CONTINUOUS_REBUILD_INTERVAL: Duration = Duration::from_secs(3600);
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -712,6 +717,7 @@ fn play_continuous_tick(
   let mut note_count = pairs.len();
   let sid = play_mix.add(graph);
   counter.inc();
+  let mut last_rebuild = Instant::now();
 
   while running.load(Ordering::Relaxed) {
     sleep_checking(running, Duration::from_millis(50));
@@ -750,6 +756,7 @@ fn play_continuous_tick(
       all_controls = new_controls;
       all_structural = new_structural;
       note_count = pairs.len();
+      last_rebuild = Instant::now();
       continue;
     }
 
@@ -775,6 +782,26 @@ fn play_continuous_tick(
       play_mix.replace(sid, graph, cf);
       all_controls = new_controls;
       all_structural = new_structural;
+      last_rebuild = Instant::now();
+    }
+
+    // Periodic rebuild to reset IIR filter state and prevent
+    // long-running numerical drift (Moog ladder instability).
+    if !needs_rebuild && last_rebuild.elapsed() >= CONTINUOUS_REBUILD_INTERVAL {
+      info!(
+        heartbeat = i,
+        elapsed_secs = last_rebuild.elapsed().as_secs(),
+        "Periodic continuous graph rebuild to reset filter state"
+      );
+      let smoothing = crossfade_ms / 1000.0;
+      let (graph, new_controls, new_structural) =
+        continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
+      let cf =
+        ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
+      play_mix.replace(sid, graph, cf);
+      all_controls = new_controls;
+      all_structural = new_structural;
+      last_rebuild = Instant::now();
     }
   }
 
