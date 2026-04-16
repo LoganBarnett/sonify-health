@@ -1,4 +1,4 @@
-use prometheus::{GaugeVec, IntCounterVec, IntGauge, Opts, Registry};
+use prometheus::{Gauge, GaugeVec, IntCounterVec, IntGauge, Opts, Registry};
 use std::sync::Arc;
 
 /// Holds all Prometheus collectors for the daemon, registered
@@ -17,6 +17,11 @@ pub struct Metrics {
   pub audio_stream_errors: IntGauge,
   pub audio_stream_failed: IntGauge,
   pub audio_recovery_attempts: IntGauge,
+  pub audio_output_peak_amplitude: Gauge,
+  pub audio_slot_peak_amplitude: GaugeVec,
+  pub audio_slot_rms_amplitude: GaugeVec,
+  pub audio_callback_buffer_frames_min: IntGauge,
+  pub audio_callback_buffer_frames_max: IntGauge,
 }
 
 impl Default for Metrics {
@@ -99,6 +104,42 @@ impl Metrics {
     )
     .expect("Failed to create audio_recovery_attempts gauge");
 
+    let audio_output_peak_amplitude = Gauge::new(
+      "sonify_health_audio_output_peak_amplitude",
+      "Peak abs amplitude of mixed output per window.",
+    )
+    .expect("Failed to create audio_output_peak_amplitude gauge");
+
+    let audio_slot_peak_amplitude = GaugeVec::new(
+      Opts::new(
+        "sonify_health_audio_slot_peak_amplitude",
+        "Per-slot peak abs amplitude per window.",
+      ),
+      &["slot"],
+    )
+    .expect("Failed to create audio_slot_peak_amplitude gauge");
+
+    let audio_slot_rms_amplitude = GaugeVec::new(
+      Opts::new(
+        "sonify_health_audio_slot_rms_amplitude",
+        "Per-slot peak RMS amplitude per window.",
+      ),
+      &["slot"],
+    )
+    .expect("Failed to create audio_slot_rms_amplitude gauge");
+
+    let audio_callback_buffer_frames_min = IntGauge::new(
+      "sonify_health_audio_callback_buffer_frames_min",
+      "Smallest callback buffer size (frames) in window.",
+    )
+    .expect("Failed to create audio_callback_buffer_frames_min gauge");
+
+    let audio_callback_buffer_frames_max = IntGauge::new(
+      "sonify_health_audio_callback_buffer_frames_max",
+      "Largest callback buffer size (frames) in window.",
+    )
+    .expect("Failed to create audio_callback_buffer_frames_max gauge");
+
     registry
       .register(Box::new(heartbeats_played.clone()))
       .expect("Failed to register heartbeats_played");
@@ -129,6 +170,21 @@ impl Metrics {
     registry
       .register(Box::new(audio_recovery_attempts.clone()))
       .expect("Failed to register audio_recovery_attempts");
+    registry
+      .register(Box::new(audio_output_peak_amplitude.clone()))
+      .expect("Failed to register audio_output_peak_amplitude");
+    registry
+      .register(Box::new(audio_slot_peak_amplitude.clone()))
+      .expect("Failed to register audio_slot_peak_amplitude");
+    registry
+      .register(Box::new(audio_slot_rms_amplitude.clone()))
+      .expect("Failed to register audio_slot_rms_amplitude");
+    registry
+      .register(Box::new(audio_callback_buffer_frames_min.clone()))
+      .expect("Failed to register audio_callback_buffer_frames_min");
+    registry
+      .register(Box::new(audio_callback_buffer_frames_max.clone()))
+      .expect("Failed to register audio_callback_buffer_frames_max");
 
     Self {
       registry: Arc::new(registry),
@@ -142,6 +198,11 @@ impl Metrics {
       audio_stream_errors,
       audio_stream_failed,
       audio_recovery_attempts,
+      audio_output_peak_amplitude,
+      audio_slot_peak_amplitude,
+      audio_slot_rms_amplitude,
+      audio_callback_buffer_frames_min,
+      audio_callback_buffer_frames_max,
     }
   }
 }

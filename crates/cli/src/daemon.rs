@@ -2,7 +2,7 @@ use crate::lock_util::RecoverPoison;
 use crate::preview_state::{metric_label, PreviewState};
 use serde_json::json;
 use sonify_health_lib::{
-  audio::{AudioError, AudioMixer, MixerHandle},
+  audio::{AudioError, AudioMixer, MixerHandle, MAX_MIXER_SLOTS},
   continuous_graph_with_notes, heartbeat, probe, seconds_until_next, Patch,
   Playback, ResolvedNote, StructuralParams,
 };
@@ -300,6 +300,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       let stream_errs = mixer.stream_errors();
       let stream_fail = mixer.stream_failed();
 
+      let out_peak = mixer.output_peak_amplitude();
+      let slot_peaks = mixer.slot_peak_amplitudes();
+      let slot_rms = mixer.slot_rms_amplitudes();
+      let (buf_min, buf_max) = mixer.callback_buffer_range();
+      mixer.reset_amplitude_stats();
+
       preview.metrics.audio_lock_failures.set(lock_fail as i64);
       preview.metrics.audio_nan_frames.set(nan as i64);
       preview.metrics.audio_peak_callback_us.set(peak_us as i64);
@@ -310,13 +316,57 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         .set(i64::from(stream_fail));
       mixer.reset_peak_callback_us();
 
-      if lock_fail > 0 || nan > 0 || stream_fail {
+      preview
+        .metrics
+        .audio_output_peak_amplitude
+        .set(out_peak as f64);
+      for i in 0..MAX_MIXER_SLOTS {
+        let label = i.to_string();
+        preview
+          .metrics
+          .audio_slot_peak_amplitude
+          .with_label_values(&[&label])
+          .set(slot_peaks[i] as f64);
+        preview
+          .metrics
+          .audio_slot_rms_amplitude
+          .with_label_values(&[&label])
+          .set(slot_rms[i] as f64);
+      }
+      preview.metrics.audio_callback_buffer_frames_min.set(
+        if buf_min == u32::MAX {
+          0
+        } else {
+          buf_min as i64
+        },
+      );
+      preview
+        .metrics
+        .audio_callback_buffer_frames_max
+        .set(buf_max as i64);
+
+      // Format non-zero slot amplitudes as "0:0.123/0.089 1:0.456/0.234".
+      let slot_amplitudes: String = (0..MAX_MIXER_SLOTS)
+        .filter(|&i| slot_peaks[i] > 0.0)
+        .map(|i| format!("{}:{:.4}/{:.4}", i, slot_peaks[i], slot_rms[i]))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+      let clipping = out_peak > 1.0;
+      let period_renego =
+        buf_min != buf_max && buf_min != u32::MAX && buf_max != 0;
+
+      if lock_fail > 0 || nan > 0 || stream_fail || clipping || period_renego {
         warn!(
           lock_failures = lock_fail,
           nan_frames = nan,
           peak_callback_us = peak_us,
           stream_errors = stream_errs,
           stream_failed = stream_fail,
+          output_peak = out_peak,
+          slot_amplitudes = slot_amplitudes.as_str(),
+          callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
+          callback_buffer_max = buf_max,
           "Audio health"
         );
       } else {
@@ -326,6 +376,10 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           peak_callback_us = peak_us,
           stream_errors = stream_errs,
           stream_failed = stream_fail,
+          output_peak = out_peak,
+          slot_amplitudes = slot_amplitudes.as_str(),
+          callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
+          callback_buffer_max = buf_max,
           "Audio health"
         );
       }
