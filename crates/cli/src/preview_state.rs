@@ -17,6 +17,16 @@ use std::sync::{
 use std::thread;
 use tokio::sync::broadcast;
 
+/// Hardcoded name of the Local Source.  Source names are required
+/// to be unique across `PreviewState::sources` (uniqueness will be
+/// enforced when remote sources can be configured); the local
+/// source's reservation of `"localhost"` is the canonical example.
+/// Remote sources added through the UI default their name to the
+/// hostname parsed from the configured URL — the user can override
+/// before saving — and the name is a required config field for any
+/// remote source loaded from a config file.
+pub const LOCAL_SOURCE_NAME: &str = "localhost";
+
 /// Per-heartbeat runtime state.
 pub struct HeartbeatState {
   pub metric: Shared,
@@ -24,11 +34,22 @@ pub struct HeartbeatState {
   pub effective_volume: Shared,
 }
 
-/// Shared mutable state backing the real-time preview UI.
+/// Per-Source state.  A Source is something that produces heartbeat
+/// state for the local instance to render — today only Local Sources
+/// exist (their pollers run in this process), but a future step adds
+/// Remote Sources mirrored in over a WebSocket.  Fields kept here are
+/// the ones that conceptually scope to a single Source: its name,
+/// patch library, heartbeat configs, runtime heartbeat state, slider
+/// ranges, override map, and (Local-only) the path it was loaded
+/// from.
 ///
-/// Both the Axum WebSocket handler and the `spawn_blocking` daemon
-/// thread share an `Arc<PreviewState>`.
-pub struct PreviewState {
+/// `name` is the Source's user-facing identifier.  It must be unique
+/// across all Sources in a `PreviewState`, and is the preferred form
+/// for logs and UI labels (more semantic than the index into
+/// `PreviewState::sources`).  See [`LOCAL_SOURCE_NAME`] for the
+/// hardcoded local name.
+pub struct Source {
+  pub name: String,
   pub library: RwLock<PatchLibrary>,
   original_library: PatchLibrary,
   pub overrides: RwLock<HashMap<String, OverrideInfo>>,
@@ -36,14 +57,31 @@ pub struct PreviewState {
   pub heartbeat_configs: RwLock<Vec<HeartbeatConfig>>,
   original_heartbeat_configs: Vec<HeartbeatConfig>,
   pub heartbeats: RwLock<Vec<HeartbeatState>>,
+  pub slider_ranges: SliderRanges,
+  pub config_path: Option<PathBuf>,
+  pub config_writable: bool,
+}
+
+/// Shared mutable state backing the real-time preview UI.
+///
+/// Both the Axum WebSocket handler and the `spawn_blocking` daemon
+/// thread share an `Arc<PreviewState>`.  Per-Source data lives on
+/// each entry of `sources`; the remaining fields are renderer- or
+/// process-global state shared across all Sources (one mixer, one
+/// mute switch, one metrics registry).
+///
+/// Today `sources` contains exactly one entry — the Local Source —
+/// and the WebSocket protocol implicitly addresses that one Source.
+/// Call sites that depend on that convention go through
+/// [`PreviewState::local`] so the assumption is grep-able when the
+/// protocol grows a source field.
+pub struct PreviewState {
+  pub sources: Vec<Source>,
   pub running: Arc<AtomicBool>,
   pub muted: Arc<AtomicBool>,
   pub metrics: Metrics,
   pub master_volume: Shared,
   pub mixer_handle: RwLock<Option<MixerHandle>>,
-  pub slider_ranges: SliderRanges,
-  pub config_path: Option<PathBuf>,
-  pub config_writable: bool,
   pub broadcast_tx: broadcast::Sender<String>,
   pub probe_log_tx: broadcast::Sender<String>,
 }
@@ -72,7 +110,8 @@ impl PreviewState {
       })
       .collect();
 
-    Self {
+    let local = Source {
+      name: LOCAL_SOURCE_NAME.to_string(),
       original_library: library.clone(),
       library: RwLock::new(library),
       original_overrides: overrides.clone(),
@@ -80,12 +119,16 @@ impl PreviewState {
       original_heartbeat_configs: heartbeat_configs.clone(),
       heartbeat_configs: RwLock::new(heartbeat_configs),
       heartbeats: RwLock::new(heartbeats),
-      running,
-      muted,
-      metrics,
       slider_ranges,
       config_path,
       config_writable,
+    };
+
+    Self {
+      sources: vec![local],
+      running,
+      muted,
+      metrics,
       master_volume: shared(1.0),
       mixer_handle: RwLock::new(None),
       broadcast_tx,
@@ -93,12 +136,30 @@ impl PreviewState {
     }
   }
 
-  /// Update effective volume for a heartbeat, accounting for
-  /// mute and master volume.  Volume is now master * mute only;
-  /// per-note volume is baked into the audio graph.
-  pub fn update_effective_volume(&self, index: usize) {
-    let hbs = self.heartbeats.read().unwrap_or_recover();
-    if let Some(hb) = hbs.get(index) {
+  /// Borrow the Source named `name`, or `None` if no such Source
+  /// exists.  This is the name-based lookup the WebSocket protocol
+  /// will use once it carries source identifiers.
+  pub fn source_by_name(&self, name: &str) -> Option<&Source> {
+    self.sources.iter().find(|s| s.name == name)
+  }
+
+  /// Borrow the Local Source.  Used by call sites whose external
+  /// inputs (most WebSocket messages, save/export, the runtime
+  /// `add_heartbeat` API) implicitly address the local instance.
+  /// When the protocol grows a source identifier, those call sites
+  /// will instead pass the wire-supplied name to `source_by_name`.
+  pub fn local(&self) -> &Source {
+    self
+      .source_by_name(LOCAL_SOURCE_NAME)
+      .expect("Local Source must exist in PreviewState::sources")
+  }
+
+  /// Update the effective volume for `hb_idx` within `source`,
+  /// accounting for mute and master volume.  Volume is master *
+  /// mute only; per-note volume is baked into the audio graph.
+  pub fn update_effective_volume(&self, source: &Source, hb_idx: usize) {
+    let hbs = source.heartbeats.read().unwrap_or_recover();
+    if let Some(hb) = hbs.get(hb_idx) {
       let mute_factor = if self.muted.load(Ordering::Relaxed) {
         0.0
       } else {
@@ -109,33 +170,42 @@ impl PreviewState {
     }
   }
 
-  /// Update effective volumes for all heartbeats.
+  /// Update effective volumes for every heartbeat across every
+  /// Source.  Mute and master volume are global.
   pub fn update_all_effective_volumes(&self) {
-    let hbs = self.heartbeats.read().unwrap_or_recover();
     let mute_factor = if self.muted.load(Ordering::Relaxed) {
       0.0
     } else {
       1.0
     };
     let vol = self.master_volume.value() * mute_factor;
-    for hb in hbs.iter() {
-      hb.effective_volume.set_value(vol);
+    for source in &self.sources {
+      let hbs = source.heartbeats.read().unwrap_or_recover();
+      for hb in hbs.iter() {
+        hb.effective_volume.set_value(vol);
+      }
     }
   }
 
-  /// Revert all library patches, transitions, and volumes to their
-  /// original state.
+  /// Revert library patches, transitions, overrides, and master
+  /// volume to their loaded-from-config state.  Today only the Local
+  /// Source has a meaningful "original" snapshot to revert to; future
+  /// Remote Sources will be skipped by this method (their state is
+  /// the live mirror of the remote, which has nothing to revert to
+  /// locally).
   pub fn revert(&self) {
-    *self.library.write().unwrap_or_recover() = self.original_library.clone();
-    *self.overrides.write().unwrap_or_recover() =
-      self.original_overrides.clone();
-    *self.heartbeat_configs.write().unwrap_or_recover() =
-      self.original_heartbeat_configs.clone();
-    let hbs = self.heartbeats.read().unwrap_or_recover();
-    for hb in hbs.iter() {
-      *hb.override_value.write().unwrap_or_recover() = None;
+    for source in &self.sources {
+      *source.library.write().unwrap_or_recover() =
+        source.original_library.clone();
+      *source.overrides.write().unwrap_or_recover() =
+        source.original_overrides.clone();
+      *source.heartbeat_configs.write().unwrap_or_recover() =
+        source.original_heartbeat_configs.clone();
+      let hbs = source.heartbeats.read().unwrap_or_recover();
+      for hb in hbs.iter() {
+        *hb.override_value.write().unwrap_or_recover() = None;
+      }
     }
-    drop(hbs);
     self.master_volume.set_value(1.0);
     self.update_all_effective_volumes();
   }
@@ -145,24 +215,26 @@ impl PreviewState {
     *self.mixer_handle.write().unwrap_or_recover() = Some(handle);
   }
 
-  /// Play heartbeat `index` immediately as a one-shot sound.
-  /// Spawns a fire-and-forget thread that removes the mixer slot
-  /// after the sound finishes.
-  pub fn trigger_immediate_play(&self, index: usize) {
+  /// Play the local heartbeat at `hb_idx` immediately as a one-shot
+  /// sound.  Spawns a fire-and-forget thread that removes the mixer
+  /// slot after the sound finishes.  The wire protocol implicitly
+  /// addresses the local source today; see [`local`](Self::local).
+  pub fn trigger_immediate_play(&self, hb_idx: usize) {
     let handle = match self.mixer_handle.read().unwrap_or_recover().clone() {
       Some(h) => h,
       None => return,
     };
 
-    let notes = self.resolve_notes(index);
+    let notes = self.resolve_local_notes(hb_idx);
     if notes.is_empty() {
       return;
     }
 
-    self.update_effective_volume(index);
+    let local = self.local();
+    self.update_effective_volume(local, hb_idx);
     let eff_vol = {
-      let hbs = self.heartbeats.read().unwrap_or_recover();
-      match hbs.get(index) {
+      let hbs = local.heartbeats.read().unwrap_or_recover();
+      match hbs.get(hb_idx) {
         Some(hb) => hb.effective_volume.clone(),
         None => return,
       }
@@ -177,16 +249,22 @@ impl PreviewState {
     });
   }
 
-  /// Play a named patch immediately as a one-shot sound.
-  /// Spawns a fire-and-forget thread that removes the mixer slot
-  /// after the sound finishes.
+  /// Play a named patch from the local library immediately as a
+  /// one-shot sound.  Spawns a fire-and-forget thread that removes
+  /// the mixer slot after the sound finishes.
   pub fn play_patch_immediate(&self, name: &str) {
     let handle = match self.mixer_handle.read().unwrap_or_recover().clone() {
       Some(h) => h,
       None => return,
     };
 
-    let patch = match self.library.read().unwrap_or_recover().get(name).cloned()
+    let patch = match self
+      .local()
+      .library
+      .read()
+      .unwrap_or_recover()
+      .get(name)
+      .cloned()
     {
       Some(p) => p,
       None => return,
@@ -207,14 +285,16 @@ impl PreviewState {
     });
   }
 
-  /// Add a new heartbeat at runtime.  Returns the index.
+  /// Add a new heartbeat to the Local Source at runtime.  Returns
+  /// the heartbeat index inside the Local Source.
   pub fn add_heartbeat(&self, cfg: HeartbeatConfig) -> usize {
-    let mut configs = self.heartbeat_configs.write().unwrap_or_recover();
+    let local = self.local();
+    let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
     configs.push(cfg);
-    let index = configs.len() - 1;
+    let hb_idx = configs.len() - 1;
     drop(configs);
 
-    let mut hbs = self.heartbeats.write().unwrap_or_recover();
+    let mut hbs = local.heartbeats.write().unwrap_or_recover();
     hbs.push(HeartbeatState {
       metric: shared(0.0),
       override_value: RwLock::new(None),
@@ -222,25 +302,26 @@ impl PreviewState {
     });
     drop(hbs);
 
-    self.update_effective_volume(index);
-    index
+    self.update_effective_volume(local, hb_idx);
+    hb_idx
   }
 
-  /// Resolve all notes for heartbeat `index` from the current
-  /// metric and transition config.
-  fn resolve_notes(&self, index: usize) -> Vec<ResolvedNote> {
+  /// Resolve all notes for the local heartbeat at `hb_idx` from the
+  /// current metric and transition config.
+  fn resolve_local_notes(&self, hb_idx: usize) -> Vec<ResolvedNote> {
+    let local = self.local();
     let metric = {
-      let hbs = self.heartbeats.read().unwrap_or_recover();
-      match hbs.get(index) {
+      let hbs = local.heartbeats.read().unwrap_or_recover();
+      match hbs.get(hb_idx) {
         Some(hb) => hb.metric.value() as f64,
         None => return vec![],
       }
     };
     let note_configs = {
-      let cfg = &self.heartbeat_configs.read().unwrap_or_recover()[index];
+      let cfg = &local.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
       cfg.notes.clone()
     };
-    let lib = self.library.read().unwrap_or_recover();
+    let lib = local.library.read().unwrap_or_recover();
     note_configs
       .iter()
       .filter_map(|nc| {
@@ -255,8 +336,14 @@ impl PreviewState {
   }
 
   /// Build a full state snapshot JSON string for WebSocket clients.
+  ///
+  /// The protocol today emits a flat `heartbeats` list and a single
+  /// `library`; both come from the Local Source.  When the protocol
+  /// gains a `sources` array, this method will iterate `self.sources`
+  /// and emit one entry per Source.
   pub fn state_snapshot(&self) -> String {
-    let lib = self.library.read().unwrap_or_recover();
+    let local = self.local();
+    let lib = local.library.read().unwrap_or_recover();
     let lib_json: serde_json::Map<String, serde_json::Value> = lib
       .iter()
       .map(|(name, patch)| {
@@ -277,8 +364,8 @@ impl PreviewState {
       })
       .collect();
 
-    let hb_configs = self.heartbeat_configs.read().unwrap_or_recover();
-    let hbs = self.heartbeats.read().unwrap_or_recover();
+    let hb_configs = local.heartbeat_configs.read().unwrap_or_recover();
+    let hbs = local.heartbeats.read().unwrap_or_recover();
     let heartbeats_json: Vec<_> = hb_configs
       .iter()
       .enumerate()
@@ -324,17 +411,17 @@ impl PreviewState {
       "muted": self.muted.load(Ordering::Relaxed),
       "master_volume": self.master_volume.value(),
       "heartbeats": heartbeats_json,
-      "slider_ranges": serde_json::to_value(&self.slider_ranges).unwrap_or_default(),
+      "slider_ranges": serde_json::to_value(&local.slider_ranges).unwrap_or_default(),
       "overrides": overrides_json,
-      "config_writable": self.config_writable,
-      "config_path": self.config_path.as_ref().map(|p| p.display().to_string()),
+      "config_writable": local.config_writable,
+      "config_path": local.config_path.as_ref().map(|p| p.display().to_string()),
     })
     .to_string()
   }
 
-  /// Serialize the overrides map to a JSON value.
+  /// Serialize the local override map to a JSON value.
   pub fn overrides_json(&self) -> serde_json::Value {
-    let ovr = self.overrides.read().unwrap_or_recover();
+    let ovr = self.local().overrides.read().unwrap_or_recover();
     let map: serde_json::Map<String, serde_json::Value> = ovr
       .iter()
       .map(|(name, info)| {

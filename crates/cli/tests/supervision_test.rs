@@ -40,7 +40,7 @@ fn poll_thread_survives_poisoned_lock() {
   ));
 
   // Spawn the poll thread.
-  let h = spawn_poll_thread(&preview, 0);
+  let h = spawn_poll_thread(&preview, 0, 0);
 
   // Let it run a few cycles.
   std::thread::sleep(Duration::from_millis(350));
@@ -48,7 +48,7 @@ fn poll_thread_survives_poisoned_lock() {
   // Poison the heartbeat_configs lock by panicking while holding a
   // write guard.
   {
-    let lock = &preview.heartbeat_configs;
+    let lock = &preview.local().heartbeat_configs;
     let lock2 = lock as *const _ as usize;
     let _ = std::thread::spawn(move || {
       // SAFETY: We're in a test and the lock lives on the Arc which
@@ -111,13 +111,14 @@ fn poll_thread_panic_is_capturable() {
     false,
   ));
 
-  let h = spawn_poll_thread(&preview, 0);
+  let h = spawn_poll_thread(&preview, 0, 0);
 
   // Let one cycle complete, then remove all configs so the next
   // iteration panics on out-of-bounds access.
   std::thread::sleep(Duration::from_millis(200));
   {
     let mut configs = preview
+      .local()
       .heartbeat_configs
       .write()
       .unwrap_or_else(|e| e.into_inner());

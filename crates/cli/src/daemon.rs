@@ -1,5 +1,5 @@
 use crate::lock_util::RecoverPoison;
-use crate::preview_state::{metric_label, PreviewState};
+use crate::preview_state::{metric_label, PreviewState, Source};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer, MixerHandle, MAX_MIXER_SLOTS},
@@ -48,10 +48,16 @@ pub enum DaemonError {
   #[error("Audio playback failed: {0}")]
   Audio(#[from] AudioError),
 
+  // `source` would collide with thiserror's reserved name for the
+  // underlying error chain, so use `source_name` instead.
   #[error(
-    "Thread failure budget exhausted for heartbeat {heartbeat} ({role})"
+    "Thread failure budget exhausted for source {source_name:?} heartbeat {heartbeat} ({role})"
   )]
-  ThreadBudgetExhausted { heartbeat: usize, role: String },
+  ThreadBudgetExhausted {
+    source_name: String,
+    heartbeat: usize,
+    role: String,
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +81,9 @@ impl std::fmt::Display for ThreadRole {
 
 pub struct SupervisedThread {
   pub handle: Option<thread::JoinHandle<()>>,
-  pub heartbeat_index: usize,
+  pub source_idx: usize,
+  pub source_name: String,
+  pub hb_idx: usize,
   pub role: ThreadRole,
   pub failures: Vec<Instant>,
 }
@@ -83,12 +91,16 @@ pub struct SupervisedThread {
 impl SupervisedThread {
   fn new(
     handle: thread::JoinHandle<()>,
-    heartbeat_index: usize,
+    source_idx: usize,
+    source_name: String,
+    hb_idx: usize,
     role: ThreadRole,
   ) -> Self {
     Self {
       handle: Some(handle),
-      heartbeat_index,
+      source_idx,
+      source_name,
+      hb_idx,
       role,
       failures: Vec::new(),
     }
@@ -145,18 +157,41 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   preview.set_mixer_handle(mixer.handle());
 
   let mut supervised: Vec<SupervisedThread> = Vec::new();
+  let mut total_heartbeats = 0usize;
 
   // Snapshot heartbeat configs for thread setup; transitions are
-  // re-read at runtime so live edits take effect.
-  let hb_count = preview.heartbeat_configs.read().unwrap_or_recover().len();
-  for i in 0..hb_count {
-    let poll_h = spawn_poll_thread(&preview, i);
-    let play_h = spawn_play_thread(&preview, i);
-    supervised.push(SupervisedThread::new(poll_h, i, ThreadRole::Poll));
-    supervised.push(SupervisedThread::new(play_h, i, ThreadRole::Play));
+  // re-read at runtime so live edits take effect.  Iterate every
+  // Source even though today only the Local Source exists, so the
+  // poll/play thread topology already understands per-Source
+  // addressing when remote Sources arrive.
+  for (source_idx, source) in preview.sources.iter().enumerate() {
+    let hb_count = source.heartbeats.read().unwrap_or_recover().len();
+    total_heartbeats += hb_count;
+    for hb_idx in 0..hb_count {
+      let poll_h = spawn_poll_thread(&preview, source_idx, hb_idx);
+      let play_h = spawn_play_thread(&preview, source_idx, hb_idx);
+      supervised.push(SupervisedThread::new(
+        poll_h,
+        source_idx,
+        source.name.clone(),
+        hb_idx,
+        ThreadRole::Poll,
+      ));
+      supervised.push(SupervisedThread::new(
+        play_h,
+        source_idx,
+        source.name.clone(),
+        hb_idx,
+        ThreadRole::Play,
+      ));
+    }
   }
 
-  info!(heartbeats = hb_count, "Daemon started");
+  info!(
+    sources = preview.sources.len(),
+    heartbeats = total_heartbeats,
+    "Daemon started"
+  );
 
   // Stream recovery state (exponential backoff).
   const MAX_RECOVERY_BACKOFF: Duration = Duration::from_secs(60);
@@ -182,7 +217,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 
     // -- Supervision check (~every 1 s).
     if tick.is_multiple_of(SUPERVISION_CHECK_INTERVAL) {
-      let mut budget_exhausted: Option<(usize, String)> = None;
+      let mut budget_exhausted: Option<(String, usize, String)> = None;
 
       for st in supervised.iter_mut() {
         let finished =
@@ -195,7 +230,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         match handle.join() {
           Ok(()) => {
             debug!(
-              heartbeat = st.heartbeat_index,
+              source = %st.source_name,
+              heartbeat = st.hb_idx,
               role = %st.role,
               "Thread exited cleanly"
             );
@@ -203,35 +239,38 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           Err(payload) => {
             let msg = extract_panic_message(&payload);
             error!(
-              heartbeat = st.heartbeat_index,
+              source = %st.source_name,
+              heartbeat = st.hb_idx,
               role = %st.role,
               panic = msg,
               "Thread panicked"
             );
             if st.record_failure() {
               error!(
-                heartbeat = st.heartbeat_index,
+                source = %st.source_name,
+                heartbeat = st.hb_idx,
                 role = %st.role,
                 "Failure budget exhausted, shutting down"
               );
               budget_exhausted =
-                Some((st.heartbeat_index, st.role.to_string()));
+                Some((st.source_name.clone(), st.hb_idx, st.role.to_string()));
               break;
             }
 
             // Respawn.
             info!(
-              heartbeat = st.heartbeat_index,
+              source = %st.source_name,
+              heartbeat = st.hb_idx,
               role = %st.role,
               recent_failures = st.failures.len(),
               "Respawning thread"
             );
             let new_handle = match st.role {
               ThreadRole::Poll => {
-                spawn_poll_thread(&preview, st.heartbeat_index)
+                spawn_poll_thread(&preview, st.source_idx, st.hb_idx)
               }
               ThreadRole::Play => {
-                spawn_play_thread(&preview, st.heartbeat_index)
+                spawn_play_thread(&preview, st.source_idx, st.hb_idx)
               }
             };
             st.handle = Some(new_handle);
@@ -239,14 +278,15 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         }
       }
 
-      if let Some((heartbeat, role)) = budget_exhausted {
+      if let Some((source_name, heartbeat, role)) = budget_exhausted {
         preview.running.store(false, Ordering::Relaxed);
         for st in supervised.iter_mut() {
           if let Some(h) = st.handle.take() {
             if let Err(p) = h.join() {
               let m = extract_panic_message(&p);
               warn!(
-                heartbeat = st.heartbeat_index,
+                source = %st.source_name,
+                heartbeat = st.hb_idx,
                 role = %st.role,
                 panic = m,
                 "Thread panicked during shutdown"
@@ -255,7 +295,11 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           }
         }
         mixer.clear();
-        return Err(DaemonError::ThreadBudgetExhausted { heartbeat, role });
+        return Err(DaemonError::ThreadBudgetExhausted {
+          source_name,
+          heartbeat,
+          role,
+        });
       }
 
       // -- Stream recovery: if the audio stream has failed, attempt
@@ -402,7 +446,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         Err(payload) => {
           let msg = extract_panic_message(&payload);
           warn!(
-            heartbeat = st.heartbeat_index,
+            source = %st.source_name,
+            heartbeat = st.hb_idx,
             role = %st.role,
             panic = msg,
             "Thread panicked during shutdown"
@@ -420,26 +465,41 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 // Thread spawning
 // ---------------------------------------------------------------------------
 
-/// Spawn a poll thread for heartbeat at `index`.  Re-reads config
+/// Borrow the Source at `source_idx` from `preview`.  Panics if the
+/// index is out of bounds — the supervisor only constructs valid
+/// indices.
+fn source_at(preview: &PreviewState, source_idx: usize) -> &Source {
+  &preview.sources[source_idx]
+}
+
+/// Spawn a poll thread for `(source_idx, hb_idx)`.  Re-reads config
 /// each iteration so live UI edits take effect.
 pub fn spawn_poll_thread(
   preview: &Arc<PreviewState>,
-  i: usize,
+  source_idx: usize,
+  hb_idx: usize,
 ) -> thread::JoinHandle<()> {
   let poll_running = Arc::clone(&preview.running);
   let poll_preview = Arc::clone(preview);
-  let cfg = preview.heartbeat_configs.read().unwrap_or_recover()[i].clone();
+  let cfg = source_at(preview, source_idx)
+    .heartbeat_configs
+    .read()
+    .unwrap_or_recover()[hb_idx]
+    .clone();
   let poll_counter = preview
     .metrics
     .probes_completed
     .with_label_values(&[&cfg.name]);
   let poll_gauge = preview.metrics.probe_value.with_label_values(&[&cfg.name]);
 
+  let source_name = source_at(preview, source_idx).name.clone();
+
   thread::spawn(move || {
     while poll_running.load(Ordering::Relaxed) {
+      let source = source_at(&poll_preview, source_idx);
       let (cfg_name, command, mode, tiers, interval) = {
-        let configs = poll_preview.heartbeat_configs.read().unwrap_or_recover();
-        let cfg = &configs[i];
+        let configs = source.heartbeat_configs.read().unwrap_or_recover();
+        let cfg = &configs[hb_idx];
         (
           cfg.name.clone(),
           cfg.command.clone(),
@@ -450,16 +510,16 @@ pub fn spawn_poll_thread(
       };
 
       let overridden = {
-        let hbs = poll_preview.heartbeats.read().unwrap_or_recover();
-        let val = *hbs[i].override_value.read().unwrap_or_recover();
+        let hbs = source.heartbeats.read().unwrap_or_recover();
+        let val = *hbs[hb_idx].override_value.read().unwrap_or_recover();
         val
       };
 
       let resolved = if let Some(metric) = overridden {
         let clamped = metric.clamp(0.0, 1.0);
         {
-          let hbs = poll_preview.heartbeats.read().unwrap_or_recover();
-          hbs[i].metric.set_value(clamped);
+          let hbs = source.heartbeats.read().unwrap_or_recover();
+          hbs[hb_idx].metric.set_value(clamped);
         }
         send_probe_log(
           &poll_preview,
@@ -475,16 +535,22 @@ pub fn spawn_poll_thread(
           Ok(output) => {
             if !output.stderr.is_empty() {
               debug!(
+                source = %source_name,
                 heartbeat = cfg_name,
                 stderr = output.stderr,
                 "Probe stderr"
               );
             }
             let label = metric_label(output.metric, &tiers);
-            info!(heartbeat = cfg_name, result = label, "Probe completed");
+            info!(
+              source = %source_name,
+              heartbeat = cfg_name,
+              result = label,
+              "Probe completed"
+            );
             {
-              let hbs = poll_preview.heartbeats.read().unwrap_or_recover();
-              hbs[i].metric.set_value(output.metric);
+              let hbs = source.heartbeats.read().unwrap_or_recover();
+              hbs[hb_idx].metric.set_value(output.metric);
             }
             send_probe_log(&poll_preview, &cfg_name, &label, false);
             poll_counter.inc();
@@ -501,6 +567,7 @@ pub fn spawn_poll_thread(
             };
             if let Some(text) = stderr.filter(|s| !s.is_empty()) {
               warn!(
+                source = %source_name,
                 heartbeat = cfg_name,
                 error = %e,
                 stderr = text,
@@ -508,6 +575,7 @@ pub fn spawn_poll_thread(
               );
             } else {
               warn!(
+                source = %source_name,
                 heartbeat = cfg_name,
                 error = %e,
                 "Probe failed, retaining previous metric"
@@ -521,6 +589,7 @@ pub fn spawn_poll_thread(
       if let Some(val) = resolved {
         let label = metric_label(val, &tiers);
         info!(
+          source = %source_name,
           heartbeat = cfg_name,
           result = label,
           overridden = overridden.is_some(),
@@ -529,13 +598,16 @@ pub fn spawn_poll_thread(
       }
 
       let metric_val = {
-        let hbs = poll_preview.heartbeats.read().unwrap_or_recover();
-        hbs[i].metric.value()
+        let hbs = source.heartbeats.read().unwrap_or_recover();
+        hbs[hb_idx].metric.value()
       };
+      // The wire protocol does not yet carry source identifiers, so
+      // emit only `index` (= hb_idx).  When the protocol grows a
+      // source field, include source_idx here too.
       let _ = poll_preview.broadcast_tx.send(
         json!({
           "type": "metric_changed",
-          "index": i,
+          "index": hb_idx,
           "value": metric_val,
         })
         .to_string(),
@@ -546,12 +618,13 @@ pub fn spawn_poll_thread(
   })
 }
 
-/// Spawn a play thread for heartbeat at `index`.  Extracted from
+/// Spawn a play thread for `(source_idx, hb_idx)`.  Extracted from
 /// `spawn_heartbeat_threads` so both poll and play can be respawned
 /// independently by the supervisor.
 pub fn spawn_play_thread(
   preview: &Arc<PreviewState>,
-  i: usize,
+  source_idx: usize,
+  hb_idx: usize,
 ) -> thread::JoinHandle<()> {
   let play_running = Arc::clone(&preview.running);
   let play_preview = Arc::clone(preview);
@@ -561,7 +634,10 @@ pub fn spawn_play_thread(
     .unwrap_or_recover()
     .clone()
     .expect("Mixer handle must be set before spawning threads");
-  let cfg_name = preview.heartbeat_configs.read().unwrap_or_recover()[i]
+  let cfg_name = source_at(preview, source_idx)
+    .heartbeat_configs
+    .read()
+    .unwrap_or_recover()[hb_idx]
     .name
     .clone();
   let play_counter = preview
@@ -570,11 +646,13 @@ pub fn spawn_play_thread(
     .with_label_values(&[&cfg_name]);
 
   thread::spawn(move || {
+    let source = source_at(&play_preview, source_idx);
+
     // Align to the wall-clock grid before the first play so that
     // clock-mode heartbeats with different offsets start staggered.
     // Loop and Continuous modes skip this to start playing immediately.
     {
-      let cfg = &play_preview.heartbeat_configs.read().unwrap_or_recover()[i];
+      let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
       if cfg.playback == Playback::Clock {
         let wait = seconds_until_next(cfg.cycle_secs, cfg.cycle_offset_secs);
         if wait > 0.005 {
@@ -585,26 +663,35 @@ pub fn spawn_play_thread(
 
     while play_running.load(Ordering::Relaxed) {
       let mode =
-        play_preview.heartbeat_configs.read().unwrap_or_recover()[i].playback;
+        source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback;
       match mode {
         Playback::Continuous => {
           play_continuous_tick(
             &play_running,
             &play_preview,
             &play_mix,
-            i,
+            source_idx,
+            hb_idx,
             &play_counter,
           );
         }
         Playback::Loop => {
-          play_loop(&play_running, &play_preview, &play_mix, i, &play_counter);
+          play_loop(
+            &play_running,
+            &play_preview,
+            &play_mix,
+            source_idx,
+            hb_idx,
+            &play_counter,
+          );
         }
         Playback::Clock => {
           play_oneshot_once(
             &play_running,
             &play_preview,
             &play_mix,
-            i,
+            source_idx,
+            hb_idx,
             true,
             &play_counter,
           );
@@ -614,14 +701,24 @@ pub fn spawn_play_thread(
   })
 }
 
-/// Spawn poll and play threads for heartbeat at `index`.  Reads
-/// the config snapshot and prometheus labels at spawn time.
+/// Spawn poll and play threads for the heartbeat at `hb_idx` within
+/// the source named `source_name`.  Looks up the source's index
+/// once at spawn time; threads then keep the index for the rest of
+/// their lifetime.
 pub fn spawn_heartbeat_threads(
   preview: &Arc<PreviewState>,
-  i: usize,
+  source_name: &str,
+  hb_idx: usize,
 ) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
-  let poll_handle = spawn_poll_thread(preview, i);
-  let play_handle = spawn_play_thread(preview, i);
+  let source_idx = preview
+    .sources
+    .iter()
+    .position(|s| s.name == source_name)
+    .unwrap_or_else(|| {
+      panic!("source {source_name:?} not found in PreviewState::sources")
+    });
+  let poll_handle = spawn_poll_thread(preview, source_idx, hb_idx);
+  let play_handle = spawn_play_thread(preview, source_idx, hb_idx);
   (poll_handle, play_handle)
 }
 
@@ -629,19 +726,24 @@ pub fn spawn_heartbeat_threads(
 // Audio playback helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve all notes for heartbeat `i` from the current metric
-/// and transition config.  Shared by loop, oneshot, and continuous
-/// playback.
-fn resolve_notes(preview: &PreviewState, i: usize) -> Vec<ResolvedNote> {
+/// Resolve all notes for `(source_idx, hb_idx)` from the current
+/// metric and transition config.  Shared by loop, oneshot, and
+/// continuous playback.
+fn resolve_notes(
+  preview: &PreviewState,
+  source_idx: usize,
+  hb_idx: usize,
+) -> Vec<ResolvedNote> {
+  let source = source_at(preview, source_idx);
   let metric = {
-    let hbs = preview.heartbeats.read().unwrap_or_recover();
-    hbs[i].metric.value() as f64
+    let hbs = source.heartbeats.read().unwrap_or_recover();
+    hbs[hb_idx].metric.value() as f64
   };
   let note_configs = {
-    let cfg = &preview.heartbeat_configs.read().unwrap_or_recover()[i];
+    let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
     cfg.notes.clone()
   };
-  let lib = preview.library.read().unwrap_or_recover();
+  let lib = source.library.read().unwrap_or_recover();
   note_configs
     .iter()
     .filter_map(|nc| {
@@ -662,14 +764,18 @@ fn notes_to_continuous_pairs(notes: &[ResolvedNote]) -> Vec<(Patch, f64)> {
   notes.iter().map(|n| (n.patch.clone(), n.volume)).collect()
 }
 
-/// Clone the effective_volume Shared for heartbeat `i`.  The clone
-/// shares the same underlying atomic, so updates via
+/// Clone the effective_volume Shared for `(source_idx, hb_idx)`.
+/// The clone shares the same underlying atomic, so updates via
 /// `update_effective_volume` are immediately visible.
 fn clone_effective_volume(
   preview: &PreviewState,
-  i: usize,
+  source_idx: usize,
+  hb_idx: usize,
 ) -> fundsp::shared::Shared {
-  preview.heartbeats.read().unwrap_or_recover()[i]
+  source_at(preview, source_idx)
+    .heartbeats
+    .read()
+    .unwrap_or_recover()[hb_idx]
     .effective_volume
     .clone()
 }
@@ -683,20 +789,23 @@ fn play_continuous_tick(
   running: &AtomicBool,
   preview: &PreviewState,
   play_mix: &MixerHandle,
-  i: usize,
+  source_idx: usize,
+  hb_idx: usize,
   counter: &prometheus::IntCounter,
 ) {
+  let source = source_at(preview, source_idx);
+
   // Wait for at least one valid note.
   let initial_notes = loop {
     if !running.load(Ordering::Relaxed) {
       return;
     }
-    if preview.heartbeat_configs.read().unwrap_or_recover()[i].playback
+    if source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback
       != Playback::Continuous
     {
       return;
     }
-    let notes = resolve_notes(preview, i);
+    let notes = resolve_notes(preview, source_idx, hb_idx);
     if !notes.is_empty() {
       break notes;
     }
@@ -704,14 +813,14 @@ fn play_continuous_tick(
   };
 
   let crossfade_ms = {
-    let cfg = &preview.heartbeat_configs.read().unwrap_or_recover()[i];
+    let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
     cfg.crossfade_ms
   };
   let smoothing = crossfade_ms / 1000.0;
 
   let pairs = notes_to_continuous_pairs(&initial_notes);
-  let eff_vol = clone_effective_volume(preview, i);
-  preview.update_effective_volume(i);
+  let eff_vol = clone_effective_volume(preview, source_idx, hb_idx);
+  preview.update_effective_volume(source, hb_idx);
   let (graph, mut all_controls, mut all_structural) =
     continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
   let mut note_count = pairs.len();
@@ -726,23 +835,23 @@ fn play_continuous_tick(
       break;
     }
 
-    if preview.heartbeat_configs.read().unwrap_or_recover()[i].playback
+    if source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback
       != Playback::Continuous
     {
       break;
     }
 
     let crossfade_ms = {
-      let cfg = &preview.heartbeat_configs.read().unwrap_or_recover()[i];
+      let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
       cfg.crossfade_ms
     };
 
-    let notes = resolve_notes(preview, i);
+    let notes = resolve_notes(preview, source_idx, hb_idx);
     if notes.is_empty() {
       continue;
     }
 
-    preview.update_effective_volume(i);
+    preview.update_effective_volume(source, hb_idx);
     let pairs = notes_to_continuous_pairs(&notes);
 
     // Full rebuild if note count changed.
@@ -789,7 +898,8 @@ fn play_continuous_tick(
     // long-running numerical drift (Moog ladder instability).
     if !needs_rebuild && last_rebuild.elapsed() >= CONTINUOUS_REBUILD_INTERVAL {
       info!(
-        heartbeat = i,
+        source = %source.name,
+        heartbeat = hb_idx,
         elapsed_secs = last_rebuild.elapsed().as_secs(),
         "Periodic continuous graph rebuild to reset filter state"
       );
@@ -818,17 +928,19 @@ fn play_loop(
   running: &AtomicBool,
   preview: &PreviewState,
   play_mix: &MixerHandle,
-  i: usize,
+  source_idx: usize,
+  hb_idx: usize,
   counter: &prometheus::IntCounter,
 ) {
-  let notes = resolve_notes(preview, i);
+  let source = source_at(preview, source_idx);
+  let notes = resolve_notes(preview, source_idx, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
     return;
   }
 
-  let eff_vol = clone_effective_volume(preview, i);
-  preview.update_effective_volume(i);
+  let eff_vol = clone_effective_volume(preview, source_idx, hb_idx);
+  preview.update_effective_volume(source, hb_idx);
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
   let sid = play_mix.add(graph);
@@ -837,22 +949,22 @@ fn play_loop(
   sleep_checking(running, content_dur);
 
   while running.load(Ordering::Relaxed) {
-    if preview.heartbeat_configs.read().unwrap_or_recover()[i].playback
+    if source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback
       != Playback::Loop
     {
       break;
     }
 
     let crossfade_ms = {
-      let cfg = &preview.heartbeat_configs.read().unwrap_or_recover()[i];
+      let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
       cfg.crossfade_ms
     };
-    let notes = resolve_notes(preview, i);
+    let notes = resolve_notes(preview, source_idx, hb_idx);
     if notes.is_empty() {
       break;
     }
 
-    preview.update_effective_volume(i);
+    preview.update_effective_volume(source, hb_idx);
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
     let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
     let cf = ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
@@ -872,22 +984,24 @@ fn play_oneshot_once(
   running: &AtomicBool,
   preview: &PreviewState,
   play_mix: &MixerHandle,
-  i: usize,
+  source_idx: usize,
+  hb_idx: usize,
   wait_for_clock: bool,
   counter: &prometheus::IntCounter,
 ) {
+  let source = source_at(preview, source_idx);
   let (cycle_secs, cycle_offset) = {
-    let cfg = &preview.heartbeat_configs.read().unwrap_or_recover()[i];
+    let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
     (cfg.cycle_secs, cfg.cycle_offset_secs)
   };
-  let notes = resolve_notes(preview, i);
+  let notes = resolve_notes(preview, source_idx, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
     return;
   }
 
-  let eff_vol = clone_effective_volume(preview, i);
-  preview.update_effective_volume(i);
+  let eff_vol = clone_effective_volume(preview, source_idx, hb_idx);
+  preview.update_effective_volume(source, hb_idx);
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let dur = heartbeat::heartbeat_notes_duration(&notes);
 
@@ -970,7 +1084,8 @@ mod tests {
   fn supervised_thread_records_failures_in_window() {
     // Use a dummy handle (spawn a no-op thread).
     let h = thread::spawn(|| {});
-    let mut st = SupervisedThread::new(h, 0, ThreadRole::Poll);
+    let mut st =
+      SupervisedThread::new(h, 0, "localhost".to_string(), 0, ThreadRole::Poll);
     for _ in 0..MAX_FAILURES_PER_THREAD {
       assert!(!st.record_failure(), "should not be exhausted yet");
     }
@@ -980,7 +1095,8 @@ mod tests {
   #[test]
   fn supervised_thread_budget_exhaustion() {
     let h = thread::spawn(|| {});
-    let mut st = SupervisedThread::new(h, 0, ThreadRole::Play);
+    let mut st =
+      SupervisedThread::new(h, 0, "localhost".to_string(), 0, ThreadRole::Play);
     for _ in 0..MAX_FAILURES_PER_THREAD {
       st.record_failure();
     }
@@ -991,7 +1107,8 @@ mod tests {
   #[test]
   fn supervised_thread_prunes_old_failures() {
     let h = thread::spawn(|| {});
-    let mut st = SupervisedThread::new(h, 0, ThreadRole::Poll);
+    let mut st =
+      SupervisedThread::new(h, 0, "localhost".to_string(), 0, ThreadRole::Poll);
 
     // Insert old failures that would be outside the window.
     let old = Instant::now() - FAILURE_WINDOW - Duration::from_secs(1);
