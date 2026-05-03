@@ -577,4 +577,116 @@ mod tests {
        than sustain=1.0 ({full_rms:.6})"
     );
   }
+
+  /// Render note_graph at various frequencies using the star-trek-ok
+  /// patch shape and measure the peak amplitude in the final 256
+  /// samples (just before the mixer would hard-remove the slot).
+  /// The Moog filter leaves residual energy at certain frequencies
+  /// (notably 440 Hz and 780 Hz).  The mixer's `remove()` method
+  /// crossfades to silence over `REMOVE_FADEOUT_FRAMES` to mask
+  /// this, but this test documents which frequencies are affected.
+  #[test]
+  fn tail_residual_across_frequencies() {
+    let base = Patch {
+      freq: 4307.0,
+      sine_ratio: 2.37,
+      tri_ratio: 1.22,
+      saw_ratio: 0.02,
+      square_ratio: 0.0,
+      duration: 0.22,
+      attack_ms: 6.0,
+      decay_ms: 0.0,
+      release_ms: 22.0,
+      reverb_mix: 0.89,
+      chirp_ratio: 1.01,
+      amplitude: 0.327,
+      brightness: 1.82,
+      drive: 0.5,
+      echo_delay: 0.32,
+      echo_mix: 0.33,
+      resonance: 3.72,
+      stereo_pan: -0.42,
+      sub_octave: 0.03,
+      sustain: 1.0,
+      tremolo_depth: 0.11,
+      vibrato_depth: 0.49,
+      ..Default::default()
+    };
+
+    let test_freqs = [
+      100.0, 200.0, 300.0, 440.0, 600.0, 780.0, 1000.0, 1538.0, 2000.0, 3000.0,
+      4307.0,
+    ];
+    let tail_window = 256;
+    // Threshold: anything above this in the final samples will click.
+    let click_threshold = 0.001;
+    let mut failures = Vec::new();
+
+    for &freq in &test_freqs {
+      let patch = Patch {
+        freq,
+        ..base.clone()
+      };
+      let notes = [ResolvedNote {
+        patch,
+        volume: 1.0,
+        offset: 0.0,
+      }];
+      let dur = heartbeat_notes_duration(&notes);
+      let total_samples = (dur.as_secs_f32() * 44100.0) as usize;
+
+      let mut graph = heartbeat_graph_with_notes(&notes, None);
+      graph.set_sample_rate(44100.0);
+      graph.allocate();
+
+      // Render all but the last tail_window samples.
+      for _ in 0..(total_samples - tail_window) {
+        graph.get_stereo();
+      }
+
+      // Measure peak in the final window.
+      let mut tail_peak: f32 = 0.0;
+      for _ in 0..tail_window {
+        let (l, r) = graph.get_stereo();
+        tail_peak = tail_peak.max(l.abs()).max(r.abs());
+      }
+
+      eprintln!(
+        "freq={freq:>7.1}  tail_peak={tail_peak:.6}  {}",
+        if tail_peak > click_threshold {
+          "CLICK"
+        } else {
+          "ok"
+        }
+      );
+
+      if tail_peak > click_threshold {
+        failures.push((freq, tail_peak));
+      }
+    }
+
+    // Document affected frequencies rather than failing — the mixer
+    // fadeout in `remove()` handles these at runtime.
+    if !failures.is_empty() {
+      eprintln!(
+        "Frequencies with Moog filter residual (handled by mixer fadeout): {:?}",
+        failures
+      );
+    }
+    // No frequency should exceed a hard ceiling that would click
+    // even through the 128-frame fadeout.  At 128 frames the
+    // fadeout attenuates linearly, so the final sample is
+    // peak * (1/128) ≈ peak * 0.008.  Anything under 0.125 would
+    // produce a final sample below 0.001 after fadeout.
+    let hard_ceiling = 0.125;
+    let severe: Vec<_> = failures
+      .iter()
+      .filter(|(_, peak)| *peak > hard_ceiling)
+      .collect();
+    assert!(
+      severe.is_empty(),
+      "Frequencies with residual too large for fadeout: {:?}",
+      severe
+    );
+  }
 }

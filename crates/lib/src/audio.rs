@@ -23,6 +23,11 @@ const MIXER_BUFFER_FRAMES: u32 = 4096;
 /// Maximum number of mixer slots tracked for per-slot amplitude metrics.
 pub const MAX_MIXER_SLOTS: usize = 8;
 
+/// Fade-out length in frames when removing a mixer slot.  At 44.1 kHz
+/// 128 frames ≈ 3 ms — short enough to be inaudible as a fade but long
+/// enough to avoid the click caused by residual Moog filter energy.
+const REMOVE_FADEOUT_FRAMES: usize = 128;
+
 /// Number of stream errors before the error callback starts throttling.
 const STREAM_ERROR_THRESHOLD: u64 = 10;
 
@@ -516,12 +521,14 @@ impl AudioMixer {
     slot_id
   }
 
-  /// Remove the graph at the given slot, silencing it.
+  /// Remove the graph at the given slot, fading it out over
+  /// `REMOVE_FADEOUT_FRAMES` to avoid clicks from residual filter
+  /// energy (e.g. Moog ladder DC at certain frequencies).
   pub fn remove(&self, id: usize) {
-    let mut slots = self.inner.slots.lock().unwrap();
-    if let Some(entry) = slots.get_mut(id) {
-      *entry = None;
-    }
+    // Replace with silence and crossfade the old graph out.
+    let silence: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
+    self.replace(id, silence, REMOVE_FADEOUT_FRAMES);
+    let slots = self.inner.slots.lock().unwrap();
     let active = slots.iter().filter(|s| s.is_some()).count();
     tracing::info!(
       id,
@@ -529,7 +536,7 @@ impl AudioMixer {
       lock_failures = self.inner.lock_failures.load(Ordering::Relaxed),
       nan_frames = self.inner.nan_frames.load(Ordering::Relaxed),
       peak_callback_us = self.inner.peak_callback_us.load(Ordering::Relaxed),
-      "Mixer: slot removed"
+      "Mixer: slot removed (fadeout)"
     );
   }
 
@@ -752,14 +759,15 @@ impl MixerHandle {
     slot_id
   }
 
-  /// Remove the graph at the given slot, silencing it.
+  /// Remove the graph at the given slot, fading it out over
+  /// `REMOVE_FADEOUT_FRAMES` to avoid clicks from residual filter
+  /// energy (e.g. Moog ladder DC at certain frequencies).
   pub fn remove(&self, id: usize) {
-    let mut slots = self.inner.slots.lock().unwrap();
-    if let Some(entry) = slots.get_mut(id) {
-      *entry = None;
-    }
+    let silence: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
+    self.replace(id, silence, REMOVE_FADEOUT_FRAMES);
+    let slots = self.inner.slots.lock().unwrap();
     let active = slots.iter().filter(|s| s.is_some()).count();
-    tracing::info!(id, active, "MixerHandle: slot removed");
+    tracing::info!(id, active, "MixerHandle: slot removed (fadeout)");
   }
 
   /// Replace the graph at the given slot, crossfading from the old
