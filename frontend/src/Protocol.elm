@@ -25,7 +25,6 @@ module Protocol exposing
     , encodeLerpStrategy
     , encodeNoteSlider
     , encodeOverrideHeartbeat
-    , encodePlayPatch
     , encodeRemoveNote
     , encodeRenamePatch
     , encodeResetOverrideParam
@@ -36,6 +35,7 @@ module Protocol exposing
     , encodeSetMuted
     , encodeSetNoteTransition
     , encodeSetPatchParam
+    , encodeSetPatchParamAndPlay
     , encodeSetPlayback
     , encodeSetTiers
     , encodeTriggerHeartbeat
@@ -987,10 +987,21 @@ encodeSetTiers index tiers =
         |> E.encode 0
 
 
-encodePlayPatch : String -> String
-encodePlayPatch patchName =
+{-| Atomic "apply parameter change and play" for play-on-change.
+Must be sent as a single WebSocket message — do NOT split into
+`encodeSetPatchParam` followed by a play command, because Elm's
+`Cmd.batch` reverses port-send order (it prepends into the effects
+list in elm.js's `_Platform_insert`), so the play event would
+actually arrive BEFORE the param change and play against the
+previous library state. Bundling both into one message sidesteps
+the batch-ordering quirk entirely.
+-}
+encodeSetPatchParamAndPlay : String -> String -> Float -> String
+encodeSetPatchParamAndPlay patchName param value =
     E.object
-        [ ( "type", E.string "play_patch" )
+        [ ( "type", E.string "set_patch_param_and_play" )
         , ( "patch_name", E.string patchName )
+        , ( "param", E.string param )
+        , ( "value", E.float value )
         ]
         |> E.encode 0

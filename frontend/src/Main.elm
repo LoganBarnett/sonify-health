@@ -344,16 +344,21 @@ update msg model =
                     "pp:" ++ patchName ++ ":" ++ param
             in
             if isCurrentDebounce key id model then
+                -- Must be a single websocketSend, not a Cmd.batch
+                -- of two messages, because Elm's Cmd.batch reverses
+                -- port-send order: a `[setParam, play]` batch would
+                -- actually send `play` first and cause the audition
+                -- to play against the previous library state.  The
+                -- backend's `set_patch_param_and_play` handler
+                -- applies the change and plays atomically.
                 ( model
-                , Cmd.batch
-                    [ Ports.websocketSend
-                        (encodeSetPatchParam patchName param val)
-                    , if Set.member patchName model.playOnChange then
-                        Ports.websocketSend (encodePlayPatch patchName)
+                , if Set.member patchName model.playOnChange then
+                    Ports.websocketSend
+                        (encodeSetPatchParamAndPlay patchName param val)
 
-                      else
-                        Cmd.none
-                    ]
+                  else
+                    Ports.websocketSend
+                        (encodeSetPatchParam patchName param val)
                 )
 
             else

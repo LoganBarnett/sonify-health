@@ -315,9 +315,51 @@ fn handle_client_message(
       None
     }
 
-    "play_patch" => {
-      let name = msg.get("patch_name").and_then(|v| v.as_str())?;
-      preview.play_patch_immediate(name);
+    // Atomic "update and preview" used by play-on-change.  This
+    // exists as a dedicated message instead of a `set_patch_param`
+    // + `play_patch` batch because Elm's `Cmd.batch` reverses port
+    // send order (`_List_Cons` prepends into the effects list in
+    // elm.js), which would cause the play event to fire against
+    // the previous library state — a stale-read off-by-one that
+    // makes each audition sound like the previous setting.  By
+    // landing both mutation and playback on the same handler
+    // invocation we're immune to the front-end's batch ordering.
+    "set_patch_param_and_play" => {
+      let patch_name = msg.get("patch_name").and_then(|v| v.as_str())?;
+      let param = msg.get("param").and_then(|v| v.as_str())?;
+      let value = msg.get("value").and_then(|v| v.as_f64())?;
+      {
+        let mut lib = preview.library.write().unwrap_or_recover();
+        let patch = lib.get_mut(patch_name)?;
+        if !patch.set_param(param, value) {
+          return None;
+        }
+      }
+      let _ = preview.broadcast_tx.send(
+        json!({
+          "type": "patch_param_changed",
+          "patch_name": patch_name,
+          "param": param,
+          "value": value,
+        })
+        .to_string(),
+      );
+
+      {
+        let mut ovr = preview.overrides.write().unwrap_or_recover();
+        if let Some(info) = ovr.get_mut(patch_name) {
+          info.delta.insert(param.to_string(), value);
+        }
+      }
+
+      propagate_base_change(preview, patch_name, param, value);
+
+      broadcast_library(preview);
+      broadcast_overrides(preview);
+
+      // Playback runs last so it sees the fully-applied library
+      // state (including base-patch propagation above).
+      preview.play_patch_immediate(patch_name);
       None
     }
 
@@ -985,5 +1027,206 @@ fn parse_import(text: &str) -> Result<Vec<(String, Patch)>, String> {
     let map: std::collections::HashMap<String, Patch> =
       toml::from_str(trimmed).map_err(|e| format!("TOML parse error: {e}"))?;
     Ok(map.into_iter().collect())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::config::SliderRanges;
+  use crate::metrics::Metrics;
+  use sonify_health_lib::builtin_library;
+  use std::collections::HashMap;
+  use std::sync::atomic::AtomicBool;
+
+  fn test_preview() -> Arc<PreviewState> {
+    Arc::new(PreviewState::new(
+      builtin_library(),
+      HashMap::new(),
+      vec![],
+      Arc::new(AtomicBool::new(false)),
+      Arc::new(AtomicBool::new(true)),
+      Metrics::new(),
+      SliderRanges::default(),
+      None,
+      false,
+    ))
+  }
+
+  fn get_param(preview: &PreviewState, patch: &str, param: &str) -> f64 {
+    preview
+      .library
+      .read()
+      .unwrap()
+      .get(patch)
+      .unwrap()
+      .get_param(param)
+      .unwrap()
+  }
+
+  /// `set_patch_param_and_play` must apply the param change to the
+  /// library before returning.  This is the core property that the
+  /// atomic handler exists to guarantee — see the comment on the
+  /// handler itself for the Elm `Cmd.batch` ordering quirk that
+  /// makes a two-message flow unsafe.
+  #[test]
+  fn atomic_handler_applies_param_change() {
+    let preview = test_preview();
+    let original = get_param(&preview, "sine", "freq");
+    let new_val = original + 123.0;
+
+    let msg = json!({
+      "type": "set_patch_param_and_play",
+      "patch_name": "sine",
+      "param": "freq",
+      "value": new_val,
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(
+      get_param(&preview, "sine", "freq"),
+      new_val,
+      "library must reflect the new value after the atomic handler \
+       returns; any later `play_patch_immediate` read is guaranteed \
+       to see it"
+    );
+  }
+
+  /// The plain `set_patch_param` handler must keep working —
+  /// play-off-change (checkbox unchecked) routes through it.
+  #[test]
+  fn plain_handler_applies_param_change() {
+    let preview = test_preview();
+    let new_val = get_param(&preview, "sine", "freq") + 50.0;
+
+    let msg = json!({
+      "type": "set_patch_param",
+      "patch_name": "sine",
+      "param": "freq",
+      "value": new_val,
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(get_param(&preview, "sine", "freq"), new_val);
+  }
+
+  /// A `set_patch_param_and_play` targeting an unknown patch must
+  /// leave the library untouched and not panic.
+  #[test]
+  fn atomic_handler_unknown_patch_is_noop() {
+    let preview = test_preview();
+    let before_sine = get_param(&preview, "sine", "freq");
+
+    let msg = json!({
+      "type": "set_patch_param_and_play",
+      "patch_name": "no-such-patch",
+      "param": "freq",
+      "value": 999.0,
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(
+      get_param(&preview, "sine", "freq"),
+      before_sine,
+      "unrelated patches must be unaffected"
+    );
+  }
+
+  /// Changing a base patch's param via the atomic handler must
+  /// propagate to override patches that have not overridden that
+  /// specific param.  Regression guard: the atomic handler calls
+  /// `propagate_base_change` exactly like `set_patch_param`, so
+  /// overrides that inherit (empty delta for this param) should
+  /// pick up the change.
+  #[test]
+  fn atomic_handler_propagates_to_dependent_overrides() {
+    let preview = test_preview();
+
+    // Create an override of "sine" with an empty delta so "freq"
+    // is inherited from the base.
+    {
+      let mut lib = preview.library.write().unwrap();
+      let base = lib.get("sine").cloned().unwrap();
+      lib.insert("sine-copy".to_string(), base);
+    }
+    {
+      let mut ovr = preview.overrides.write().unwrap();
+      ovr.insert(
+        "sine-copy".to_string(),
+        OverrideInfo {
+          base: "sine".to_string(),
+          delta: HashMap::new(),
+        },
+      );
+    }
+
+    let new_val = get_param(&preview, "sine", "freq") + 77.0;
+    let msg = json!({
+      "type": "set_patch_param_and_play",
+      "patch_name": "sine",
+      "param": "freq",
+      "value": new_val,
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(get_param(&preview, "sine", "freq"), new_val);
+    assert_eq!(
+      get_param(&preview, "sine-copy", "freq"),
+      new_val,
+      "inherited param on override patch must follow the base change"
+    );
+  }
+
+  /// An override patch's own delta must win over a base change.
+  /// If the override has explicitly set `freq`, a base change to
+  /// `freq` must not clobber it.
+  #[test]
+  fn atomic_handler_respects_override_delta() {
+    let preview = test_preview();
+
+    {
+      let mut lib = preview.library.write().unwrap();
+      let mut copy = lib.get("sine").cloned().unwrap();
+      copy.set_param("freq", 1234.0);
+      lib.insert("sine-copy".to_string(), copy);
+    }
+    {
+      let mut ovr = preview.overrides.write().unwrap();
+      let mut delta = HashMap::new();
+      delta.insert("freq".to_string(), 1234.0);
+      ovr.insert(
+        "sine-copy".to_string(),
+        OverrideInfo {
+          base: "sine".to_string(),
+          delta,
+        },
+      );
+    }
+
+    let msg = json!({
+      "type": "set_patch_param_and_play",
+      "patch_name": "sine",
+      "param": "freq",
+      "value": 9999.0,
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(get_param(&preview, "sine", "freq"), 9999.0);
+    assert_eq!(
+      get_param(&preview, "sine-copy", "freq"),
+      1234.0,
+      "override with explicit delta for this param must not be \
+       clobbered by a base-patch change"
+    );
   }
 }
