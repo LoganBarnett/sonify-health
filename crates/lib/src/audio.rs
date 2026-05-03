@@ -213,6 +213,28 @@ struct MixerSlot {
   right: Vec<f32>,
   /// Previous graph being crossfaded out after a `replace()`.
   prev: Option<CrossfadeState>,
+  /// Set by `remove()` to schedule this slot for deletion once its
+  /// fadeout crossfade (in `prev`) has fully drained.  The audio
+  /// callback is the only component that knows when the fadeout
+  /// has finished, so it is the only place the slot can safely be
+  /// set back to `None`.
+  ///
+  /// Why this flag exists:  `remove()` cannot null the slot
+  /// synchronously because it routes through `replace()` with a
+  /// silent graph to suppress clicks from residual filter energy
+  /// (for example, Moog-ladder DC at certain frequencies — see
+  /// commit 52805b7).  Cutting the slot to `None` before the
+  /// fadeout finishes would defeat that click suppression.
+  ///
+  /// Without this flag, `remove()` would leak the slot: the Vec
+  /// position stays `Some(silent_slot)` forever, `add()` appends
+  /// new slots (it only reuses `None` positions), and the slot
+  /// count grows without bound.  Every audio callback then
+  /// iterates every leaked slot and calls `adapter.process_big`
+  /// on a silence graph, which over hours of add/remove churn
+  /// pushes callback latency past the buffer budget and produces
+  /// audible stutter.
+  pending_removal: bool,
 }
 
 struct MixerInner {
@@ -295,98 +317,124 @@ fn mixer_callback(
 
     for (slot_idx, opt) in slots.iter_mut().enumerate() {
       let Some(slot) = opt else { continue };
-      slot.left.resize(frames, 0.0);
-      slot.right.resize(frames, 0.0);
-      slot.adapter.process_big(
-        frames,
-        &[],
-        &mut [&mut slot.left, &mut slot.right],
-      );
 
-      // Guard against NaN/Inf from any graph — a single
-      // non-finite sample would corrupt the entire summed
-      // output and macOS renders NaN as silence.
-      let finite = slot
-        .left
-        .iter()
-        .chain(slot.right.iter())
-        .all(|s| s.is_finite());
-      if !finite {
-        inner.nan_frames.fetch_add(1, Ordering::Relaxed);
-        continue;
-      }
-
-      if slot_idx < MAX_MIXER_SLOTS {
-        let peak = slot
-          .left
-          .iter()
-          .chain(slot.right.iter())
-          .fold(0.0f32, |acc, &s| acc.max(s.abs()));
-        inner.slot_peaks[slot_idx].fetch_max(peak.to_bits(), Ordering::Relaxed);
-
-        let sum_sq: f32 = slot
-          .left
-          .iter()
-          .chain(slot.right.iter())
-          .map(|s| s * s)
-          .sum();
-        let rms = (sum_sq / (2 * frames) as f32).sqrt();
-        inner.slot_rms[slot_idx].fetch_max(rms.to_bits(), Ordering::Relaxed);
-      }
-
-      // Hard-clamp per-slot samples to [-1, 1].  This prevents a
-      // blown-up IIR filter (e.g. Moog ladder drift) from producing
-      // ear-damaging output even though the root cause persists until
-      // the graph is rebuilt.
-      for s in slot.left.iter_mut().chain(slot.right.iter_mut()) {
-        *s = s.clamp(-1.0, 1.0);
-      }
-
-      // Crossfade: blend the previous graph out while the new
-      // graph fades in over CROSSFADE_FRAMES.
-      if let Some(prev) = slot.prev.as_mut() {
-        prev.left.resize(frames, 0.0);
-        prev.right.resize(frames, 0.0);
-        prev.adapter.process_big(
+      // Wrap the per-slot audio processing in a labeled block so
+      // that an early exit from NaN detection still falls through
+      // to the `pending_removal` cleanup below.  Using `continue`
+      // would skip that cleanup and could strand a remove-scheduled
+      // slot forever if its (silent) graph went non-finite.
+      'process: {
+        slot.left.resize(frames, 0.0);
+        slot.right.resize(frames, 0.0);
+        slot.adapter.process_big(
           frames,
           &[],
-          &mut [&mut prev.left, &mut prev.right],
+          &mut [&mut slot.left, &mut slot.right],
         );
 
-        let prev_finite = prev
+        // Guard against NaN/Inf from any graph — a single
+        // non-finite sample would corrupt the entire summed
+        // output and macOS renders NaN as silence.
+        let finite = slot
           .left
           .iter()
-          .chain(prev.right.iter())
+          .chain(slot.right.iter())
           .all(|s| s.is_finite());
-
-        for (i, frame) in data.chunks_mut(channels).enumerate() {
-          // fade ramps from 1→0 over the crossfade window;
-          // once remaining_frames hits 0 we output 100% new.
-          let fade = if prev.remaining_frames > 0 {
-            prev.remaining_frames -= 1;
-            prev.remaining_frames as f32 / prev.total_frames as f32
-          } else {
-            0.0
-          };
-          let new_gain = 1.0 - fade;
-          let old_l = if prev_finite { prev.left[i] } else { 0.0 };
-          let old_r = if prev_finite { prev.right[i] } else { 0.0 };
-          frame[0] += slot.left[i] * new_gain + old_l * fade;
-          if channels > 1 {
-            frame[1] += slot.right[i] * new_gain + old_r * fade;
-          }
+        if !finite {
+          inner.nan_frames.fetch_add(1, Ordering::Relaxed);
+          break 'process;
         }
 
-        if prev.remaining_frames == 0 {
-          slot.prev = None;
+        if slot_idx < MAX_MIXER_SLOTS {
+          let peak = slot
+            .left
+            .iter()
+            .chain(slot.right.iter())
+            .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+          inner.slot_peaks[slot_idx]
+            .fetch_max(peak.to_bits(), Ordering::Relaxed);
+
+          let sum_sq: f32 = slot
+            .left
+            .iter()
+            .chain(slot.right.iter())
+            .map(|s| s * s)
+            .sum();
+          let rms = (sum_sq / (2 * frames) as f32).sqrt();
+          inner.slot_rms[slot_idx].fetch_max(rms.to_bits(), Ordering::Relaxed);
         }
-      } else {
-        for (i, frame) in data.chunks_mut(channels).enumerate() {
-          frame[0] += slot.left[i];
-          if channels > 1 {
-            frame[1] += slot.right[i];
+
+        // Hard-clamp per-slot samples to [-1, 1].  This prevents a
+        // blown-up IIR filter (e.g. Moog ladder drift) from
+        // producing ear-damaging output even though the root cause
+        // persists until the graph is rebuilt.
+        for s in slot.left.iter_mut().chain(slot.right.iter_mut()) {
+          *s = s.clamp(-1.0, 1.0);
+        }
+
+        // Crossfade: blend the previous graph out while the new
+        // graph fades in over CROSSFADE_FRAMES.
+        if let Some(prev) = slot.prev.as_mut() {
+          prev.left.resize(frames, 0.0);
+          prev.right.resize(frames, 0.0);
+          prev.adapter.process_big(
+            frames,
+            &[],
+            &mut [&mut prev.left, &mut prev.right],
+          );
+
+          let prev_finite = prev
+            .left
+            .iter()
+            .chain(prev.right.iter())
+            .all(|s| s.is_finite());
+
+          for (i, frame) in data.chunks_mut(channels).enumerate() {
+            // fade ramps from 1→0 over the crossfade window;
+            // once remaining_frames hits 0 we output 100% new.
+            let fade = if prev.remaining_frames > 0 {
+              prev.remaining_frames -= 1;
+              prev.remaining_frames as f32 / prev.total_frames as f32
+            } else {
+              0.0
+            };
+            let new_gain = 1.0 - fade;
+            let old_l = if prev_finite { prev.left[i] } else { 0.0 };
+            let old_r = if prev_finite { prev.right[i] } else { 0.0 };
+            frame[0] += slot.left[i] * new_gain + old_l * fade;
+            if channels > 1 {
+              frame[1] += slot.right[i] * new_gain + old_r * fade;
+            }
+          }
+
+          if prev.remaining_frames == 0 {
+            slot.prev = None;
+          }
+        } else {
+          for (i, frame) in data.chunks_mut(channels).enumerate() {
+            frame[0] += slot.left[i];
+            if channels > 1 {
+              frame[1] += slot.right[i];
+            }
           }
         }
+      }
+
+      // Finalize `remove()` once the fadeout crossfade has drained.
+      // This is the ONLY place a slot transitions back to `None`
+      // after being populated by `add()`/`replace()`.  Nulling it
+      // here (rather than in `remove()` itself) is what prevents
+      // the slot leak described on `MixerSlot::pending_removal`:
+      // `remove()` cannot do it synchronously because doing so
+      // would cut off the click-suppression fadeout, and only the
+      // audio callback observes when that fadeout finishes.
+      //
+      // Computing the boolean first is deliberate — it ends the
+      // `slot` borrow so the borrow checker (NLL) will let us
+      // write back through `opt` on the next line.
+      let ready_to_drop = slot.pending_removal && slot.prev.is_none();
+      if ready_to_drop {
+        *opt = None;
       }
     }
 
@@ -492,6 +540,7 @@ impl AudioMixer {
       left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
       right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
       prev: None,
+      pending_removal: false,
     };
 
     let mut slots = self.inner.slots.lock().unwrap();
@@ -525,10 +574,24 @@ impl AudioMixer {
   /// `REMOVE_FADEOUT_FRAMES` to avoid clicks from residual filter
   /// energy (e.g. Moog ladder DC at certain frequencies).
   pub fn remove(&self, id: usize) {
-    // Replace with silence and crossfade the old graph out.
+    // Replace with silence and crossfade the old graph out.  The
+    // fadeout suppresses clicks from residual filter energy; see
+    // `REMOVE_FADEOUT_FRAMES` and commit 52805b7.
     let silence: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
     self.replace(id, silence, REMOVE_FADEOUT_FRAMES);
-    let slots = self.inner.slots.lock().unwrap();
+
+    // Flag the slot so the audio callback nulls it out after the
+    // fadeout drains.  This MUST happen after `replace()` because
+    // `replace()` reconstructs the slot with `pending_removal:
+    // false`; setting the flag here is what converts the fadeout
+    // crossfade into an actual deletion.  Without this, `add()`
+    // would append instead of reusing the position and the slot
+    // count would grow unbounded over time — see the doc on
+    // `MixerSlot::pending_removal`.
+    let mut slots = self.inner.slots.lock().unwrap();
+    if let Some(Some(slot)) = slots.get_mut(id) {
+      slot.pending_removal = true;
+    }
     let active = slots.iter().filter(|s| s.is_some()).count();
     tracing::info!(
       id,
@@ -556,6 +619,11 @@ impl AudioMixer {
     let mut slots = self.inner.slots.lock().unwrap();
     if id < slots.len() {
       if let Some(old_slot) = slots[id].take() {
+        // `pending_removal` is intentionally reset to false here:
+        // a fresh `replace()` with a new graph cancels any prior
+        // removal request, since the new graph is meant to keep
+        // playing after the crossfade.  `remove()` re-sets it
+        // after calling us.
         slots[id] = Some(MixerSlot {
           adapter: new_adapter,
           left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
@@ -567,6 +635,7 @@ impl AudioMixer {
             remaining_frames: frames,
             total_frames: frames,
           }),
+          pending_removal: false,
         });
       } else {
         slots[id] = Some(MixerSlot {
@@ -574,6 +643,7 @@ impl AudioMixer {
           left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
           right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
           prev: None,
+          pending_removal: false,
         });
       }
     } else {
@@ -583,6 +653,7 @@ impl AudioMixer {
         left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
         right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
         prev: None,
+        pending_removal: false,
       });
     }
   }
@@ -738,6 +809,7 @@ impl MixerHandle {
       left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
       right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
       prev: None,
+      pending_removal: false,
     };
 
     let mut slots = self.inner.slots.lock().unwrap();
@@ -765,7 +837,16 @@ impl MixerHandle {
   pub fn remove(&self, id: usize) {
     let silence: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
     self.replace(id, silence, REMOVE_FADEOUT_FRAMES);
-    let slots = self.inner.slots.lock().unwrap();
+
+    // Flag the slot for cleanup by the audio callback once the
+    // fadeout drains.  See `AudioMixer::remove` and
+    // `MixerSlot::pending_removal` for the full rationale; in
+    // short, `replace()` reconstructs the slot with the flag clear,
+    // so the flag must be set here after the replacement.
+    let mut slots = self.inner.slots.lock().unwrap();
+    if let Some(Some(slot)) = slots.get_mut(id) {
+      slot.pending_removal = true;
+    }
     let active = slots.iter().filter(|s| s.is_some()).count();
     tracing::info!(id, active, "MixerHandle: slot removed (fadeout)");
   }
@@ -786,6 +867,9 @@ impl MixerHandle {
     let mut slots = self.inner.slots.lock().unwrap();
     if id < slots.len() {
       if let Some(old_slot) = slots[id].take() {
+        // `pending_removal` is intentionally reset to false here;
+        // a replacement with a new graph cancels any prior removal
+        // intent.  `remove()` re-sets it after calling us.
         slots[id] = Some(MixerSlot {
           adapter: new_adapter,
           left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
@@ -797,6 +881,7 @@ impl MixerHandle {
             remaining_frames: frames,
             total_frames: frames,
           }),
+          pending_removal: false,
         });
       } else {
         slots[id] = Some(MixerSlot {
@@ -804,6 +889,7 @@ impl MixerHandle {
           left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
           right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
           prev: None,
+          pending_removal: false,
         });
       }
     } else {
@@ -813,6 +899,7 @@ impl MixerHandle {
         left: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
         right: Vec::with_capacity(MIXER_BUFFER_FRAMES as usize),
         prev: None,
+        pending_removal: false,
       });
     }
   }
@@ -1083,6 +1170,7 @@ mod tests {
         left: Vec::with_capacity(frames),
         right: Vec::with_capacity(frames),
         prev: None,
+        pending_removal: false,
       }));
     }
 
@@ -1121,6 +1209,7 @@ mod tests {
         left: Vec::with_capacity(frames),
         right: Vec::with_capacity(frames),
         prev: None,
+        pending_removal: false,
       }));
       slots.push(None); // slot 1 is empty
     }
@@ -1190,6 +1279,7 @@ mod tests {
         left: Vec::with_capacity(frames),
         right: Vec::with_capacity(frames),
         prev: None,
+        pending_removal: false,
       }));
     }
 
@@ -1238,6 +1328,7 @@ mod tests {
         left: Vec::with_capacity(frames),
         right: Vec::with_capacity(frames),
         prev: None,
+        pending_removal: false,
       }));
     }
 
@@ -1339,6 +1430,146 @@ mod tests {
     );
     assert!(
       inner.stream_errors.load(Ordering::Relaxed) >= STREAM_ERROR_THRESHOLD,
+    );
+  }
+
+  /// A slot marked `pending_removal` must be nulled out by the
+  /// audio callback once its fadeout crossfade has drained.  This
+  /// is the invariant that keeps the slot Vec from growing without
+  /// bound across hours of add/remove churn; regressions here
+  /// would reintroduce the stutter-under-fatigue bug we fixed
+  /// when adding `pending_removal`.
+  #[test]
+  fn callback_clears_slot_after_pending_removal_fadeout() {
+    let inner = Arc::new(test_inner());
+    let channels = 2;
+    let frames = 256;
+
+    // Construct a slot in exactly the state `remove()` leaves
+    // behind: silent "new" adapter plus a short fadeout crossfade
+    // in `prev`, and `pending_removal` set.  `remaining_frames =
+    // 1` guarantees the fadeout drains within this single
+    // callback (every frame decrements it, saturating at zero).
+    let mut new_graph: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
+    new_graph.set_sample_rate(44100.0);
+    new_graph.allocate();
+    let mut prev_graph: Box<dyn AudioUnit> =
+      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+    prev_graph.set_sample_rate(44100.0);
+    prev_graph.allocate();
+    {
+      let mut slots = inner.slots.lock().unwrap();
+      slots.push(Some(MixerSlot {
+        adapter: BigBlockAdapter::new(new_graph),
+        left: Vec::with_capacity(frames),
+        right: Vec::with_capacity(frames),
+        prev: Some(CrossfadeState {
+          adapter: BigBlockAdapter::new(prev_graph),
+          left: Vec::with_capacity(frames),
+          right: Vec::with_capacity(frames),
+          remaining_frames: 1,
+          total_frames: 128,
+        }),
+        pending_removal: true,
+      }));
+    }
+
+    let mut cb = mixer_callback(Arc::clone(&inner), channels);
+    let mut data = vec![0.0f32; frames * channels];
+    cb(&mut data, &dummy_callback_info());
+
+    let slots = inner.slots.lock().unwrap();
+    assert!(
+      slots[0].is_none(),
+      "slot 0 should be None after the pending_removal fadeout \
+       drains; leaving it Some(silent_slot) is the leak that \
+       causes callback latency to grow over hours"
+    );
+  }
+
+  /// A slot marked `pending_removal` whose fadeout has not yet
+  /// drained must NOT be cleared — doing so would cut off the
+  /// click-suppression fadeout and reintroduce pops on removal.
+  #[test]
+  fn callback_preserves_slot_while_fadeout_still_running() {
+    let inner = Arc::new(test_inner());
+    let channels = 2;
+    let frames = 64;
+
+    // Fadeout window longer than a single callback buffer so
+    // `prev.remaining_frames` stays non-zero after one call.
+    let mut new_graph: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
+    new_graph.set_sample_rate(44100.0);
+    new_graph.allocate();
+    let mut prev_graph: Box<dyn AudioUnit> =
+      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+    prev_graph.set_sample_rate(44100.0);
+    prev_graph.allocate();
+    {
+      let mut slots = inner.slots.lock().unwrap();
+      slots.push(Some(MixerSlot {
+        adapter: BigBlockAdapter::new(new_graph),
+        left: Vec::with_capacity(frames),
+        right: Vec::with_capacity(frames),
+        prev: Some(CrossfadeState {
+          adapter: BigBlockAdapter::new(prev_graph),
+          left: Vec::with_capacity(frames),
+          right: Vec::with_capacity(frames),
+          remaining_frames: 128,
+          total_frames: 128,
+        }),
+        pending_removal: true,
+      }));
+    }
+
+    let mut cb = mixer_callback(Arc::clone(&inner), channels);
+    let mut data = vec![0.0f32; frames * channels];
+    cb(&mut data, &dummy_callback_info());
+
+    let slots = inner.slots.lock().unwrap();
+    assert!(
+      slots[0].is_some(),
+      "slot 0 must survive while its fadeout is still draining"
+    );
+    let slot = slots[0].as_ref().unwrap();
+    assert!(
+      slot.prev.is_some(),
+      "prev should still carry the remainder of the fadeout"
+    );
+    assert!(
+      slot.pending_removal,
+      "pending_removal flag must persist across callbacks until the fadeout ends"
+    );
+  }
+
+  /// After a full `remove()` cycle (replace-with-silence +
+  /// pending_removal + enough callbacks to drain the fadeout), a
+  /// subsequent `add()` must reuse the freed slot position rather
+  /// than appending.  This is the end-to-end property that keeps
+  /// the slot Vec bounded.  Skipped if no audio device available.
+  #[test]
+  fn add_reuses_slot_after_remove_fadeout_drains() {
+    let mixer = match AudioMixer::new(None) {
+      Ok(m) => m,
+      Err(_) => {
+        eprintln!("No audio device available, skipping test");
+        return;
+      }
+    };
+
+    let first = mixer.add(Box::new(sine_hz(440.0) * 0.5 >> pan(0.0)));
+    mixer.remove(first);
+
+    // The fadeout lasts REMOVE_FADEOUT_FRAMES frames; at the
+    // default sample rate that's well under 100 ms.  Sleep
+    // generously so the audio callback has definitely observed
+    // prev.remaining_frames == 0 and cleared the slot.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let second = mixer.add(Box::new(sine_hz(660.0) * 0.5 >> pan(0.0)));
+    assert_eq!(
+      first, second,
+      "add() should reuse the freed slot position after remove() drains"
     );
   }
 }
