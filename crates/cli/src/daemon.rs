@@ -140,6 +140,10 @@ pub fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
 /// Everything the daemon thread needs from main.
 pub struct DaemonContext<'a> {
   pub audio_device: Option<&'a str>,
+  /// When true, the daemon does not open an audio device and does
+  /// not spawn play threads.  Poll threads, supervision, and the
+  /// rest of the run-loop continue normally.
+  pub headless: bool,
   pub preview: Arc<PreviewState>,
 }
 
@@ -150,11 +154,21 @@ pub struct DaemonContext<'a> {
 pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   let DaemonContext {
     audio_device,
+    headless,
     preview,
   } = ctx;
 
-  let mut mixer = AudioMixer::new(audio_device)?;
-  preview.set_mixer_handle(mixer.handle());
+  // Headless instances skip the audio device entirely.  The mixer,
+  // play threads, audio recovery, and audio health logging are all
+  // gated on this `Option`; everything else (pollers, supervision,
+  // the WebSocket-driven mute/volume hooks) runs unconditionally.
+  let mut mixer = if headless {
+    None
+  } else {
+    let m = AudioMixer::new(audio_device)?;
+    preview.set_mixer_handle(m.handle());
+    Some(m)
+  };
 
   let mut supervised: Vec<SupervisedThread> = Vec::new();
   let mut total_heartbeats = 0usize;
@@ -169,7 +183,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     total_heartbeats += hb_count;
     for hb_idx in 0..hb_count {
       let poll_h = spawn_poll_thread(&preview, source_idx, hb_idx);
-      let play_h = spawn_play_thread(&preview, source_idx, hb_idx);
       supervised.push(SupervisedThread::new(
         poll_h,
         source_idx,
@@ -177,19 +190,23 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         hb_idx,
         ThreadRole::Poll,
       ));
-      supervised.push(SupervisedThread::new(
-        play_h,
-        source_idx,
-        source.name.clone(),
-        hb_idx,
-        ThreadRole::Play,
-      ));
+      if !headless {
+        let play_h = spawn_play_thread(&preview, source_idx, hb_idx);
+        supervised.push(SupervisedThread::new(
+          play_h,
+          source_idx,
+          source.name.clone(),
+          hb_idx,
+          ThreadRole::Play,
+        ));
+      }
     }
   }
 
   info!(
     sources = preview.sources.len(),
     heartbeats = total_heartbeats,
+    headless,
     "Daemon started"
   );
 
@@ -294,7 +311,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             }
           }
         }
-        mixer.clear();
+        if let Some(m) = mixer.as_mut() {
+          m.clear();
+        }
         return Err(DaemonError::ThreadBudgetExhausted {
           source_name,
           heartbeat,
@@ -303,134 +322,141 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       }
 
       // -- Stream recovery: if the audio stream has failed, attempt
-      //    to rebuild it with exponential backoff.
-      if mixer.stream_failed() {
-        let should_try = match next_recovery_at {
-          Some(t) => Instant::now() >= t,
-          None => true,
-        };
-        if should_try {
-          recovery_attempts += 1;
-          preview
-            .metrics
-            .audio_recovery_attempts
-            .set(recovery_attempts as i64);
-          match mixer.try_recover() {
-            Ok(()) => {
-              info!(
-                attempts = recovery_attempts,
-                "Audio stream recovered successfully"
-              );
-              recovery_backoff = Duration::from_secs(1);
-              next_recovery_at = None;
-            }
-            Err(e) => {
-              let next = Instant::now() + recovery_backoff;
-              error!(
-                error = %e,
-                next_retry_secs = recovery_backoff.as_secs(),
-                attempts = recovery_attempts,
-                "Audio stream recovery failed"
-              );
-              recovery_backoff =
-                (recovery_backoff * 2).min(MAX_RECOVERY_BACKOFF);
-              next_recovery_at = Some(next);
+      //    to rebuild it with exponential backoff.  Skipped entirely
+      //    in headless mode (no mixer to recover).
+      if let Some(mixer) = mixer.as_mut() {
+        if mixer.stream_failed() {
+          let should_try = match next_recovery_at {
+            Some(t) => Instant::now() >= t,
+            None => true,
+          };
+          if should_try {
+            recovery_attempts += 1;
+            preview
+              .metrics
+              .audio_recovery_attempts
+              .set(recovery_attempts as i64);
+            match mixer.try_recover() {
+              Ok(()) => {
+                info!(
+                  attempts = recovery_attempts,
+                  "Audio stream recovered successfully"
+                );
+                recovery_backoff = Duration::from_secs(1);
+                next_recovery_at = None;
+              }
+              Err(e) => {
+                let next = Instant::now() + recovery_backoff;
+                error!(
+                  error = %e,
+                  next_retry_secs = recovery_backoff.as_secs(),
+                  attempts = recovery_attempts,
+                  "Audio stream recovery failed"
+                );
+                recovery_backoff =
+                  (recovery_backoff * 2).min(MAX_RECOVERY_BACKOFF);
+                next_recovery_at = Some(next);
+              }
             }
           }
         }
       }
     }
 
-    // -- Health logging (~every 30 s).
+    // -- Health logging (~every 30 s).  Skipped in headless mode —
+    //    no mixer means no audio metrics to publish.
     if tick > 0 && tick.is_multiple_of(HEALTH_LOG_INTERVAL) {
-      let lock_fail = mixer.lock_failures();
-      let nan = mixer.nan_frames();
-      let peak_us = mixer.peak_callback_us();
-      let stream_errs = mixer.stream_errors();
-      let stream_fail = mixer.stream_failed();
+      if let Some(mixer) = mixer.as_mut() {
+        let lock_fail = mixer.lock_failures();
+        let nan = mixer.nan_frames();
+        let peak_us = mixer.peak_callback_us();
+        let stream_errs = mixer.stream_errors();
+        let stream_fail = mixer.stream_failed();
 
-      let out_peak = mixer.output_peak_amplitude();
-      let slot_peaks = mixer.slot_peak_amplitudes();
-      let slot_rms = mixer.slot_rms_amplitudes();
-      let (buf_min, buf_max) = mixer.callback_buffer_range();
-      mixer.reset_amplitude_stats();
+        let out_peak = mixer.output_peak_amplitude();
+        let slot_peaks = mixer.slot_peak_amplitudes();
+        let slot_rms = mixer.slot_rms_amplitudes();
+        let (buf_min, buf_max) = mixer.callback_buffer_range();
+        mixer.reset_amplitude_stats();
 
-      preview.metrics.audio_lock_failures.set(lock_fail as i64);
-      preview.metrics.audio_nan_frames.set(nan as i64);
-      preview.metrics.audio_peak_callback_us.set(peak_us as i64);
-      preview.metrics.audio_stream_errors.set(stream_errs as i64);
-      preview
-        .metrics
-        .audio_stream_failed
-        .set(i64::from(stream_fail));
-      mixer.reset_peak_callback_us();
-
-      preview
-        .metrics
-        .audio_output_peak_amplitude
-        .set(out_peak as f64);
-      for i in 0..MAX_MIXER_SLOTS {
-        let label = i.to_string();
+        preview.metrics.audio_lock_failures.set(lock_fail as i64);
+        preview.metrics.audio_nan_frames.set(nan as i64);
+        preview.metrics.audio_peak_callback_us.set(peak_us as i64);
+        preview.metrics.audio_stream_errors.set(stream_errs as i64);
         preview
           .metrics
-          .audio_slot_peak_amplitude
-          .with_label_values(&[&label])
-          .set(slot_peaks[i] as f64);
+          .audio_stream_failed
+          .set(i64::from(stream_fail));
+        mixer.reset_peak_callback_us();
+
         preview
           .metrics
-          .audio_slot_rms_amplitude
-          .with_label_values(&[&label])
-          .set(slot_rms[i] as f64);
-      }
-      preview.metrics.audio_callback_buffer_frames_min.set(
-        if buf_min == u32::MAX {
-          0
+          .audio_output_peak_amplitude
+          .set(out_peak as f64);
+        for i in 0..MAX_MIXER_SLOTS {
+          let label = i.to_string();
+          preview
+            .metrics
+            .audio_slot_peak_amplitude
+            .with_label_values(&[&label])
+            .set(slot_peaks[i] as f64);
+          preview
+            .metrics
+            .audio_slot_rms_amplitude
+            .with_label_values(&[&label])
+            .set(slot_rms[i] as f64);
+        }
+        preview.metrics.audio_callback_buffer_frames_min.set(
+          if buf_min == u32::MAX {
+            0
+          } else {
+            buf_min as i64
+          },
+        );
+        preview
+          .metrics
+          .audio_callback_buffer_frames_max
+          .set(buf_max as i64);
+
+        // Format non-zero slot amplitudes as "0:0.123/0.089 1:0.456/0.234".
+        let slot_amplitudes: String = (0..MAX_MIXER_SLOTS)
+          .filter(|&i| slot_peaks[i] > 0.0)
+          .map(|i| format!("{}:{:.4}/{:.4}", i, slot_peaks[i], slot_rms[i]))
+          .collect::<Vec<_>>()
+          .join(" ");
+
+        let clipping = out_peak > 1.0;
+        let period_renego =
+          buf_min != buf_max && buf_min != u32::MAX && buf_max != 0;
+
+        if lock_fail > 0 || nan > 0 || stream_fail || clipping || period_renego
+        {
+          warn!(
+            lock_failures = lock_fail,
+            nan_frames = nan,
+            peak_callback_us = peak_us,
+            stream_errors = stream_errs,
+            stream_failed = stream_fail,
+            output_peak = out_peak,
+            slot_amplitudes = slot_amplitudes.as_str(),
+            callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
+            callback_buffer_max = buf_max,
+            "Audio health"
+          );
         } else {
-          buf_min as i64
-        },
-      );
-      preview
-        .metrics
-        .audio_callback_buffer_frames_max
-        .set(buf_max as i64);
-
-      // Format non-zero slot amplitudes as "0:0.123/0.089 1:0.456/0.234".
-      let slot_amplitudes: String = (0..MAX_MIXER_SLOTS)
-        .filter(|&i| slot_peaks[i] > 0.0)
-        .map(|i| format!("{}:{:.4}/{:.4}", i, slot_peaks[i], slot_rms[i]))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-      let clipping = out_peak > 1.0;
-      let period_renego =
-        buf_min != buf_max && buf_min != u32::MAX && buf_max != 0;
-
-      if lock_fail > 0 || nan > 0 || stream_fail || clipping || period_renego {
-        warn!(
-          lock_failures = lock_fail,
-          nan_frames = nan,
-          peak_callback_us = peak_us,
-          stream_errors = stream_errs,
-          stream_failed = stream_fail,
-          output_peak = out_peak,
-          slot_amplitudes = slot_amplitudes.as_str(),
-          callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
-          callback_buffer_max = buf_max,
-          "Audio health"
-        );
-      } else {
-        debug!(
-          lock_failures = lock_fail,
-          nan_frames = nan,
-          peak_callback_us = peak_us,
-          stream_errors = stream_errs,
-          stream_failed = stream_fail,
-          output_peak = out_peak,
-          slot_amplitudes = slot_amplitudes.as_str(),
-          callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
-          callback_buffer_max = buf_max,
-          "Audio health"
-        );
+          debug!(
+            lock_failures = lock_fail,
+            nan_frames = nan,
+            peak_callback_us = peak_us,
+            stream_errors = stream_errs,
+            stream_failed = stream_fail,
+            output_peak = out_peak,
+            slot_amplitudes = slot_amplitudes.as_str(),
+            callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
+            callback_buffer_max = buf_max,
+            "Audio health"
+          );
+        }
       }
     }
 
@@ -456,7 +482,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       }
     }
   }
-  mixer.clear();
+  if let Some(mixer) = mixer.as_mut() {
+    mixer.clear();
+  }
   info!("Daemon stopped");
   Ok(())
 }

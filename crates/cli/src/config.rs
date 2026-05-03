@@ -178,6 +178,7 @@ pub(crate) struct ConfigFileRaw {
   log_format: Option<String>,
   listen: Option<String>,
   audio_device: Option<String>,
+  headless: Option<bool>,
   frontend_path: Option<PathBuf>,
   #[serde(default)]
   patches: HashMap<String, toml::Value>,
@@ -219,6 +220,11 @@ pub struct Config {
   pub log_format: LogFormat,
   pub listen_address: ListenerAddress,
   pub audio_device: Option<String>,
+  /// When true, the daemon never opens an audio device and never
+  /// spawns play threads.  Pollers, the WebSocket server, the
+  /// frontend, and metrics keep working — the instance is a pure
+  /// state producer, intended for speakerless servers.
+  pub headless: bool,
   pub frontend_path: PathBuf,
   pub library: PatchLibrary,
   pub overrides: HashMap<String, OverrideInfo>,
@@ -243,6 +249,7 @@ impl Config {
     oidc_issuer: Option<&str>,
     oidc_client_id: Option<&str>,
     oidc_client_secret_file: Option<&Path>,
+    headless: Option<bool>,
   ) -> Result<Self, ConfigError> {
     let (file, resolved_config_path) = match config_path {
       Some(p) => (ConfigFileRaw::from_file(p)?, Some(p.to_path_buf())),
@@ -428,6 +435,7 @@ impl Config {
       log_format,
       listen_address,
       audio_device: file.audio_device,
+      headless: headless.or(file.headless).unwrap_or(false),
       frontend_path,
       library,
       overrides,
@@ -844,6 +852,7 @@ mod tests {
       None,
       None,
       None,
+      None,
     )
     .unwrap();
     std::fs::remove_file(&cfg_path).ok();
@@ -869,6 +878,7 @@ mod tests {
       None,
       None,
       None,
+      None,
     )
     .unwrap();
     assert!(config.heartbeats.is_empty());
@@ -883,6 +893,7 @@ mod tests {
       None,
       None,
       &[],
+      None,
       None,
       None,
       None,
@@ -969,6 +980,7 @@ mod tests {
       None,
       None,
       None,
+      None,
     )
     .unwrap();
 
@@ -1004,6 +1016,7 @@ mod tests {
       None,
       Some(tmp2.as_path()),
       &[],
+      None,
       None,
       None,
       None,
@@ -1132,6 +1145,7 @@ mod tests {
       None,
       None,
       None,
+      None,
     )
     .unwrap();
 
@@ -1153,6 +1167,7 @@ mod tests {
       None,
       Some(tmp2.path()),
       &[],
+      None,
       None,
       None,
       None,
@@ -1392,6 +1407,7 @@ mod tests {
       None,
       None,
       None,
+      None,
     )
     .unwrap();
 
@@ -1431,6 +1447,7 @@ mod tests {
       None,
       Some(tmp2.path()),
       &[],
+      None,
       None,
       None,
       None,

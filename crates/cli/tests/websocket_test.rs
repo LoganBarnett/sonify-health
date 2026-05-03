@@ -31,6 +31,7 @@ async fn start_test_server() -> (SocketAddr, Arc<PreviewState>) {
     SliderRanges::default(),
     None,
     false,
+    false,
   ));
 
   let state = AppState::init(

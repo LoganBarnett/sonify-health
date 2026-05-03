@@ -34,6 +34,7 @@ fn override_does_not_leak_to_other_heartbeats() {
     SliderRanges::default(),
     None,
     false,
+    false,
   ));
 
   let h0 = spawn_poll_thread(&preview, 0, 0);

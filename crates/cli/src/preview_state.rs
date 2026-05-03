@@ -84,9 +84,15 @@ pub struct PreviewState {
   pub mixer_handle: RwLock<Option<MixerHandle>>,
   pub broadcast_tx: broadcast::Sender<String>,
   pub probe_log_tx: broadcast::Sender<String>,
+  /// True when this instance was started without an audio device:
+  /// it polls heartbeats and serves state, but never opens a mixer
+  /// or spawns play threads.  Surfaced in the state snapshot so a
+  /// connected client knows the instance can't sound itself.
+  pub headless: bool,
 }
 
 impl PreviewState {
+  #[allow(clippy::too_many_arguments)]
   pub fn new(
     library: PatchLibrary,
     overrides: HashMap<String, OverrideInfo>,
@@ -97,6 +103,7 @@ impl PreviewState {
     slider_ranges: SliderRanges,
     config_path: Option<PathBuf>,
     config_writable: bool,
+    headless: bool,
   ) -> Self {
     let (broadcast_tx, _) = broadcast::channel(256);
     let (probe_log_tx, _) = broadcast::channel(256);
@@ -133,6 +140,7 @@ impl PreviewState {
       mixer_handle: RwLock::new(None),
       broadcast_tx,
       probe_log_tx,
+      headless,
     }
   }
 
@@ -415,6 +423,7 @@ impl PreviewState {
       "overrides": overrides_json,
       "config_writable": local.config_writable,
       "config_path": local.config_path.as_ref().map(|p| p.display().to_string()),
+      "headless": self.headless,
     })
     .to_string()
   }
@@ -452,4 +461,46 @@ pub fn metric_label(
     .last()
     .map(|t| t.label.clone())
     .unwrap_or_else(|| format!("{metric:.3}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::metrics::Metrics;
+  use sonify_health_lib::builtin_library;
+
+  fn make_preview(headless: bool) -> PreviewState {
+    PreviewState::new(
+      builtin_library(),
+      HashMap::new(),
+      vec![],
+      Arc::new(AtomicBool::new(false)),
+      Arc::new(AtomicBool::new(true)),
+      Metrics::new(),
+      SliderRanges::default(),
+      None,
+      false,
+      headless,
+    )
+  }
+
+  #[test]
+  fn state_snapshot_includes_headless_flag() {
+    let preview = make_preview(true);
+    let snap: serde_json::Value =
+      serde_json::from_str(&preview.state_snapshot()).unwrap();
+    assert_eq!(snap["headless"], serde_json::Value::Bool(true));
+
+    let preview = make_preview(false);
+    let snap: serde_json::Value =
+      serde_json::from_str(&preview.state_snapshot()).unwrap();
+    assert_eq!(snap["headless"], serde_json::Value::Bool(false));
+  }
+
+  #[test]
+  fn local_source_is_named_localhost() {
+    let preview = make_preview(false);
+    assert_eq!(preview.local().name, LOCAL_SOURCE_NAME);
+    assert!(preview.source_by_name(LOCAL_SOURCE_NAME).is_some());
+  }
 }

@@ -37,6 +37,7 @@ fn poll_thread_survives_poisoned_lock() {
     SliderRanges::default(),
     None,
     false,
+    false,
   ));
 
   // Spawn the poll thread.
@@ -108,6 +109,7 @@ fn poll_thread_panic_is_capturable() {
     Metrics::new(),
     SliderRanges::default(),
     None,
+    false,
     false,
   ));
 

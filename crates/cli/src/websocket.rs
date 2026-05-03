@@ -1112,6 +1112,7 @@ mod tests {
       SliderRanges::default(),
       None,
       false,
+      false,
     ))
   }
 

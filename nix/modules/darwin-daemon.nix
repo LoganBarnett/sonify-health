@@ -71,6 +71,9 @@
     // lib.optionalAttrs (cfg.audioDevice != null) {
       audio_device = cfg.audioDevice;
     }
+    // lib.optionalAttrs cfg.headless {
+      headless = true;
+    }
     // lib.optionalAttrs (cfg.patches != {}) {
       patches = cfg.patches;
     }
@@ -283,6 +286,23 @@ in {
       description = ''
         Audio output device name (case-insensitive substring match).
         When null, the system default output device is used.
+      '';
+    };
+
+    headless = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      example = true;
+      description = ''
+        Run the daemon without opening an audio device.  Heartbeat
+        commands still execute on schedule and the WebSocket / metrics
+        endpoints stay live, but no audio is produced and no play
+        threads are spawned.
+
+        Intended for servers without speakers whose state will be
+        rendered remotely by another sonify-health instance subscribed
+        to this one.  Mutually compatible with audioDevice (audioDevice
+        is simply ignored when headless = true).
       '';
     };
 

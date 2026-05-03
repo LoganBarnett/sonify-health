@@ -107,6 +107,13 @@ struct Cli {
   #[arg(long, env = "OIDC_CLIENT_SECRET_FILE")]
   oidc_client_secret_file: Option<std::path::PathBuf>,
 
+  /// Run without opening an audio device.  Polls heartbeats and
+  /// serves state over the WebSocket as usual, but spawns no play
+  /// threads.  Intended for speakerless servers whose state will
+  /// be rendered by another instance subscribed to this one.
+  #[arg(long, env = "HEADLESS")]
+  headless: bool,
+
   #[command(subcommand)]
   command: Command,
 }
@@ -148,6 +155,10 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<(), ApplicationError> {
   let cli = Cli::parse();
+  // Only forward the CLI flag when explicitly set; clap's `bool`
+  // can't distinguish "absent" from "false", so we use `Some(true)`
+  // when present and let the config file or default decide otherwise.
+  let cli_headless = if cli.headless { Some(true) } else { None };
   let config = Config::from_args(
     cli.log_level.as_deref(),
     cli.log_format.as_deref(),
@@ -159,6 +170,7 @@ async fn main() -> Result<(), ApplicationError> {
     cli.oidc_issuer.as_deref(),
     cli.oidc_client_id.as_deref(),
     cli.oidc_client_secret_file.as_deref(),
+    cli_headless,
   )?;
 
   init_logging(config.log_level, config.log_format);
@@ -168,6 +180,7 @@ async fn main() -> Result<(), ApplicationError> {
     log_format = ?config.log_format,
     listen = %config.listen_address,
     audio_device = ?config.audio_device,
+    headless = config.headless,
     frontend_path = ?config.frontend_path,
     "Resolved configuration"
   );
@@ -292,6 +305,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     config.slider_ranges.clone(),
     config.config_path.clone(),
     config_writable,
+    config.headless,
   ));
 
   // Perform OIDC provider discovery when configured.
@@ -373,9 +387,11 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   // Spawn the blocking daemon loop in a separate thread.
   let audio_device = config.audio_device.clone();
   let daemon_preview = Arc::clone(&preview);
+  let daemon_headless = config.headless;
   let daemon_handle = tokio::task::spawn_blocking(move || {
     daemon::run_daemon(daemon::DaemonContext {
       audio_device: audio_device.as_deref(),
+      headless: daemon_headless,
       preview: daemon_preview,
     })
   });
