@@ -109,6 +109,35 @@ UIs do not use modals.
 Every piece of revealed UI must live in the normal document flow.  No
 backdrop divs, no tab-index trapping, no z-index layering.
 
+* UI philosophy: every label earns a help entry
+
+The dashboard carries a lot of specialised vocabulary — metric
+tiers, patches, notes, playback modes, transitions — and a
+contributor (or a returning user) cannot realistically remember
+what each one means.  The bottom-of-page Help panel exists to
+answer that question in place, without navigating away.
+
+** Definition of Done for UI changes
+
+Any new or renamed UI label, section header, or control caption
+is not considered done until it has a corresponding entry in
+~frontend/src/Help.elm~.  That means:
+
+1. Pick a stable kebab-case ~Key~ (e.g. ~"metric-tiers"~,
+   ~"patch-detune"~).  Prefer names that survive cosmetic
+   renames.
+2. Add a case to ~Help.lookup~ returning one or two sentences.
+   Keep it short — the panel is small by design.  Longer
+   explanations belong in ~docs/~.
+3. Render the label with ~class "help-label"~ on a ~button~
+   element (not a plain ~span~ or ~label~) so keyboard and
+   screen-reader users get proper semantics for free.  Wire its
+   ~onClick~ to ~HelpClicked "your-key"~.
+
+If a label has no explanation beyond "it does what it says," that
+is still a one-sentence help entry — write it anyway, because
+what seems obvious to the author is rarely obvious to a newcomer.
+
 * Commit workflow
 
 1. Make your changes on a feature branch.

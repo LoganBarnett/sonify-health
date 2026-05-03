@@ -34,7 +34,7 @@ pub struct Patch {
     min = 0.01,
     max = 5.0,
     step = 0.01,
-    description = "Note duration in seconds."
+    description = "Length of the sustain phase in seconds. The note holds at `sustain` level for this long, between the `attack_ms` + `decay_ms` ramp-up and the `release_ms` tail. Total audible note length = attack + decay + duration + release."
   )]
   pub duration: f64,
 
@@ -74,7 +74,7 @@ pub struct Patch {
     min = 0.0,
     max = 500.0,
     step = 1.0,
-    description = "Fade-in time in milliseconds. Low = snappy click, high = soft swell."
+    description = "Ramp-up time from silence to full amplitude, in milliseconds. First phase of the ADSR envelope; `decay_ms`, `duration`, and `release_ms` follow. Low = snappy click, high = soft swell."
   )]
   pub attack_ms: f64,
 
@@ -82,7 +82,7 @@ pub struct Patch {
     min = 0.0,
     max = 2000.0,
     step = 1.0,
-    description = "Decay time in milliseconds. Slopes from attack peak to sustain level."
+    description = "Ramp-down time in milliseconds, from the attack peak down to the `sustain` level. Runs between `attack_ms` and `duration`."
   )]
   pub decay_ms: f64,
 
@@ -90,7 +90,7 @@ pub struct Patch {
     min = 0.0,
     max = 1000.0,
     step = 1.0,
-    description = "Fade-out time in milliseconds. Low = staccato, high = lingering tail."
+    description = "Ramp-down time in milliseconds, from the `sustain` level to silence. Final phase of the envelope, after `attack_ms` + `decay_ms` + `duration`. Low = staccato, high = lingering tail."
   )]
   pub release_ms: f64,
 
@@ -98,7 +98,7 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
-    description = "Body amplitude after attack. 1.0 = full level, lower = quieter sustain."
+    description = "Body amplitude (0–1) held during the `duration` phase, between the end of `decay_ms` and the start of `release_ms`. 1 = full level (flat envelope top), lower = quieter sustained tone."
   )]
   pub sustain: f64,
 

@@ -3,6 +3,7 @@ module Main exposing (main)
 import Browser
 import Browser.Navigation as Nav
 import Dict exposing (Dict)
+import Help
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput)
@@ -80,11 +81,11 @@ type alias Model =
     , configWritable : Bool
     , configPath : Maybe String
     , saveStatus : Maybe String
-    , expandedDescriptions : Set String
     , playOnChange : Set String
     , metricHistory : Dict Int (List Float)
     , timezone : Time.Zone
     , collapsedHeartbeats : Set Int
+    , activeHelp : Maybe Help.Source
     }
 
 
@@ -138,7 +139,6 @@ type Msg
     | SaveConfig
     | DismissSaveStatus
     | DismissProtocolError
-    | ToggleDescription String
     | TogglePlayOnChange String
     | GotTimezone Time.Zone
     | ToggleHeartbeatCollapse Int
@@ -150,6 +150,7 @@ type Msg
     | SetTierThreshold Int Int String
     | SetTierLabel Int Int String
     | SetTierColor Int Int String
+    | HelpClicked Help.Source
     | NoOp
 
 
@@ -198,11 +199,11 @@ init _ url key =
       , configWritable = False
       , configPath = Nothing
       , saveStatus = Nothing
-      , expandedDescriptions = Set.empty
       , playOnChange = Set.empty
       , metricHistory = Dict.empty
       , timezone = Time.utc
       , collapsedHeartbeats = Set.empty
+      , activeHelp = Nothing
       }
     , Cmd.batch [ cmdForRoute route, Task.perform GotTimezone Time.here ]
     )
@@ -861,18 +862,6 @@ update msg model =
         DismissProtocolError ->
             ( { model | protocolError = Nothing }, Cmd.none )
 
-        ToggleDescription key ->
-            ( { model
-                | expandedDescriptions =
-                    if Set.member key model.expandedDescriptions then
-                        Set.remove key model.expandedDescriptions
-
-                    else
-                        Set.insert key model.expandedDescriptions
-              }
-            , Cmd.none
-            )
-
         TogglePlayOnChange patchName ->
             ( { model
                 | playOnChange =
@@ -1032,6 +1021,9 @@ update msg model =
             ( { model | heartbeats = newHeartbeats }
             , Ports.websocketSend (encodeSetTiers hbIdx tiers)
             )
+
+        HelpClicked key ->
+            ( { model | activeHelp = Just key }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1800,8 +1792,74 @@ view model =
 
             NotFound ->
                 div [ class "container" ] [ text "Not found" ]
+        , viewHelpPanel model
         ]
     }
+
+
+{-| Bottom-fixed panel that explains whichever label the user
+most recently clicked. Stays visible until another label is
+clicked; the "no selection" placeholder is shown on first load.
+See `Help.elm` for the content registry.
+-}
+viewHelpPanel : Model -> Html Msg
+viewHelpPanel model =
+    let
+        body =
+            case model.activeHelp of
+                Nothing ->
+                    [ span [ class "help-panel-placeholder" ]
+                        [ text "Click a dotted-underline label anywhere in the UI for a short explanation." ]
+                    ]
+
+                Just (Help.Registered key) ->
+                    case Help.lookup key of
+                        Just txt ->
+                            renderHelpText txt
+
+                        Nothing ->
+                            [ span [ class "help-panel-placeholder" ]
+                                [ text ("No help entry for \"" ++ key ++ "\" yet.") ]
+                            ]
+
+                Just (Help.Literal txt) ->
+                    renderHelpText txt
+    in
+    aside [ class "help-panel" ]
+        [ div [ class "help-panel-body" ]
+            (div [ class "help-panel-title" ] [ text "Help" ] :: body)
+        ]
+
+
+{-| Parse backtick-delimited spans inside help text into inline
+`<code>` elements, leaving the rest as plain text. Backticks are
+used to reference other labels/fields in the UI (e.g. the
+`attack_ms` reference inside the `duration` description) so they
+visually stand out as identifiers.
+
+Splitting on a single backtick and alternating (even index → plain
+text, odd index → `<code>`) is correct regardless of how many
+backticked spans appear, as long as they're balanced — which the
+authoring convention enforces. Unbalanced backticks (one
+trailing), if anyone introduces them, degrade gracefully: the
+trailing content just gets styled as code to end-of-string.
+
+See the TODO in tasks.org about making these spans clickable so
+they navigate to the referenced help entry.
+
+-}
+renderHelpText : String -> List (Html Msg)
+renderHelpText txt =
+    txt
+        |> String.split "`"
+        |> List.indexedMap
+            (\i part ->
+                if modBy 2 i == 1 then
+                    code [] [ text part ]
+
+                else
+                    text part
+            )
 
 
 viewNavbar : Model -> Html Msg
@@ -1875,7 +1933,7 @@ viewToolbar model =
                     "Mute"
                 )
             ]
-        , viewSlider model "slider:Master" "Master" (Just "Global volume multiplier applied to all heartbeats.") model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
+        , viewSlider "Master" (Just "Global volume multiplier applied to all heartbeats.") model.sliderRanges.masterVolume.min model.sliderRanges.masterVolume.max model.sliderRanges.masterVolume.step model.masterVolume SetMasterVolume
         , button [ class "btn", onClick RevertAll ]
             [ text "Revert" ]
         , button
@@ -1928,55 +1986,46 @@ viewToolbar model =
 -- Shared slider + number input component.
 
 
-viewSlider : Model -> String -> String -> Maybe String -> Float -> Float -> Float -> Float -> (String -> Msg) -> Html Msg
-viewSlider model key name description min_ max_ step_ val toMsg =
+viewSlider : String -> Maybe String -> Float -> Float -> Float -> Float -> (String -> Msg) -> Html Msg
+viewSlider name description min_ max_ step_ val toMsg =
     let
-        labelAttrs =
-            case description of
-                Just _ ->
-                    [ class "slider-label-help"
-                    , onClick (ToggleDescription key)
-                    ]
-
-                Nothing ->
-                    []
-
-        descriptionDiv =
+        -- If a description is present, render the label as a
+        -- `help-label` button that pipes the text into the bottom
+        -- help panel on click.  No description ⇒ plain `span`
+        -- (non-interactive, no affordance).
+        labelNode =
             case description of
                 Just desc ->
-                    if Set.member key model.expandedDescriptions then
-                        div [ class "slider-description" ] [ text desc ]
-
-                    else
-                        text ""
+                    button
+                        [ class "help-label"
+                        , onClick (HelpClicked (Help.Literal desc))
+                        ]
+                        [ text (name ++ " ") ]
 
                 Nothing ->
-                    text ""
+                    span [] [ text (name ++ " ") ]
     in
-    div []
-        [ label [ class "slider-row" ]
-            [ span labelAttrs [ text (name ++ " ") ]
-            , input
-                [ type_ "range"
-                , Html.Attributes.min (String.fromFloat min_)
-                , Html.Attributes.max (String.fromFloat max_)
-                , step (String.fromFloat step_)
-                , value (String.fromFloat val)
-                , onInput toMsg
-                ]
-                []
-            , input
-                [ type_ "number"
-                , class "num-input"
-                , Html.Attributes.min (String.fromFloat min_)
-                , Html.Attributes.max (String.fromFloat max_)
-                , step (String.fromFloat step_)
-                , value (String.fromFloat val)
-                , onInput toMsg
-                ]
-                []
+    label [ class "slider-row" ]
+        [ labelNode
+        , input
+            [ type_ "range"
+            , Html.Attributes.min (String.fromFloat min_)
+            , Html.Attributes.max (String.fromFloat max_)
+            , step (String.fromFloat step_)
+            , value (String.fromFloat val)
+            , onInput toMsg
             ]
-        , descriptionDiv
+            []
+        , input
+            [ type_ "number"
+            , class "num-input"
+            , Html.Attributes.min (String.fromFloat min_)
+            , Html.Attributes.max (String.fromFloat max_)
+            , step (String.fromFloat step_)
+            , value (String.fromFloat val)
+            , onInput toMsg
+            ]
+            []
         ]
 
 
@@ -2100,23 +2149,23 @@ viewHeartbeatCard model index hb =
                 , viewPlaybackCycler hb.playback (CyclePlayback index)
                 , button [ class "btn btn-sm", onClick (TriggerHeartbeat index) ]
                     [ text "Trigger" ]
-                , viewSlider model ("slider:PollInterval:" ++ String.fromInt index) "Poll interval" (Just "Seconds between probe command executions.") 1.0 300.0 1.0 hb.pollIntervalSecs (SetHeartbeatSlider PollInterval index)
-                , viewSlider model ("slider:CycleSecs:" ++ String.fromInt index) "Cycle" (Just "Seconds between plays for one-shot heartbeats.") 1.0 120.0 0.5 hb.cycleSecs (SetHeartbeatSlider CycleSecs index)
-                , viewSlider model ("slider:Offset:" ++ String.fromInt index) "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
+                , viewSlider "Poll interval" (Just "Seconds between probe command executions.") 1.0 300.0 1.0 hb.pollIntervalSecs (SetHeartbeatSlider PollInterval index)
+                , viewSlider "Cycle" (Just "Seconds between plays for one-shot heartbeats.") 1.0 120.0 0.5 hb.cycleSecs (SetHeartbeatSlider CycleSecs index)
+                , viewSlider "Offset" (Just "Shifts the heartbeat cycle start time in seconds.") model.sliderRanges.cycleOffset.min model.sliderRanges.cycleOffset.max model.sliderRanges.cycleOffset.step hb.cycleOffsetSecs (SetHeartbeatSlider CycleOffset index)
                 , if hb.playback == "continuous" || hb.playback == "loop" then
-                    viewSlider model ("slider:CrossfadeMs:" ++ String.fromInt index) "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
+                    viewSlider "Crossfade ms" (Just "Duration of the crossfade between successive plays, in milliseconds.") model.sliderRanges.crossfadeMs.min model.sliderRanges.crossfadeMs.max model.sliderRanges.crossfadeMs.step hb.crossfadeMs (SetHeartbeatSlider CrossfadeMs index)
 
                   else
                     text ""
                 , if hb.playback == "continuous" then
                     div []
-                        [ viewSlider model ("slider:PhraseGap:" ++ String.fromInt index) "Phrase gap" (Just "Seconds of silence between phrase repetitions.") 0.0 10.0 0.1 hb.phraseGap (SetHeartbeatSlider PhraseGap index)
-                        , viewSlider model ("slider:RepeatRate:" ++ String.fromInt index) "Repeat rate" (Just "Speed multiplier on phrase repetition.") 0.01 5.0 0.01 hb.repeatRate (SetHeartbeatSlider RepeatRate index)
+                        [ viewSlider "Phrase gap" (Just "Seconds of silence between phrase repetitions.") 0.0 10.0 0.1 hb.phraseGap (SetHeartbeatSlider PhraseGap index)
+                        , viewSlider "Repeat rate" (Just "Speed multiplier on phrase repetition.") 0.01 5.0 0.01 hb.repeatRate (SetHeartbeatSlider RepeatRate index)
                         ]
 
                   else
                     text ""
-                , viewSlider model ("slider:Value:" ++ String.fromInt index) "Value" (Just "Current metric severity. Override to freeze at a fixed value.") model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
+                , viewSlider "Value" (Just "Current metric severity. Override to freeze at a fixed value.") model.sliderRanges.overrideMetric.min model.sliderRanges.overrideMetric.max model.sliderRanges.overrideMetric.step hb.metric (OverrideHeartbeat index)
                 , div [ class "value-status-row" ]
                     [ span
                         [ class
@@ -2178,8 +2227,8 @@ viewNoteEditor model hbIdx noteCount noteIdx note =
               else
                 text ""
             ]
-        , viewSlider model ("slider:NoteVolume:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx) "Volume" (Just "Relative volume of this note within the heartbeat.") model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteSlider NoteVolume hbIdx noteIdx)
-        , viewSlider model ("slider:NoteOffset:" ++ String.fromInt hbIdx ++ ":" ++ String.fromInt noteIdx) "Offset" (Just "Delay before this note plays, in seconds.") model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteSlider NoteOffset hbIdx noteIdx)
+        , viewSlider "Volume" (Just "Relative volume of this note within the heartbeat.") model.sliderRanges.noteVolume.min model.sliderRanges.noteVolume.max model.sliderRanges.noteVolume.step note.volume (SetNoteSlider NoteVolume hbIdx noteIdx)
+        , viewSlider "Offset" (Just "Delay before this note plays, in seconds.") model.sliderRanges.noteOffset.min model.sliderRanges.noteOffset.max model.sliderRanges.noteOffset.step note.offset (SetNoteSlider NoteOffset hbIdx noteIdx)
         , viewNoteTransitionEdit model.sliderRanges patchNames hbIdx noteIdx note.transition
         ]
 
@@ -2188,7 +2237,11 @@ viewTierEditor : Int -> List TierInfo -> Html Msg
 viewTierEditor hbIdx tiers =
     div [ class "tier-section" ]
         [ div [ class "tier-header" ]
-            [ span [ class "tier-title" ] [ text "Metric Tiers" ]
+            [ button
+                [ class "help-label tier-title"
+                , onClick (HelpClicked (Help.Registered "metric-tiers"))
+                ]
+                [ text "Metric Tiers" ]
             , button
                 [ class "btn btn-sm"
                 , onClick (AddTier hbIdx)
@@ -2931,24 +2984,24 @@ viewParamSlider model patchName patchValues maybeOverride meta =
                 Nothing ->
                     ( False, text "" )
 
-        descKey =
-            "param:" ++ patchName ++ ":" ++ meta.name
-
-        labelAttrs =
+        -- Param labels are `help-label` buttons when the backend
+        -- ships a description; empty descriptions leave a plain
+        -- label (no click affordance, because there's nothing to
+        -- show).  The `help-label` class strips button chrome so
+        -- the label still looks like a param label next to its
+        -- slider.  See `Help.Source.Literal` — descriptions come
+        -- from `PatchParamMeta` over the wire, not from the
+        -- frontend-local `Help.lookup` table.
+        labelNode =
             if String.isEmpty meta.description then
-                [ class "param-label" ]
+                label [ class "param-label" ] [ text meta.name ]
 
             else
-                [ class "param-label slider-label-help"
-                , onClick (ToggleDescription descKey)
-                ]
-
-        descriptionDiv =
-            if not (String.isEmpty meta.description) && Set.member descKey model.expandedDescriptions then
-                div [ class "slider-description" ] [ text meta.description ]
-
-            else
-                text ""
+                button
+                    [ class "param-label help-label"
+                    , onClick (HelpClicked (Help.Literal meta.description))
+                    ]
+                    [ text meta.name ]
     in
     div
         [ class
@@ -2959,8 +3012,7 @@ viewParamSlider model patchName patchValues maybeOverride meta =
                 "param-slider"
             )
         ]
-        [ label labelAttrs
-            [ text meta.name ]
+        [ labelNode
         , input
             [ type_ "range"
             , Html.Attributes.min (String.fromFloat meta.min)
@@ -2981,7 +3033,6 @@ viewParamSlider model patchName patchValues maybeOverride meta =
             ]
             []
         , resetBtn
-        , descriptionDiv
         ]
 
 

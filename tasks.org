@@ -354,3 +354,49 @@ Frontend: add ~playOnChange : Set String~ to the model.  In
 Files: ~crates/cli/src/preview_state.rs~,
 ~crates/cli/src/websocket.rs~, ~frontend/src/Protocol.elm~,
 ~frontend/src/Main.elm~
+
+* TODO Clickable cross-references inside help text
+Descriptions in the bottom help panel use backtick-delimited
+monospace spans to refer to related fields (e.g. ~`attack_ms`~
+inside the ~duration~ description).  Right now they're purely
+decorative — the reader has to hunt for the referenced label
+elsewhere in the UI and click it to see its entry.  Make these
+spans themselves clickable links that dispatch ~HelpClicked~
+with the right ~Help.Source~.
+
+The tricky part is mapping a backtick identifier to a ~Source~.
+For static frontend-registered entries (anything in
+~Help.lookup~) the mapping is by key.  For dynamic backend
+descriptions (~PatchParamMeta.description~) the Elm side needs a
+way to look up a param's description by name — either by threading
+~patchParamMeta~ into ~renderHelpText~, or by shipping a
+separate name→description lookup dict in the Model.  Identifiers
+that match neither should fall back to a disabled-looking
+non-clickable span.
+
+Files: ~frontend/src/Main.elm~, ~frontend/src/Help.elm~,
+~frontend/public/style.css~.
+
+* TODO Glossary help entries for general audio/music-theory terms
+Add ~Help.lookup~ entries for terms that aren't attached to a
+specific UI label: ~cents~, ~dB~, ~Hz~, ~ADSR~, ~FM~, and so on.
+Backtick-referencing these inside existing help text (e.g.
+referring to ~cents~ from the ~detune~ description) would then
+let the user learn what ~cents~ means by clicking through —
+which is what makes this task dependent on /Clickable
+cross-references inside help text/ above.  Without that, a
+glossary entry has no surface the user can reach to find it.
+
+Files: ~frontend/src/Help.elm~.
+
+* TODO Allow removing the last metric tier from the UI
+The ~RemoveTier~ Msg, its update branch, and the per-row ×
+button are already wired, but the button is gated by ~tierCount >
+1~ in ~viewTierRow~ (≈Main.elm:2274).  That guard was copied from
+note-row code where a heartbeat must have at least one note, but
+tiers are purely cosmetic and can legally be empty — so a user
+who adds one tier gets stuck with it forever.  Drop the guard (or
+replace it with ~tierCount >= 1~ which is always true) so the
+single remaining tier can be removed.
+
+Files: ~frontend/src/Main.elm~.

@@ -135,7 +135,13 @@ a:hover {
 .app-layout {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 0 var(--space-xl) 2rem;
+  /* Bottom padding reserves space for the fixed help panel at its
+     default (empty) size.  When the panel grows with help text, it
+     overlaps a bit of the tail of the page — acceptable tradeoff
+     because (a) help entries are short by convention and (b) the
+     alternative (reserving the 30vh max-height) wastes screen real
+     estate during the 99% of time the panel is empty. */
+  padding: 0 var(--space-xl) 6rem;
 }
 
 .container {
@@ -220,6 +226,32 @@ a:hover {
   cursor: pointer;
   font-size: var(--font-base);
   line-height: 1.4;
+}
+
+/* Labels that open a help entry.  Rendered as `<button>` for
+   proper keyboard/a11y semantics, then stripped of browser
+   button chrome so they visually match whichever label-style
+   class they're combined with (`.param-label`, `.tier-title`,
+   etc.).
+   Declared BEFORE `.param-label` / `.tier-title` / similar so
+   that those site-specific classes win the cascade and keep
+   their font/color.  Moving this rule later in the file would
+   silently clobber param-label sizing — painful to debug. */
+.help-label {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  cursor: help;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.help-label:hover {
+  text-decoration-style: solid;
 }
 .btn:hover {
   background: var(--color-border);
@@ -490,17 +522,6 @@ a:hover {
   color: var(--color-degraded-text);
 }
 
-.slider-label-help {
-  cursor: help;
-}
-
-.slider-description {
-  font-size: var(--font-xs);
-  color: var(--color-text-muted);
-  padding: var(--space-xs) 0;
-  line-height: 1.4;
-}
-
 .num-input {
   width: 60px;
   font-size: var(--font-sm);
@@ -706,9 +727,11 @@ a:hover {
 
 /* Patch editor */
 
+/* Patch editor intentionally has no height cap — the page scrolls
+   as a whole.  A previous `max-height: 60vh; overflow-y: auto;`
+   caused the dreaded "two scrollbars" UX (scroll the panel AND the
+   page) for tall patches. */
 .patch-editor {
-  overflow-y: auto;
-  max-height: 60vh;
 }
 
 .param-grid {
@@ -884,7 +907,8 @@ a:hover {
 
 .error-banner {
   position: fixed;
-  bottom: var(--space-xl);
+  /* Sit above the help panel so the two don't stack awkwardly. */
+  bottom: calc(6rem + var(--space-xl));
   left: 50%;
   transform: translateX(-50%);
   padding: var(--space-md) var(--space-xl);
@@ -896,4 +920,65 @@ a:hover {
   cursor: pointer;
   z-index: 200;
   max-width: 80%;
+}
+
+/* Help panel
+   -----------
+   Fixed at viewport bottom, always visible.  Displays the help
+   text associated with whichever UI label was last clicked.  See
+   `Help.elm` for the content registry and `CONTRIBUTING.org` for
+   the Definition of Done rule that requires a help entry for
+   every new labeled control. */
+
+.help-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* `min-height` matches the combined navbar+toolbar height at
+     the top so the panel feels balanced.  `max-height` caps
+     growth so a pathological entry can't eat the whole viewport.
+     Between them, content scrolls internally via `overflow-y`. */
+  min-height: 6rem;
+  max-height: 30vh;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-lg) var(--space-xl);
+  z-index: 100;
+}
+
+.help-panel-body {
+  /* Cap text width so long entries wrap into a readable column
+     instead of stretching across the full viewport.  The right
+     half is reserved for a future secondary pane. */
+  max-width: 50%;
+  font-size: var(--font-base);
+  line-height: 1.5;
+}
+
+/* Inline `code` spans inside help text — used to reference other
+   labels/fields (e.g. `attack_ms` inside the `duration` help).
+   Subtle tinted background so the identifier stands apart from
+   prose without shouting.  Monospace comes from the UA default
+   for `<code>`. */
+.help-panel-body code {
+  font-size: 0.9em;
+  padding: 0 0.25em;
+  background: color-mix(in srgb, var(--color-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.help-panel-placeholder {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.help-panel-title {
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+  color: var(--color-text-muted);
+  font-size: var(--font-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
