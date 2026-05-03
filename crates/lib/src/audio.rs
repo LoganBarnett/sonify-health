@@ -69,16 +69,27 @@ fn resolve_device(
         .output_devices()
         .map_err(AudioError::DeviceEnumeration)?
         .collect();
+      // `DeviceTrait::name()` is deprecated in cpal 0.17 in favour
+      // of `description()` (which returns a structured
+      // `DeviceDescription` whose `.name()` is the human-readable
+      // label) and `id()` (for stable identity).  Substring
+      // matching, logging the selection, and listing available
+      // devices are all display-layer concerns — we want the
+      // human-readable name, so we go through `description().name()`
+      // at every site.
       let matched = devices.into_iter().find(|d| {
-        d.name()
-          .map(|n| n.to_lowercase().contains(&lower))
+        d.description()
+          .map(|desc| desc.name().to_lowercase().contains(&lower))
           .unwrap_or(false)
       });
       match matched {
         Some(d) => {
           tracing::info!(
             requested = name,
-            selected = d.name().unwrap_or_default(),
+            selected = d
+              .description()
+              .map(|desc| desc.name().to_string())
+              .unwrap_or_default(),
             "Audio device selected"
           );
           d
@@ -87,7 +98,9 @@ fn resolve_device(
           let available: Vec<String> = host
             .output_devices()
             .map_err(AudioError::DeviceEnumeration)?
-            .filter_map(|d| d.name().ok())
+            .filter_map(|d| {
+              d.description().ok().map(|desc| desc.name().to_string())
+            })
             .collect();
           tracing::warn!(
             requested = name,
