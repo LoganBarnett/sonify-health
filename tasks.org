@@ -389,6 +389,382 @@ glossary entry has no surface the user can reach to find it.
 
 Files: ~frontend/src/Help.elm~.
 
+* TODO Multi-instance support: remote sources of heartbeat state
+Today a single ~sonify-health~ process owns both halves of the system:
+the *poller* (runs commands, computes severity, holds the runtime
+config) and the *sounder* (resolves notes, drives the mixer, emits
+audio).  They are entangled in ~PreviewState~, ~daemon.rs~, and the
+WebSocket protocol.  This task splits them so that one local instance
+can present heartbeats sourced from any number of remote ~sonify-health~
+instances — including itself — and choose which of those sources it
+actually plays.
+
+The motivating use case: run the daemon on servers that do not have
+speakers (so the poller is doing real work near the metrics it is
+probing), and have a laptop instance subscribe to those servers to
+*hear* their state when out of the office.  Back at the desk, the
+laptop disables those remote sources so the office speakers don't echo
+what the servers are already broadcasting elsewhere — without losing
+the live state display.
+
+We are *not* streaming audio.  We are streaming state along the
+existing WebSocket protocol; the local instance synthesises audio from
+that state on its own mixer.
+
+** Conceptual model
+
+Introduce the term *Source*.  A Source is something that produces
+heartbeat state for the local instance to render.  There are two
+kinds:
+
+- A *Local Source* runs the poller in-process — the existing
+  behaviour.  Always present, always exactly one.
+- A *Remote Source* connects out to another ~sonify-health~ instance's
+  WebSocket and mirrors its state.  Zero or more, declared in config
+  and/or added at runtime through the UI.
+
+Every heartbeat the UI displays belongs to exactly one Source.  Each
+Source has its own *playback enabled* toggle, independent of how it is
+configured: a Source can be configured-and-disabled (state visible,
+audio muted at the source level) or configured-and-enabled (state
+visible, audio plays).  This is the laptop-versus-office switch.
+
+The Local Source is no exception — it gets the same toggle, so a
+user can listen to *only* remote sources by disabling Local
+playback.  The existing global ~muted~ flag is a separate
+cross-cutting kill switch (silences all output regardless of
+per-Source toggles), not a substitute.
+
+Multiple Sources playing on the same wall-clock grid — e.g.  two
+Sources both running heartbeats in ~Clock~ playback mode with
+similar ~cycle_offset_secs~ — will land their notes on top of each
+other locally.  That is expected and intended: the mixer already
+handles overlapping voices, and the configurator (the user editing
+the remote configs) is responsible for staggering offsets if the
+overlap is undesirable.  No auto-stagger is provided.
+
+A Remote Source ships its *entire* configuration to the local
+instance, not just its current metric values.  That means the
+patch library, heartbeat configs, note transitions, tiers, slider
+ranges, overrides — everything the remote's own UI shows and
+everything its own audio renderer would consume — is mirrored
+locally.  The local renderer then synthesises the audio using
+that mirrored config, so the laptop sounds the way the remote
+*would* have sounded if it had speakers.
+
+This is the load-bearing decision behind the design.  When the
+remote's config is tweaked (a patch parameter changes, a tier
+threshold moves, a new heartbeat is added), the local instance
+sees the change immediately and the next note it plays uses the
+new config.  No separate sync step, no manual refresh — it falls
+out naturally from subscribing to the same state stream that
+drives the remote's own UI.
+
+Remote configuration is therefore read-only from the local UI.
+Config edits are made on the owning instance; the local instance
+is a faithful renderer, not an editor of remote state.
+
+** Architectural split
+
+*** Decouple poller from sounder
+
+Pull the poll/play threads apart in ~daemon.rs~.  The poll thread
+becomes a property of a Source; the play thread becomes a property of
+the local *renderer* that consumes one or more Sources.  Today
+~spawn_play_thread~ reads ~hb.metric~ from the same ~PreviewState~
+that ~spawn_poll_thread~ writes — that shared shared-memory pathway
+must become explicit so it works equally well when the metric value
+is arriving over a WebSocket from a remote.
+
+Concretely: the renderer should not care whether the ~Shared~ float
+backing a heartbeat's severity is being driven by a local poll
+thread or by a WebSocket subscriber thread.  Both paths write into
+the same ~Shared~; the play thread's logic is unchanged.
+
+*** Headless mode
+
+Add a config flag (and CLI flag) that disables audio output entirely.
+A headless instance still spawns poll threads, still serves the
+WebSocket, still serves the frontend (useful for inspecting state
+locally), but never opens an audio device and never spawns play
+threads.  This is the mode every server that lacks speakers will run
+in.  The existing ~muted~ flag is per-session and reversible; this
+one is a startup-time toggle that means "this machine cannot play
+audio at all".
+
+*** Source registry on ~PreviewState~
+
+Generalise the ~heartbeats~ vector on ~PreviewState~ from a flat list
+to a list-per-Source.  Each ~Source~ entry carries:
+
+- A ~source_id~ (the user-given Source name from config).  Internal
+  references to a heartbeat or patch from a remote are keyed by the
+  composite ~(source_id, name)~ — name alone is not unique because
+  two remotes can both have a heartbeat called ~disk-space~ or a
+  patch called ~alarm~.  The UI disambiguates by source-grouping
+  rather than by mangling the names.  URL is *not* used as the key
+  because servers move; the user-given ~source_id~ is the stable
+  handle.
+- A kind (Local or Remote).
+- Connection status (Connected, Connecting, Disconnected, Error).
+- A playback-enabled flag.
+- Its own ~Vec<HeartbeatState>~ and ~Vec<HeartbeatConfig>~ snapshot.
+- For remote sources: its own ~PatchLibrary~ snapshot, its own
+  slider ranges, its own override map — everything the rendered
+  audio depends on, because remote patches may differ from local
+  ones and the local renderer must reproduce the remote sound
+  faithfully.
+
+This means the existing fields on ~PreviewState~ that are currently
+"the" library, "the" overrides, etc.  belong to the *local Source*.
+They should move into the local Source's own struct.
+
+** Protocol
+
+*** Reuse the existing WebSocket protocol
+
+The existing protocol already broadcasts a full ~state~ snapshot plus
+incremental change messages (~patch_param_changed~, ~notes_changed~,
+~override_changed~, …).  A local instance subscribing to a remote is,
+for protocol purposes, just another WebSocket client of that remote.
+No new protocol is required for the state half.
+
+*** Read-only enforcement
+
+The remote does not need to enforce read-only at the protocol level
+on day one — the local instance simply chooses not to send mutating
+messages for remote sources.  We can later add a server-side toggle
+that rejects writes from non-loopback clients if we want defence in
+depth, but that is not required for the local-UI design.
+
+*** Authentication
+
+First pass assumes trusted networks (loopback, VPN, SSH tunnel,
+LAN behind a firewall).  Remote URLs may be ~ws://~ or ~wss://~,
+but the local instance does not present credentials and the
+remote does not require them.  Hardening this is tracked
+separately under /Authenticated remote sources/.
+
+*** Connection lifecycle
+
+Remote source connections must reconnect automatically with backoff.
+Surface the connection state in the UI so the user knows whether
+silence from a heartbeat means "healthy" or "we lost the link".  On
+reconnect, the remote re-sends a full ~state~ snapshot, which the
+local Source replaces wholesale — same as the frontend already does
+on its own initial connection.
+
+** Configuration
+
+*** New ~[[sources]]~ section
+
+Add a top-level repeatable section in the config file declaring
+remote sources:
+
+#+begin_src toml :exports code
+[[sources]]
+name = "prod-db-1"
+url = "wss://db1.internal.example.com/ws"
+playback_enabled = false
+# auth fields reuse the existing oidc structure or a token file path
+#+end_src
+
+The CLI gets a matching ~--source~ flag (repeatable) for ad-hoc
+experimentation.  Sources are additive across CLI and config the same
+way patch libraries are.
+
+*** Round-trip through export/save
+
+The existing config round-trip integration tests (already DONE
+above) must be extended so the ~[[sources]]~ section round-trips
+identically.  Playback-enabled is part of the persisted state — if
+the user disables a source in the UI and hits save, the saved config
+reflects that.
+
+** UI
+
+*** Group heartbeat cards by Source
+
+The flat list of heartbeat cards becomes a list of Source panels,
+each containing its own heartbeat cards.  The local Source panel is
+always present and is visually distinct (no connection indicator
+needed).  Remote Source panels show:
+
+- Source name and URL.
+- Connection status badge (matches the existing tier colour vocab —
+  green for connected, amber for reconnecting, red for error).
+- Playback toggle (the laptop-versus-office switch).
+- A collapse/expand control like the existing heartbeat cards have.
+
+*** Manage sources from the UI
+
+Match the patterns already established in the editor:
+
+- Add a "+ Add source" button at the top of the sources area.  New
+  sources start disabled until the user explicitly enables playback.
+- Per-source remove control, using the inline "Confirm delete?  Yes
+  / No" pattern (no modals, per the existing guideline).
+- Per-source edit fields (name, URL, auth config).
+
+*** Source naming rules
+
+A Source's name is its user-facing identifier and the preferred
+form for logs and the WebSocket protocol's source field.  Names
+must be unique across `PreviewState::sources`; the UI rejects
+duplicates inline (next to the name input, no modal) and the
+config loader fails on duplicate names at startup.
+
+The Local Source is always named ~localhost~ (constant
+~LOCAL_SOURCE_NAME~) and is not user-renamable.
+
+When the user adds a Remote Source through the "+ Add source"
+flow, default the name field to the hostname parsed from the URL
+they typed (e.g.  ~wss://db1.internal.example.com/ws~ →
+~db1.internal.example.com~).  The user can edit the name before
+saving — useful when the hostname collides with an existing
+source or when a friendlier label is wanted (~prod-db-1~ over
+~db1.internal.example.com~).  The name is a *required* field for
+remote sources loaded from a config file; the config loader
+rejects entries that omit it rather than guessing.
+
+*** Patch lists scoped to their Source
+
+Today the patch library is a single top-level UI section separate
+from the heartbeat list.  With multiple Sources each carrying their
+own patch library, that single global section no longer fits.  Each
+Source panel grows its own patch list nested inside it.  The
+existing top-level patch section becomes the Local Source's patch
+list (visually elevated, since the local user is most likely to
+edit it).  Remote Source patch lists render read-only and start
+collapsed by default — the user can expand them when they want to
+inspect what a remote is actually playing.
+
+*** Probe log scoped per Source
+
+The probe log today is a single global panel.  Split it per Source
+panel so each remote's recent probe activity reads next to its own
+heartbeats.  An optional merged "all sources" view can come later
+if there is demand; not in scope for the first cut.
+
+*** Read-only affordance for remote heartbeats
+
+Inputs inside remote heartbeat cards should render as read-only:
+sliders show value but don't drag, text fields are not editable, the
+trigger button is hidden, and so on.  The override slider can stay
+interactive — overriding a remote metric value locally is a useful
+debugging affordance and only changes how the *local* instance
+sounds, not the remote's state.  Make this distinction explicit in
+the UI ("Local override of remote value").
+
+A local override on a remote heartbeat is local state, not remote
+state, and persists across remote disconnect/reconnect.  Even when
+the remote re-sends a fresh ~state~ snapshot, the local override
+stays applied.  The user clears it explicitly via the existing
+"Track Live" button — the same affordance the local override
+already uses on local heartbeats.
+
+*** Playback enabled toggle behaviour
+
+When the user disables playback for a Source, the local renderer
+stops scheduling that Source's heartbeats but keeps the state
+subscription open.  The metric values, sparklines, and probe log
+keep updating in real time; the audio just stops.  Re-enabling
+resumes audio at the next natural cycle (no replay of buffered
+events).
+
+** Migration and ordering
+
+The work splits naturally:
+
+1. *Refactor first, behaviour-preserving.*  Introduce the Source
+   abstraction internally with one Local Source and prove every
+   existing test still passes.  No protocol changes, no UI changes
+   yet.  As part of this step, audit ~state_snapshot()~ in
+   ~preview_state.rs~ to confirm it carries everything the future
+   subscriber will need to faithfully reproduce audio (patch
+   library, heartbeat configs, note transitions, tiers, slider
+   ranges, overrides, master volume).  Fix any gaps now, before
+   they become protocol incompatibilities.
+2. *Headless mode.*  Add the no-audio-device flag.  Test on a
+   machine with no speakers (or by forcing the flag on locally).
+3. *Source-grouped UI.*  Render the single Local Source as its own
+   panel.  Still no remotes — but the UI shape is now ready.
+4. *Outbound WebSocket client.*  Implement Remote Source connection,
+   state mirroring, and reconnect.  Read-only renderer pass.
+5. *Config plumbing.*  ~[[sources]]~ section, CLI flag, round-trip
+   tests.
+6. *Playback toggle and source management UI.*  The laptop-versus-
+   office switch and the add/remove/edit controls.
+
+Each step ships independently and leaves the program in a working
+state.  Authentication is deliberately out of scope for this TODO and
+is tracked as its own follow-up below.
+
+* TODO Authenticated remote sources
+Follow-up to /Multi-instance support: remote sources of heartbeat
+state/.  Once that lands, the local instance connects to remotes
+unauthenticated, which is fine for trusted networks (loopback, VPN,
+SSH tunnel, firewalled LAN) but not for connections traversing the
+open internet.
+
+Add authenticated outbound connections:
+
+- Reuse the existing OIDC machinery in ~auth.rs~ to acquire a bearer
+  token before opening the WebSocket to a remote source.  The
+  ~[[sources]]~ config entry gains the credential fields needed to
+  drive that flow (issuer, client id, client secret file, or a
+  pre-issued token path — match whatever shape ~auth.rs~ already
+  expects for inbound auth).
+- Ensure ~wss://~ outbound connections use the ~native-tls~ root
+  store, consistent with the choice already made for the rest of
+  the project (see the rust-template sync history).
+- Server-side: add a config option that rejects mutating WebSocket
+  messages from non-loopback clients.  The local-instance design
+  already chooses not to send those, but defence in depth matters
+  once a remote is reachable from untrusted networks.
+- UI: surface auth-failure connection states distinctly from
+  network-failure states ("authentication required", "token
+  expired", "permission denied") so the user knows whether to
+  re-login versus check the network.
+
+* TODO Local override layer for remote source config
+Follow-up to /Multi-instance support: remote sources of heartbeat
+state/.  By default the local instance renders a remote Source
+exactly the way the remote would have rendered itself — same
+patches, same tiers, same volumes.  Sometimes that's wrong for the
+*listener*: maybe the laptop's headphones turn one heartbeat
+piercing, maybe the office speakers can't reproduce the bass on
+another, maybe the user wants to mute one specific heartbeat on a
+remote without disabling the entire Source.
+
+Add a *local override layer* that applies on top of the mirrored
+remote config when the local renderer synthesises audio.  The
+remote's config remains the source of truth and continues to stream
+in unchanged; the override layer sits between that mirror and the
+local renderer.  Things the layer should be able to override per
+remote heartbeat:
+
+- Per-note volume.
+- Patch parameter deltas — reuse the existing ~OverrideInfo~
+  shape if it fits, or extend it.
+- Patch substitution — point a remote heartbeat at a *local*
+  patch instead of the one the remote uses.
+- Outright mute of a single remote heartbeat, distinct from
+  disabling the whole Source.
+
+The layer is local state and persists across remote
+disconnect/reconnect, the same way the existing local override of
+remote metric values does.  It round-trips through export/save as
+part of the *local* Source's persisted config — never written
+back to the remote.
+
+Open question for when this is picked up: how the UI exposes the
+layer.  Likely the existing read-only remote heartbeat card grows
+an "Override locally" affordance per row that flips that specific
+row into editable local-override mode, with clear visual
+distinction between "this is what the remote actually has" and
+"this is your local override of it".
+
 * TODO Allow removing the last metric tier from the UI
 The ~RemoveTier~ Msg, its update branch, and the per-row ×
 button are already wired, but the button is gated by ~tierCount >
