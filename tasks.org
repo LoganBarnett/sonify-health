@@ -685,8 +685,26 @@ The work splits naturally:
    library, heartbeat configs, note transitions, tiers, slider
    ranges, overrides, master volume).  Fix any gaps now, before
    they become protocol incompatibilities.
-2. *Headless mode.*  Add the no-audio-device flag.  Test on a
-   machine with no speakers (or by forcing the flag on locally).
+2. *Headless mode.*  Add a startup-time flag that skips the audio
+   device entirely: no ~AudioMixer::new~, no play threads, no
+   ~mixer_handle~.  Pollers, the WebSocket server, the frontend,
+   and the metrics endpoint all keep working; the instance is a
+   pure state producer.  Surface the mode in the state snapshot so
+   a connected client knows the instance can't sound itself.
+
+   Plumb the option through every layer that already plumbs
+   ~audioDevice~: the Rust CLI/config (~--headless~ flag and
+   ~headless = true~ in the TOML), the NixOS module
+   (~services.sonify-health.headless~ in
+   ~nix/modules/nixos-daemon.nix~), and the nix-darwin module
+   (~services.sonify-health.headless~ in
+   ~nix/modules/darwin-daemon.nix~).  A speakerless server should
+   be configurable as a one-line ~headless = true~ at the Nix
+   level — without it, deploying to a server requires faking an
+   audio device.
+
+   Test on a machine with no speakers, or by forcing the flag on
+   locally.
 3. *Source-grouped UI.*  Render the single Local Source as its own
    panel.  Still no remotes — but the UI shape is now ready.
 4. *Outbound WebSocket client.*  Implement Remote Source connection,
