@@ -24,6 +24,12 @@ shifts that encode real meaning into peripheral awareness without
 requiring visual attention.  Physical speaker placement gives spatial
 location for free.
 
+A single ~sonify-health~ process can also subscribe to *other*
+instances' state and play their heartbeats on its own speakers — so
+a speakerless server can run the daemon to do the polling, and a
+laptop or workstation elsewhere can listen.  See /Multi-instance
+setup/ below.
+
 See [[file:sonification.org][sonification.org]] for the full design rationale.
 
 * Installation
@@ -99,8 +105,64 @@ sonify-health -c config.toml daemon
 
 Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
 
-Note that =--config= / =-c= is a global option and must appear
-*before* the subcommand.
+Note that global options like =--config= / =-c=, =--headless=, and
+=--source= must appear *before* the subcommand.
+
+** Multi-instance setup
+
+The daemon decouples the *poller* (the process running probe
+commands and producing metric data) from the *renderer* (the
+process that owns the audio device).  The two halves don't have
+to live on the same machine.
+
+*** Headless server
+
+A speakerless host runs the daemon in headless mode:
+
+#+begin_src sh :results none :exports code
+sonify-health -c config.toml --headless daemon
+#+end_src
+
+Or set =headless = true= in =config.toml=, or
+=services.sonify-health.headless = true= in the NixOS / nix-darwin
+module.  No audio device is opened and no play threads are
+spawned, but heartbeat polling and the WebSocket / metrics
+endpoints stay live so listeners can subscribe.
+
+*** Subscribing from a listener
+
+A listener (laptop, workstation) declares each remote in its
+config under =[[sources]]=:
+
+#+begin_src toml :exports code
+[[sources]]
+name = "prod-db-1"
+url  = "wss://db1.internal.example.com/ws"
+playback_enabled = true
+#+end_src
+
+Or on the command line, repeatable and merged with the config
+file's entries:
+
+#+begin_src sh :results none :exports code
+sonify-health --source prod-db-1=wss://db1.internal.example.com/ws daemon
+#+end_src
+
+Each source carries a =playback_enabled= toggle.  When false, the
+listener mirrors state silently — useful when you're back at a
+desk where another instance is already sounding the same servers.
+Flip it to true on the road and the listener plays the remote
+heartbeats from its own speakers without any other change.
+
+The Local Source is always named =localhost= (reserved).  Remote
+source names must be unique within the listener's config.
+
+*** Trusted networks only
+
+Outbound connections are not authenticated yet — use the feature
+on loopback, a VPN, an SSH tunnel, or a firewalled LAN.  Don't
+expose a remote source endpoint on the open internet without
+fronting it with your own auth proxy.
 
 * Configuration
 
@@ -112,7 +174,13 @@ Top-level keys:
 - =log_level= / =log_format= — logging control.
 - =listen= — web server bind address.
 - =audio_device= — audio output device name (default: system default).
+- =headless= — when true, skip the audio device entirely.  Pollers
+  and the WebSocket stay live; no audio is produced.  Default
+  false.  See /Multi-instance setup/ above.
 - =[patches]= — named patch definitions for the sound library.
+- =[[sources]]= — remote ~sonify-health~ instances to subscribe
+  to.  Each entry sets =name=, =url=, and an optional
+  =playback_enabled= (default false).
 
 Each =[[heartbeats]]= entry defines a probe and one or more notes.
 The =playback= field selects the mode (=clock=, =loop=, or

@@ -6,6 +6,12 @@ log_format = "text"  # text, json
 listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # audio_device = "My USB DAC"  # Omit to use system default
 
+# Run without opening an audio device.  Polls heartbeats and serves
+# state over the WebSocket but never spawns play threads.  Pair with
+# [[sources]] on a listener instance to render this server's
+# heartbeats from elsewhere.  Default false.
+# headless = false
+
 # Custom patch definitions.  Each key is a patch name.
 # [patches.warm]
 # freq = 220.0
@@ -62,3 +68,18 @@ listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # [heartbeats.notes.transition]
 # type = "gradient"
 # patches = ["warm", "sharp"]
+
+# Remote sonify-health instances to subscribe to.  Each entry creates
+# an outbound WebSocket connector that mirrors the remote's state
+# locally.  Audio for the source plays only when playback_enabled is
+# true — so a laptop can listen to remote heartbeats on the road and
+# stay silent at a desk where another instance covers them.
+#
+# Names must be unique; "localhost" is reserved for the Local Source.
+# Outbound connections are not yet authenticated, so use ws:// only
+# on trusted networks (loopback, VPN, SSH tunnel, firewalled LAN).
+#
+# [[sources]]
+# name = "prod-db-1"
+# url = "wss://db1.internal.example.com/ws"
+# playback_enabled = false
