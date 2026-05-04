@@ -69,37 +69,57 @@ fn resolve_device(
         .output_devices()
         .map_err(AudioError::DeviceEnumeration)?
         .collect();
-      // `DeviceTrait::name()` is deprecated in cpal 0.17 in favour
-      // of `description()` (which returns a structured
-      // `DeviceDescription` whose `.name()` is the human-readable
-      // label) and `id()` (for stable identity).  Substring
-      // matching, logging the selection, and listing available
-      // devices are all display-layer concerns — we want the
-      // human-readable name, so we go through `description().name()`
-      // at every site.
+      // cpal 0.17 deprecated `DeviceTrait::name()` and split it
+      // into two replacements: `description()` (human-readable
+      // label, manufacturer, etc.) and `id()` (stable identifier
+      // used to address the device).  On the ALSA backend, the
+      // id's inner string is the PCM identifier — `plughw:CARD=0`,
+      // `default`, `hw:1,0` — which is what operators rely on to
+      // pin a `plughw:` path that bypasses `dmix` on hardware
+      // where `dmix` silently produces zero samples.  An earlier
+      // refactor used only `description().name()` for matching,
+      // which broke that addressing because the description is
+      // the *display* string (e.g. "HDA Intel PCH, ALC897
+      // Analog") with no PCM path in it.  Matching against either
+      // field restores PCM-string addressability while keeping
+      // the friendly-name match for operators on macOS/Windows
+      // who never see a PCM path.
+      let id_string =
+        |d: &cpal::Device| -> Option<String> { d.id().ok().map(|id| id.1) };
+      let desc_name = |d: &cpal::Device| -> Option<String> {
+        d.description().ok().map(|desc| desc.name().to_string())
+      };
       let matched = devices.into_iter().find(|d| {
-        d.description()
-          .map(|desc| desc.name().to_lowercase().contains(&lower))
-          .unwrap_or(false)
+        let id_match = id_string(d)
+          .map(|s| s.to_lowercase().contains(&lower))
+          .unwrap_or(false);
+        let name_match = desc_name(d)
+          .map(|s| s.to_lowercase().contains(&lower))
+          .unwrap_or(false);
+        id_match || name_match
       });
       match matched {
         Some(d) => {
           tracing::info!(
             requested = name,
-            selected = d
-              .description()
-              .map(|desc| desc.name().to_string())
-              .unwrap_or_default(),
+            selected_id = id_string(&d).unwrap_or_default(),
+            selected_name = desc_name(&d).unwrap_or_default(),
             "Audio device selected"
           );
           d
         }
         None => {
+          // Surface both id and name in the diagnostic so the
+          // operator sees what they could have written for
+          // either matching mode.  Lines look like:
+          //   "plughw:CARD=0 (HDA Intel PCH, ALC897 Analog)"
           let available: Vec<String> = host
             .output_devices()
             .map_err(AudioError::DeviceEnumeration)?
-            .filter_map(|d| {
-              d.description().ok().map(|desc| desc.name().to_string())
+            .map(|d| {
+              let id = id_string(&d).unwrap_or_else(|| "?".to_string());
+              let n = desc_name(&d).unwrap_or_else(|| "?".to_string());
+              format!("{id} ({n})")
             })
             .collect();
           tracing::warn!(
