@@ -1,5 +1,5 @@
 use crate::lock_util::RecoverPoison;
-use crate::preview_state::{metric_label, PreviewState, Source};
+use crate::preview_state::{metric_label, PreviewState, Source, SourceKind};
 use serde_json::json;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer, MixerHandle, MAX_MIXER_SLOTS},
@@ -321,6 +321,14 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         });
       }
 
+      // -- Ensure play threads exist for every (source, hb) pair.
+      //    Catches Remote Sources whose heartbeats arrive after
+      //    startup, and respawns any that exited cleanly because
+      //    a heartbeat was removed and then re-added.
+      if !headless {
+        rebalance_play_threads(&preview, &mut supervised);
+      }
+
       // -- Stream recovery: if the audio stream has failed, attempt
       //    to rebuild it with exponential backoff.  Skipped entirely
       //    in headless mode (no mixer to recover).
@@ -498,6 +506,20 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 /// indices.
 fn source_at(preview: &PreviewState, source_idx: usize) -> &Source {
   &preview.sources[source_idx]
+}
+
+/// Whether the play threads for a Source should currently emit
+/// audio.  Local sources always play (the global `headless` flag
+/// already gates whether play threads exist at all).  Remote
+/// sources play only when their `playback_enabled` toggle is on,
+/// so a listener can mirror state silently without sounding it.
+fn source_should_play(source: &Source) -> bool {
+  match &source.kind {
+    SourceKind::Local => true,
+    SourceKind::Remote {
+      playback_enabled, ..
+    } => playback_enabled.load(Ordering::Relaxed),
+  }
 }
 
 /// Spawn a poll thread for `(source_idx, hb_idx)`.  Re-reads config
@@ -680,7 +702,10 @@ pub fn spawn_play_thread(
     // clock-mode heartbeats with different offsets start staggered.
     // Loop and Continuous modes skip this to start playing immediately.
     {
-      let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
+      let configs = source.heartbeat_configs.read().unwrap_or_recover();
+      let Some(cfg) = configs.get(hb_idx) else {
+        return;
+      };
       if cfg.playback == Playback::Clock {
         let wait = seconds_until_next(cfg.cycle_secs, cfg.cycle_offset_secs);
         if wait > 0.005 {
@@ -690,8 +715,25 @@ pub fn spawn_play_thread(
     }
 
     while play_running.load(Ordering::Relaxed) {
-      let mode =
-        source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback;
+      // Exit cleanly when the heartbeat is removed (e.g. a remote
+      // shape change that shrinks the list past `hb_idx`).
+      let mode = match source
+        .heartbeat_configs
+        .read()
+        .unwrap_or_recover()
+        .get(hb_idx)
+      {
+        Some(cfg) => cfg.playback,
+        None => return,
+      };
+
+      // For Remote sources, idle while the user has playback off.
+      // The thread stays alive; it just doesn't produce audio.
+      if !source_should_play(source) {
+        sleep_checking(&play_running, Duration::from_millis(200));
+        continue;
+      }
+
       match mode {
         Playback::Continuous => {
           play_continuous_tick(
@@ -727,6 +769,63 @@ pub fn spawn_play_thread(
       }
     }
   })
+}
+
+/// Ensure a play thread is alive for every `(source_idx, hb_idx)`
+/// pair that exists in the current `preview.sources`.  Called on
+/// each supervision tick so a Remote Source whose heartbeat list
+/// arrives or grows after startup picks up play threads without
+/// requiring a daemon restart.
+///
+/// The check considers a pair "live" only when its `SupervisedThread`
+/// has a `handle: Some(h)` and `!h.is_finished()`.  Existing entries
+/// whose handle has been taken (clean exit) get a fresh thread;
+/// pairs that were never spawned get a new `SupervisedThread`.
+///
+/// Skipped entirely when the daemon is headless — headless instances
+/// never spawn play threads, by design.
+fn rebalance_play_threads(
+  preview: &Arc<PreviewState>,
+  supervised: &mut Vec<SupervisedThread>,
+) {
+  for (source_idx, source) in preview.sources.iter().enumerate() {
+    let hb_count = source.heartbeats.read().unwrap_or_recover().len();
+    for hb_idx in 0..hb_count {
+      let live = supervised.iter().any(|st| {
+        st.source_idx == source_idx
+          && st.hb_idx == hb_idx
+          && st.role == ThreadRole::Play
+          && st
+            .handle
+            .as_ref()
+            .map(|h| !h.is_finished())
+            .unwrap_or(false)
+      });
+      if live {
+        continue;
+      }
+      let play_h = spawn_play_thread(preview, source_idx, hb_idx);
+      let existing = supervised.iter_mut().find(|st| {
+        st.source_idx == source_idx
+          && st.hb_idx == hb_idx
+          && st.role == ThreadRole::Play
+      });
+      match existing {
+        Some(st) => {
+          st.handle = Some(play_h);
+        }
+        None => {
+          supervised.push(SupervisedThread::new(
+            play_h,
+            source_idx,
+            source.name.clone(),
+            hb_idx,
+            ThreadRole::Play,
+          ));
+        }
+      }
+    }
+  }
 }
 
 /// Spawn poll and play threads for the heartbeat at `hb_idx` within
