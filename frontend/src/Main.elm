@@ -81,6 +81,7 @@ type alias Model =
     , configWritable : Bool
     , configPath : Maybe String
     , headless : Bool
+    , sources : List SourceInfo
     , saveStatus : Maybe String
     , playOnChange : Set String
     , metricHistory : Dict Int (List Float)
@@ -200,6 +201,7 @@ init _ url key =
       , configWritable = False
       , configPath = Nothing
       , headless = False
+      , sources = []
       , saveStatus = Nothing
       , playOnChange = Set.empty
       , metricHistory = Dict.empty
@@ -1046,6 +1048,7 @@ handleServerMsg msg model =
                 , configWritable = state.configWritable
                 , configPath = state.configPath
                 , headless = state.headless
+                , sources = state.sources
                 , selectedPatch =
                     case model.selectedPatch of
                         Nothing ->
@@ -1227,12 +1230,12 @@ handleServerMsg msg model =
         SaveError err ->
             ( { model | saveStatus = Just err }, Cmd.none )
 
-        Connected ->
+        WsConnected ->
             ( { model | connected = True }
             , Ports.websocketSend encodeGetState
             )
 
-        Disconnected ->
+        WsDisconnected ->
             ( { model | connected = False }, Cmd.none )
 
 

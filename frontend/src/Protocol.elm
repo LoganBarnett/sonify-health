@@ -1,5 +1,6 @@
 module Protocol exposing
-    ( HeartbeatInfo
+    ( ConnectionStatus(..)
+    , HeartbeatInfo
     , HeartbeatSlider(..)
     , LerpStrategy(..)
     , NoteInfo
@@ -10,6 +11,8 @@ module Protocol exposing
     , ServerMsg(..)
     , SliderRange
     , SliderRanges
+    , SourceInfo
+    , SourceKind(..)
     , TierInfo
     , TransitionInfo(..)
     , decodeServerMsg
@@ -143,6 +146,36 @@ type alias OverrideInfo =
     { base : String, delta : Dict String Float }
 
 
+type ConnectionStatus
+    = Connecting
+    | Connected
+    | Disconnected
+
+
+type SourceKind
+    = Local
+    | Remote
+        { url : String
+        , connectionStatus : ConnectionStatus
+        , playbackEnabled : Bool
+        }
+
+
+{-| One Source as carried by the state snapshot's `sources` array.
+The same `library` / `heartbeats` / `slider_ranges` / `overrides`
+shape as the existing top-level fields, plus the kind discriminant
+and (for remotes) connection / playback metadata.
+-}
+type alias SourceInfo =
+    { name : String
+    , kind : SourceKind
+    , library : Dict String (Dict String Float)
+    , heartbeats : List HeartbeatInfo
+    , sliderRanges : SliderRanges
+    , overrides : Dict String OverrideInfo
+    }
+
+
 
 -- Server messages (incoming)
 
@@ -159,6 +192,7 @@ type ServerMsg
         , configWritable : Bool
         , configPath : Maybe String
         , headless : Bool
+        , sources : List SourceInfo
         }
     | PatchParamChanged String String Float
     | MuteChanged Bool
@@ -179,8 +213,8 @@ type ServerMsg
     | ImportError String
     | ConfigSaved
     | SaveError String
-    | Connected
-    | Disconnected
+    | WsConnected
+    | WsDisconnected
 
 
 decodeServerMsg : String -> Result String ServerMsg
@@ -280,10 +314,10 @@ serverMsgDecoder =
                         saveErrorDecoder
 
                     "connected" ->
-                        D.succeed Connected
+                        D.succeed WsConnected
 
                     "disconnected" ->
-                        D.succeed Disconnected
+                        D.succeed WsDisconnected
 
                     _ ->
                         D.fail ("Unknown server message type: " ++ t)
@@ -298,7 +332,7 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map5
         (\pp lib muted mv hbs ->
-            \sr ovr cw cp hl ->
+            \sr ovr cw cp hl srcs ->
                 StateMsg
                     { patchParams = pp
                     , library = lib
@@ -310,6 +344,7 @@ stateDecoder =
                     , configWritable = cw
                     , configPath = cp
                     , headless = hl
+                    , sources = srcs
                     }
         )
         (D.field "patch_params" (D.list patchParamMetaDecoder))
@@ -319,7 +354,7 @@ stateDecoder =
         (D.field "heartbeats" (D.list heartbeatInfoDecoder))
         |> D.andThen
             (\buildState ->
-                D.map5 buildState
+                D.map6 buildState
                     (D.field "slider_ranges" sliderRangesDecoder)
                     (D.field "overrides" overridesDecoder)
                     (D.oneOf
@@ -333,7 +368,97 @@ stateDecoder =
                         , D.succeed False
                         ]
                     )
+                    (D.oneOf
+                        [ D.field "sources" (D.list sourceInfoDecoder)
+                        , D.succeed []
+                        ]
+                    )
             )
+
+
+sourceInfoDecoder : D.Decoder SourceInfo
+sourceInfoDecoder =
+    D.map6 SourceInfo
+        (D.field "name" D.string)
+        sourceKindDecoder
+        (D.field "library" libraryDecoder)
+        (D.field "heartbeats" (D.list heartbeatInfoDecoder))
+        (D.oneOf
+            [ D.field "slider_ranges" sliderRangesDecoder
+            , D.succeed defaultSliderRangesProtocol
+            ]
+        )
+        (D.field "overrides" overridesDecoder)
+
+
+{-| Branches on the `kind` discriminant the backend emits. Local
+sources have only `kind = "local"`; remotes carry the URL,
+connection status, and playback toggle inline.
+-}
+sourceKindDecoder : D.Decoder SourceKind
+sourceKindDecoder =
+    D.field "kind" D.string
+        |> D.andThen
+            (\k ->
+                case k of
+                    "local" ->
+                        D.succeed Local
+
+                    "remote" ->
+                        D.map3
+                            (\url cs pe ->
+                                Remote
+                                    { url = url
+                                    , connectionStatus = cs
+                                    , playbackEnabled = pe
+                                    }
+                            )
+                            (D.field "url" D.string)
+                            (D.field "connection_status" connectionStatusDecoder)
+                            (D.field "playback_enabled" D.bool)
+
+                    other ->
+                        D.fail ("Unknown source kind: " ++ other)
+            )
+
+
+connectionStatusDecoder : D.Decoder ConnectionStatus
+connectionStatusDecoder =
+    D.string
+        |> D.andThen
+            (\s ->
+                case s of
+                    "connecting" ->
+                        D.succeed Connecting
+
+                    "connected" ->
+                        D.succeed Connected
+
+                    "disconnected" ->
+                        D.succeed Disconnected
+
+                    other ->
+                        D.fail ("Unknown connection status: " ++ other)
+            )
+
+
+{-| Fallback for the rare snapshot that omits per-source slider
+ranges. Mirrors the Rust-side `SliderRanges::default()`. Kept
+here in Protocol.elm rather than importing from Main.elm to keep
+this module a leaf.
+-}
+defaultSliderRangesProtocol : SliderRanges
+defaultSliderRangesProtocol =
+    { masterVolume = { min = 0, max = 1, step = 0.01 }
+    , cycleOffset = { min = 0, max = 60, step = 0.1 }
+    , overrideMetric = { min = 0, max = 1, step = 0.01 }
+    , noteVolume = { min = 0, max = 1, step = 0.01 }
+    , noteOffset = { min = 0, max = 60, step = 0.1 }
+    , segmentIntensity = { min = 0.1, max = 10, step = 0.1 }
+    , discreteThreshold = { min = 0, max = 1, step = 0.01 }
+    , stepPosition = { min = 0, max = 1, step = 0.01 }
+    , crossfadeMs = { min = 0, max = 500, step = 1 }
+    }
 
 
 patchParamMetaDecoder : D.Decoder PatchParamMeta

@@ -474,20 +474,17 @@ impl PreviewState {
 
   /// Build a full state snapshot JSON string for WebSocket clients.
   ///
-  /// The protocol today emits a flat `heartbeats` list and a single
-  /// `library`; both come from the Local Source.  When the protocol
-  /// gains a `sources` array, this method will iterate `self.sources`
-  /// and emit one entry per Source.
+  /// The snapshot carries a `sources` array — one entry per Source
+  /// in `self.sources`, each with its own library, heartbeats,
+  /// slider ranges, overrides, kind, and (for Remote sources)
+  /// connection status / playback toggle.
+  ///
+  /// The legacy flat fields (`library`, `heartbeats`,
+  /// `slider_ranges`, `overrides`, `config_writable`, `config_path`)
+  /// continue to mirror the Local Source's data so the existing
+  /// frontend keeps working during the transition; the next step
+  /// switches the frontend to consume `sources` and drops these.
   pub fn state_snapshot(&self) -> String {
-    let local = self.local();
-    let lib = local.library.read().unwrap_or_recover();
-    let lib_json: serde_json::Map<String, serde_json::Value> = lib
-      .iter()
-      .map(|(name, patch)| {
-        (name.clone(), serde_json::to_value(patch).unwrap_or_default())
-      })
-      .collect();
-
     let param_metas: Vec<_> = Patch::PARAMS
       .iter()
       .map(|m| {
@@ -501,78 +498,143 @@ impl PreviewState {
       })
       .collect();
 
-    let hb_configs = local.heartbeat_configs.read().unwrap_or_recover();
-    let hbs = local.heartbeats.read().unwrap_or_recover();
-    let heartbeats_json: Vec<_> = hb_configs
-      .iter()
-      .enumerate()
-      .map(|(i, cfg)| {
-        let hb = &hbs[i];
-        let overridden = hb.override_value.read().unwrap_or_recover().is_some();
-        let notes_json: Vec<_> = cfg
-          .notes
-          .iter()
-          .map(|nc| {
-            json!({
-              "volume": nc.volume,
-              "offset": nc.offset,
-              "transition": serde_json::to_value(&nc.transition).unwrap_or_default(),
-            })
-          })
-          .collect();
-        json!({
-          "name": cfg.name,
-          "command": cfg.command,
-          "result_mode": serde_json::to_value(&cfg.result_mode).unwrap_or_default(),
-          "playback": serde_json::to_value(&cfg.playback).unwrap_or_default(),
-          "metric": hb.metric.value(),
-          "overridden": overridden,
-          "poll_interval_secs": cfg.poll_interval_secs,
-          "cycle_secs": cfg.cycle_secs,
-          "cycle_offset_secs": cfg.cycle_offset_secs,
-          "crossfade_ms": cfg.crossfade_ms,
-          "phrase_gap": cfg.phrase_gap,
-          "repeat_rate": cfg.repeat_rate,
-          "notes": notes_json,
-          "tiers": serde_json::to_value(&cfg.tiers).unwrap_or_default(),
-        })
-      })
-      .collect();
+    let sources_json: Vec<_> =
+      self.sources.iter().map(source_state_json).collect();
 
-    let overrides_json = self.overrides_json();
+    let local = self.local();
+    let local_json = source_state_json(local);
 
     json!({
       "type": "state",
       "patch_params": param_metas,
-      "library": lib_json,
+      "library": local_json["library"].clone(),
       "muted": self.muted.load(Ordering::Relaxed),
       "master_volume": self.master_volume.value(),
-      "heartbeats": heartbeats_json,
-      "slider_ranges": serde_json::to_value(&local.slider_ranges).unwrap_or_default(),
-      "overrides": overrides_json,
+      "heartbeats": local_json["heartbeats"].clone(),
+      "slider_ranges": local_json["slider_ranges"].clone(),
+      "overrides": local_json["overrides"].clone(),
       "config_writable": local.config_writable,
       "config_path": local.config_path.as_ref().map(|p| p.display().to_string()),
       "headless": self.headless,
+      "sources": sources_json,
     })
     .to_string()
   }
 
   /// Serialize the local override map to a JSON value.
   pub fn overrides_json(&self) -> serde_json::Value {
-    let ovr = self.local().overrides.read().unwrap_or_recover();
-    let map: serde_json::Map<String, serde_json::Value> = ovr
-      .iter()
-      .map(|(name, info)| {
-        let delta: serde_json::Map<String, serde_json::Value> = info
-          .delta
-          .iter()
-          .map(|(k, v)| (k.clone(), json!(v)))
-          .collect();
-        (name.clone(), json!({ "base": info.base, "delta": delta }))
-      })
-      .collect();
-    serde_json::Value::Object(map)
+    source_overrides_json(self.local())
   }
+}
+
+/// Build the per-Source JSON entry that goes into the snapshot's
+/// `sources` array.  Common fields (library, heartbeats, slider
+/// ranges, override map, name, kind) are emitted for every Source;
+/// kind-specific fields layer on after.
+fn source_state_json(source: &Source) -> serde_json::Value {
+  let lib = source.library.read().unwrap_or_recover();
+  let lib_json: serde_json::Map<String, serde_json::Value> = lib
+    .iter()
+    .map(|(name, patch)| {
+      (name.clone(), serde_json::to_value(patch).unwrap_or_default())
+    })
+    .collect();
+
+  let hb_configs = source.heartbeat_configs.read().unwrap_or_recover();
+  let hbs = source.heartbeats.read().unwrap_or_recover();
+  let heartbeats_json: Vec<_> = hb_configs
+    .iter()
+    .enumerate()
+    .map(|(i, cfg)| {
+      let hb = &hbs[i];
+      let overridden = hb.override_value.read().unwrap_or_recover().is_some();
+      let notes_json: Vec<_> = cfg
+        .notes
+        .iter()
+        .map(|nc| {
+          json!({
+            "volume": nc.volume,
+            "offset": nc.offset,
+            "transition": serde_json::to_value(&nc.transition).unwrap_or_default(),
+          })
+        })
+        .collect();
+      json!({
+        "name": cfg.name,
+        "command": cfg.command,
+        "result_mode": serde_json::to_value(&cfg.result_mode).unwrap_or_default(),
+        "playback": serde_json::to_value(&cfg.playback).unwrap_or_default(),
+        "metric": hb.metric.value(),
+        "overridden": overridden,
+        "poll_interval_secs": cfg.poll_interval_secs,
+        "cycle_secs": cfg.cycle_secs,
+        "cycle_offset_secs": cfg.cycle_offset_secs,
+        "crossfade_ms": cfg.crossfade_ms,
+        "phrase_gap": cfg.phrase_gap,
+        "repeat_rate": cfg.repeat_rate,
+        "notes": notes_json,
+        "tiers": serde_json::to_value(&cfg.tiers).unwrap_or_default(),
+      })
+    })
+    .collect();
+
+  let mut entry = json!({
+    "name": source.name,
+    "library": lib_json,
+    "heartbeats": heartbeats_json,
+    "slider_ranges": serde_json::to_value(&source.slider_ranges).unwrap_or_default(),
+    "overrides": source_overrides_json(source),
+  });
+
+  let obj = entry.as_object_mut().expect("entry built as object");
+  match &source.kind {
+    SourceKind::Local => {
+      obj.insert("kind".to_string(), json!("local"));
+      obj.insert("config_writable".to_string(), json!(source.config_writable));
+      obj.insert(
+        "config_path".to_string(),
+        match &source.config_path {
+          Some(p) => json!(p.display().to_string()),
+          None => serde_json::Value::Null,
+        },
+      );
+    }
+    SourceKind::Remote {
+      url,
+      status,
+      playback_enabled,
+    } => {
+      obj.insert("kind".to_string(), json!("remote"));
+      obj.insert("url".to_string(), json!(url));
+      obj.insert(
+        "connection_status".to_string(),
+        json!(status.read().unwrap_or_recover().as_str()),
+      );
+      obj.insert(
+        "playback_enabled".to_string(),
+        json!(playback_enabled.load(Ordering::Relaxed)),
+      );
+    }
+  }
+  entry
+}
+
+/// Serialize a Source's override map to a JSON value matching the
+/// shape that `OverrideInfo`'s derived `Serialize` would produce.
+fn source_overrides_json(source: &Source) -> serde_json::Value {
+  let ovr = source.overrides.read().unwrap_or_recover();
+  let map: serde_json::Map<String, serde_json::Value> = ovr
+    .iter()
+    .map(|(name, info)| {
+      let delta: serde_json::Map<String, serde_json::Value> = info
+        .delta
+        .iter()
+        .map(|(k, v)| (k.clone(), json!(v)))
+        .collect();
+      (name.clone(), json!({ "base": info.base, "delta": delta }))
+    })
+    .collect();
+  serde_json::Value::Object(map)
 }
 
 /// Return a human-readable label for a metric value.  Uses custom
@@ -685,6 +747,64 @@ mod tests {
       .add_remote_source("only-once".to_string(), "ws://b/ws".to_string())
       .unwrap_err();
     assert!(matches!(err, AddSourceError::DuplicateName { .. }));
+  }
+
+  #[test]
+  fn state_snapshot_includes_sources_array() {
+    let mut preview = make_preview(false);
+    preview
+      .add_remote_source(
+        "edge-1".to_string(),
+        "wss://edge1.example/ws".to_string(),
+      )
+      .unwrap();
+    let snap: serde_json::Value =
+      serde_json::from_str(&preview.state_snapshot()).unwrap();
+
+    let sources = snap["sources"].as_array().expect("sources is array");
+    assert_eq!(sources.len(), 2);
+
+    let local = sources
+      .iter()
+      .find(|s| s["name"] == "localhost")
+      .expect("local source entry");
+    assert_eq!(local["kind"], "local");
+    assert!(local.get("library").is_some());
+    assert!(local.get("heartbeats").is_some());
+
+    let remote = sources
+      .iter()
+      .find(|s| s["name"] == "edge-1")
+      .expect("remote source entry");
+    assert_eq!(remote["kind"], "remote");
+    assert_eq!(remote["url"], "wss://edge1.example/ws");
+    assert_eq!(remote["connection_status"], "connecting");
+    assert_eq!(remote["playback_enabled"], false);
+    // Empty mirror until the connector populates it.
+    assert!(remote["heartbeats"].as_array().unwrap().is_empty());
+  }
+
+  #[test]
+  fn state_snapshot_flat_fields_still_mirror_local() {
+    // Backward-compat assertion: until the frontend cuts over to
+    // `sources`, the existing flat fields must keep reflecting the
+    // Local Source so step 6a is invisible to the current UI.
+    let mut preview = make_preview(false);
+    preview
+      .add_remote_source(
+        "edge-1".to_string(),
+        "wss://edge1.example/ws".to_string(),
+      )
+      .unwrap();
+    let snap: serde_json::Value =
+      serde_json::from_str(&preview.state_snapshot()).unwrap();
+
+    let sources = snap["sources"].as_array().unwrap();
+    let local = sources.iter().find(|s| s["name"] == "localhost").unwrap();
+    assert_eq!(snap["library"], local["library"]);
+    assert_eq!(snap["heartbeats"], local["heartbeats"]);
+    assert_eq!(snap["overrides"], local["overrides"]);
+    assert_eq!(snap["slider_ranges"], local["slider_ranges"]);
   }
 
   #[test]
