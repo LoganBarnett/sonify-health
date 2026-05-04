@@ -384,6 +384,22 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   systemd::notify_ready();
   systemd::spawn_watchdog();
 
+  // Spawn one outbound WebSocket connector per Remote Source.
+  // Today no path constructs Remote Sources at startup (config
+  // plumbing lands in step 5), so this loop is a no-op for the
+  // default config — but the integration is wired so a Remote
+  // Source added via test fixtures or future config code starts
+  // mirroring as soon as the runtime is up.
+  for (idx, source) in preview.sources.iter().enumerate() {
+    if matches!(source.kind, preview_state::SourceKind::Remote { .. }) {
+      let connector_preview = Arc::clone(&preview);
+      tokio::spawn(async move {
+        sonify_health_cli::remote_source::run_connector(connector_preview, idx)
+          .await;
+      });
+    }
+  }
+
   // Spawn the blocking daemon loop in a separate thread.
   let audio_device = config.audio_device.clone();
   let daemon_preview = Arc::clone(&preview);
