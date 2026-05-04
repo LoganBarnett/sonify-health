@@ -37,7 +37,12 @@ thiserror = "2.0"
 # Testing
 tempfile = "3"
 trybuild = "1.0"
-tokio-tungstenite = "0.26"
+# `rustls-tls-native-roots` matches the reqwest pattern above:
+# rustls for TLS, with `rustls-native-certs` reading the system CA
+# store at runtime so private CAs (e.g. proton-ca) installed at
+# /etc/ssl/certs are honoured.  Without a TLS feature, `wss://`
+# connections fail with "URL error: TLS support not compiled in".
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 
 # Audio
 fundsp = "0.23"
