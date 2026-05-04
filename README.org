@@ -225,11 +225,6 @@ sonify-health group so it can connect to the socket:
       locations."/" = {
         proxyPass = "http://unix:${config.services.sonify-health.socket}:";
         proxyWebsockets = true;
-        # WebSockets idle between metric_changed frames; the
-        # default 60s read timeout will close them.
-        extraConfig = ''
-          proxy_read_timeout 1h;
-        '';
       };
     };
   };
@@ -270,7 +265,6 @@ server {
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host       $host;
-        proxy_read_timeout 1h;
     }
 }
 #+end_src
@@ -279,6 +273,13 @@ Listeners use =wss://sonify.example.com/ws= the same way.  The
 daemon doesn't know or care that TLS is being terminated upstream
 — it sees a regular HTTP/1.1 connection with =Upgrade:
 websocket= and runs the handshake.
+
+The default 60s =proxy_read_timeout= is left in place
+deliberately: the daemon broadcasts =metric_changed= every poll
+interval, so a healthy WebSocket sees traffic well inside that
+window.  If a connection /does/ idle out, something has actually
+gone wrong (the remote's polls have stopped, or the network has
+silently dropped) — a reconnect is the right response.
 
 * Configuration
 
