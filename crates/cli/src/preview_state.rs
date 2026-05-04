@@ -1,4 +1,4 @@
-use crate::config::{OverrideInfo, SliderRanges};
+use crate::config::{OverrideInfo, RemoteSourceConfig, SliderRanges};
 use crate::lock_util::RecoverPoison;
 use crate::metrics::Metrics;
 use fundsp::prelude32::shared;
@@ -353,6 +353,28 @@ impl PreviewState {
       thread::sleep(dur);
       handle.remove(sid);
     });
+  }
+
+  /// Project the current Remote Sources back to their config-side
+  /// `RemoteSourceConfig` shape so save/export round-trips pick up
+  /// runtime changes (e.g. the user toggling `playback_enabled`).
+  pub fn remote_source_configs(&self) -> Vec<RemoteSourceConfig> {
+    self
+      .sources
+      .iter()
+      .filter_map(|s| match &s.kind {
+        SourceKind::Remote {
+          url,
+          playback_enabled,
+          ..
+        } => Some(RemoteSourceConfig {
+          name: s.name.clone(),
+          url: url.clone(),
+          playback_enabled: playback_enabled.load(Ordering::Relaxed),
+        }),
+        SourceKind::Local => None,
+      })
+      .collect()
   }
 
   /// Append an empty Remote Source to `self.sources`.  The source

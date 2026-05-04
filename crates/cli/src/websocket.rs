@@ -553,24 +553,28 @@ fn handle_client_message(
       let ovr = preview.local().overrides.read().unwrap_or_recover();
       let hb_configs =
         preview.local().heartbeat_configs.read().unwrap_or_recover();
+      let remote_sources = preview.remote_source_configs();
       let result = match format {
         "json" => build_save_json(
           &lib,
           &ovr,
           &hb_configs,
           &preview.local().slider_ranges,
+          &remote_sources,
         ),
         "nix" => build_save_nix(
           &lib,
           &ovr,
           &hb_configs,
           &preview.local().slider_ranges,
+          &remote_sources,
         ),
         _ => build_save_toml(
           &lib,
           &ovr,
           &hb_configs,
           &preview.local().slider_ranges,
+          &remote_sources,
         ),
       };
       match result {
@@ -779,11 +783,13 @@ fn handle_client_message(
       let hb_configs =
         preview.local().heartbeat_configs.read().unwrap_or_recover();
 
+      let remote_sources = preview.remote_source_configs();
       let toml_str = match build_save_toml(
         &lib,
         &ovr,
         &hb_configs,
         &preview.local().slider_ranges,
+        &remote_sources,
       ) {
         Ok(s) => s,
         Err(e) => {

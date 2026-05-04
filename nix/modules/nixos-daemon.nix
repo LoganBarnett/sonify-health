@@ -69,6 +69,15 @@
     // lib.optionalAttrs cfg.headless {
       headless = true;
     }
+    // lib.optionalAttrs (cfg.sources != []) {
+      sources =
+        map (s: {
+          name = s.name;
+          url = s.url;
+          playback_enabled = s.playbackEnabled;
+        })
+        cfg.sources;
+    }
     // lib.optionalAttrs (cfg.patches != {}) {
       patches = cfg.patches;
     }
@@ -112,6 +121,45 @@
         })
       cfg.heartbeats;
     });
+
+  sourceSubmodule = lib.types.submodule {
+    options = {
+      name = lib.mkOption {
+        type = lib.types.str;
+        example = "prod-db-1";
+        description = ''
+          Display name and unique identifier for this Remote Source.
+          Must be unique across all sources and cannot be `localhost`,
+          which is reserved for the Local Source.  Conventionally
+          defaults to the URL's hostname when added through the UI;
+          a friendlier label (e.g. `prod-db-1`) is preferred when
+          managing it through this module.
+        '';
+      };
+
+      url = lib.mkOption {
+        type = lib.types.str;
+        example = "wss://db1.internal.example.com/ws";
+        description = ''
+          WebSocket URL of the remote sonify-health instance.  Use
+          `ws://` for plaintext (trusted networks only) or `wss://`
+          for TLS.
+        '';
+      };
+
+      playbackEnabled = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether the local renderer plays audio for this remote's
+          heartbeats.  Defaults to false: even with the source
+          declared, audio stays silent until enabled (the laptop
+          versus office switch — listen on the laptop, mute when
+          back at the desk so the office speakers don't double up).
+        '';
+      };
+    };
+  };
 
   noteSubmodule = lib.types.submodule {
     options = {
@@ -310,6 +358,26 @@ in {
         rendered remotely by another sonify-health instance subscribed
         to this one.  Mutually compatible with audioDevice (audioDevice
         is simply ignored when headless = true).
+      '';
+    };
+
+    sources = lib.mkOption {
+      type = lib.types.listOf sourceSubmodule;
+      default = [];
+      example = [
+        {
+          name = "prod-db-1";
+          url = "wss://db1.internal.example.com/ws";
+          playbackEnabled = false;
+        }
+      ];
+      description = ''
+        Remote sonify-health instances whose state this daemon
+        subscribes to and (when playbackEnabled = true) plays audio
+        for.  Each entry creates an outbound WebSocket connector.
+
+        Names must be unique across the list; `localhost` is reserved
+        for the Local Source.
       '';
     };
 

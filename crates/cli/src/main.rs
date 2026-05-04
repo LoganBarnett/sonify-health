@@ -114,6 +114,13 @@ struct Cli {
   #[arg(long, env = "HEADLESS")]
   headless: bool,
 
+  /// Declare a Remote Source as `name=url`.  May be repeated.
+  /// Sources from the config file's `[[sources]]` array and these
+  /// CLI flags are merged; names must be unique across the merged
+  /// set, and `localhost` is reserved for the Local Source.
+  #[arg(long, value_name = "NAME=URL")]
+  source: Vec<String>,
+
   #[command(subcommand)]
   command: Command,
 }
@@ -171,6 +178,7 @@ async fn main() -> Result<(), ApplicationError> {
     cli.oidc_client_id.as_deref(),
     cli.oidc_client_secret_file.as_deref(),
     cli_headless,
+    &cli.source,
   )?;
 
   init_logging(config.log_level, config.log_format);
@@ -295,7 +303,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     std::fs::metadata(p).map_or(false, |m| !m.permissions().readonly())
   });
 
-  let preview = Arc::new(preview_state::PreviewState::new(
+  let mut preview = preview_state::PreviewState::new(
     config.library.clone(),
     config.overrides.clone(),
     config.heartbeats.clone(),
@@ -306,7 +314,26 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     config.config_path.clone(),
     config_writable,
     config.headless,
-  ));
+  );
+  // Declare each Remote Source up-front so the connector spawn
+  // loop below picks them up, and apply the user's
+  // playback_enabled choice from the config / CLI.
+  for rs in &config.remote_sources {
+    let idx = preview
+      .add_remote_source(rs.name.clone(), rs.url.clone())
+      .map_err(|e| {
+        ApplicationError::ConfigurationLoad(config::ConfigError::Validation(
+          format!("{e}"),
+        ))
+      })?;
+    if let preview_state::SourceKind::Remote {
+      playback_enabled, ..
+    } = &preview.sources[idx].kind
+    {
+      playback_enabled.store(rs.playback_enabled, Ordering::Relaxed);
+    }
+  }
+  let preview = Arc::new(preview);
 
   // Perform OIDC provider discovery when configured.
   let oidc_client = match &config.oidc {

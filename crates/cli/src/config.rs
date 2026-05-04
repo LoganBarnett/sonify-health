@@ -22,6 +22,30 @@ pub struct OverrideInfo {
   pub delta: HashMap<String, f64>,
 }
 
+/// Static configuration for a single Remote Source — the entry the
+/// user writes in their config file or passes on the CLI to declare
+/// "subscribe to this other instance and mirror its state."  The
+/// runtime `Source` (in `preview_state::Source`) is constructed
+/// from this descriptor at startup; the connector then populates
+/// the runtime's library/heartbeats from the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteSourceConfig {
+  /// Display name and unique identifier for the source.  Cannot be
+  /// `"localhost"` (reserved for the Local Source) and must not
+  /// collide with another source's name.
+  pub name: String,
+
+  /// WebSocket URL — `ws://` or `wss://`.
+  pub url: String,
+
+  /// Whether the local renderer plays audio for this source.
+  /// Default false: the user opts in explicitly so adding a remote
+  /// to the config never starts playing audio without consent.
+  #[serde(default)]
+  pub playback_enabled: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
   #[error(
@@ -192,6 +216,8 @@ pub(crate) struct ConfigFileRaw {
   #[serde(default)]
   slider_ranges: SliderRanges,
   oidc: Option<OidcSectionRaw>,
+  #[serde(default)]
+  sources: Vec<RemoteSourceConfig>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -237,6 +263,11 @@ pub struct Config {
   pub slider_ranges: SliderRanges,
   pub oidc: Option<OidcConfig>,
   pub config_path: Option<PathBuf>,
+  /// Remote source declarations.  CLI `--source` flags are merged
+  /// with the file's `[[sources]]` array (CLI entries appended
+  /// after file entries); name uniqueness is enforced across the
+  /// merged set.
+  pub remote_sources: Vec<RemoteSourceConfig>,
 }
 
 impl Config {
@@ -255,6 +286,7 @@ impl Config {
     oidc_client_id: Option<&str>,
     oidc_client_secret_file: Option<&Path>,
     headless: Option<bool>,
+    remote_source_args: &[String],
   ) -> Result<Self, ConfigError> {
     let (file, resolved_config_path) = match config_path {
       Some(p) => (ConfigFileRaw::from_file(p)?, Some(p.to_path_buf())),
@@ -435,6 +467,47 @@ impl Config {
       hb.resolve_legacy_continuous();
     }
 
+    // Remote sources: file's [[sources]] first, then any CLI
+    // --source flags appended.  Each CLI flag is `name=url`,
+    // splitting on the first `=` so URLs containing `=` survive.
+    let mut remote_sources = file.sources;
+    for raw in remote_source_args {
+      let (name, url) = raw.split_once('=').ok_or_else(|| {
+        ConfigError::Validation(format!(
+          "--source argument {raw:?} must be of the form name=url"
+        ))
+      })?;
+      if name.is_empty() || url.is_empty() {
+        return Err(ConfigError::Validation(format!(
+          "--source argument {raw:?} has empty name or url"
+        )));
+      }
+      remote_sources.push(RemoteSourceConfig {
+        name: name.to_string(),
+        url: url.to_string(),
+        playback_enabled: false,
+      });
+    }
+    // Mirrors preview_state::LOCAL_SOURCE_NAME — kept inline to
+    // avoid a cross-module constant reference for a value that
+    // will never change.
+    const RESERVED_LOCAL_NAME: &str = "localhost";
+    let mut seen = std::collections::HashSet::new();
+    for s in &remote_sources {
+      if s.name == RESERVED_LOCAL_NAME {
+        return Err(ConfigError::Validation(format!(
+          "remote source name {:?} is reserved for the Local Source",
+          s.name
+        )));
+      }
+      if !seen.insert(s.name.as_str()) {
+        return Err(ConfigError::Validation(format!(
+          "remote source name {:?} is declared more than once",
+          s.name
+        )));
+      }
+    }
+
     Ok(Config {
       log_level,
       log_format,
@@ -448,6 +521,7 @@ impl Config {
       slider_ranges: file.slider_ranges,
       oidc,
       config_path: resolved_config_path,
+      remote_sources,
     })
   }
 }
@@ -462,6 +536,7 @@ pub fn build_save_toml(
   overrides: &HashMap<String, OverrideInfo>,
   heartbeats: &[HeartbeatConfig],
   slider_ranges: &SliderRanges,
+  remote_sources: &[RemoteSourceConfig],
 ) -> Result<String, ConfigSaveError> {
   let builtins = builtin_library();
   let mut doc = toml::Table::new();
@@ -513,6 +588,13 @@ pub fn build_save_toml(
     doc.insert("slider_ranges".to_string(), sr_val);
   }
 
+  // Remote sources (only if any are declared).
+  if !remote_sources.is_empty() {
+    let val = toml::Value::try_from(remote_sources)
+      .map_err(ConfigSaveError::RemoteSourcesSerialize)?;
+    doc.insert("sources".to_string(), val);
+  }
+
   toml::to_string_pretty(&doc).map_err(ConfigSaveError::Serialize)
 }
 
@@ -523,6 +605,7 @@ fn build_save_value(
   overrides: &HashMap<String, OverrideInfo>,
   heartbeats: &[HeartbeatConfig],
   slider_ranges: &SliderRanges,
+  remote_sources: &[RemoteSourceConfig],
 ) -> Result<serde_json::Value, ConfigSaveError> {
   let builtins = builtin_library();
   let mut doc = serde_json::Map::new();
@@ -568,6 +651,12 @@ fn build_save_value(
     doc.insert("slider_ranges".into(), sr_val);
   }
 
+  if !remote_sources.is_empty() {
+    let val = serde_json::to_value(remote_sources)
+      .map_err(ConfigSaveError::JsonSerialize)?;
+    doc.insert("sources".into(), val);
+  }
+
   Ok(serde_json::Value::Object(doc))
 }
 
@@ -577,8 +666,15 @@ pub fn build_save_json(
   overrides: &HashMap<String, OverrideInfo>,
   heartbeats: &[HeartbeatConfig],
   slider_ranges: &SliderRanges,
+  remote_sources: &[RemoteSourceConfig],
 ) -> Result<String, ConfigSaveError> {
-  let val = build_save_value(library, overrides, heartbeats, slider_ranges)?;
+  let val = build_save_value(
+    library,
+    overrides,
+    heartbeats,
+    slider_ranges,
+    remote_sources,
+  )?;
   serde_json::to_string_pretty(&val).map_err(ConfigSaveError::JsonSerialize)
 }
 
@@ -590,8 +686,15 @@ pub fn build_save_nix(
   overrides: &HashMap<String, OverrideInfo>,
   heartbeats: &[HeartbeatConfig],
   slider_ranges: &SliderRanges,
+  remote_sources: &[RemoteSourceConfig],
 ) -> Result<String, ConfigSaveError> {
-  let val = build_save_value(library, overrides, heartbeats, slider_ranges)?;
+  let val = build_save_value(
+    library,
+    overrides,
+    heartbeats,
+    slider_ranges,
+    remote_sources,
+  )?;
   Ok(nix_body(&val))
 }
 
@@ -684,6 +787,9 @@ pub enum ConfigSaveError {
 
   #[error("Failed to serialize slider ranges: {0}")]
   SliderRangesSerialize(toml::ser::Error),
+
+  #[error("Failed to serialize remote sources: {0}")]
+  RemoteSourcesSerialize(toml::ser::Error),
 
   #[error("Failed to serialize config: {0}")]
   Serialize(toml::ser::Error),
@@ -858,6 +964,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
     std::fs::remove_file(&cfg_path).ok();
@@ -868,6 +975,258 @@ mod tests {
     assert!(config.overrides.contains_key("hi-tone"));
     assert_eq!(config.overrides["hi-tone"].base, "base-tone");
     assert!(config.overrides["hi-tone"].delta.contains_key("freq"));
+  }
+
+  #[test]
+  fn round_trip_remote_sources() {
+    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    let cfg_path = tmp.path().to_path_buf();
+    std::fs::write(
+      &cfg_path,
+      r#"
+[[sources]]
+name = "prod-db-1"
+url = "wss://db1.example/ws"
+
+[[sources]]
+name = "edge-node-2"
+url = "ws://edge2.example/ws"
+playback_enabled = true
+"#,
+    )
+    .unwrap();
+    let original = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(cfg_path.as_path()),
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+    )
+    .unwrap();
+    std::fs::remove_file(&cfg_path).ok();
+
+    let saved = build_save_toml(
+      &original.library,
+      &original.overrides,
+      &original.heartbeats,
+      &original.slider_ranges,
+      &original.remote_sources,
+    )
+    .unwrap();
+
+    let tmp2 = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    let cfg2 = tmp2.path().to_path_buf();
+    std::fs::write(&cfg2, saved).unwrap();
+    let reloaded = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(cfg2.as_path()),
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+    )
+    .unwrap();
+    std::fs::remove_file(&cfg2).ok();
+
+    assert_eq!(original.remote_sources, reloaded.remote_sources);
+  }
+
+  #[test]
+  fn config_file_sources_section_parses() {
+    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    let cfg_path = tmp.path().to_path_buf();
+    std::fs::write(
+      &cfg_path,
+      r#"
+[[sources]]
+name = "prod-db-1"
+url = "wss://db1.example/ws"
+
+[[sources]]
+name = "edge-node-2"
+url = "ws://edge2.example/ws"
+playback_enabled = true
+"#,
+    )
+    .unwrap();
+    let config = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(cfg_path.as_path()),
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+    )
+    .unwrap();
+    std::fs::remove_file(&cfg_path).ok();
+    assert_eq!(config.remote_sources.len(), 2);
+    assert_eq!(config.remote_sources[0].name, "prod-db-1");
+    assert!(!config.remote_sources[0].playback_enabled);
+    assert_eq!(config.remote_sources[1].name, "edge-node-2");
+    assert!(config.remote_sources[1].playback_enabled);
+  }
+
+  #[test]
+  fn cli_and_file_sources_are_merged_and_validated_together() {
+    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    let cfg_path = tmp.path().to_path_buf();
+    std::fs::write(
+      &cfg_path,
+      r#"
+[[sources]]
+name = "from-file"
+url = "ws://file/ws"
+"#,
+    )
+    .unwrap();
+    let err = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      Some(cfg_path.as_path()),
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &["from-file=ws://cli/ws".to_string()],
+    )
+    .unwrap_err();
+    std::fs::remove_file(&cfg_path).ok();
+    let msg = format!("{err}");
+    assert!(msg.contains("more than once"), "{msg}");
+  }
+
+  #[test]
+  fn cli_source_flag_appends_remote_source() {
+    let config = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &["prod-db-1=ws://db1/ws".to_string()],
+    )
+    .unwrap();
+    assert_eq!(config.remote_sources.len(), 1);
+    let s = &config.remote_sources[0];
+    assert_eq!(s.name, "prod-db-1");
+    assert_eq!(s.url, "ws://db1/ws");
+    assert!(!s.playback_enabled);
+  }
+
+  #[test]
+  fn cli_source_flag_rejects_missing_equals() {
+    let err = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &["malformed".to_string()],
+    )
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("name=url"), "{msg}");
+  }
+
+  #[test]
+  fn remote_source_named_localhost_is_rejected() {
+    let err = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &["localhost=ws://elsewhere/ws".to_string()],
+    )
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("reserved"), "{msg}");
+  }
+
+  #[test]
+  fn remote_source_duplicate_name_is_rejected() {
+    let err = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &["dup=ws://a/ws".to_string(), "dup=ws://b/ws".to_string()],
+    )
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("more than once"), "{msg}");
+  }
+
+  #[test]
+  fn cli_source_url_with_equals_survives_split() {
+    // splitn(2, '=') keeps the rest of the URL intact even when it
+    // contains '=' (e.g. a query parameter).
+    let config = Config::from_args(
+      None,
+      None,
+      None,
+      None,
+      None,
+      &[],
+      None,
+      None,
+      None,
+      None,
+      None,
+      &["q=ws://host/ws?token=abc".to_string()],
+    )
+    .unwrap();
+    assert_eq!(config.remote_sources.len(), 1);
+    assert_eq!(config.remote_sources[0].name, "q");
+    assert_eq!(config.remote_sources[0].url, "ws://host/ws?token=abc");
   }
 
   #[test]
@@ -884,6 +1243,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
     assert!(config.heartbeats.is_empty());
@@ -903,6 +1263,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
     assert!(config.library.contains_key("sine"));
@@ -986,6 +1347,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
 
@@ -1008,6 +1370,7 @@ mod tests {
       &overrides,
       &config.heartbeats,
       &config.slider_ranges,
+      &config.remote_sources,
     )
     .unwrap();
 
@@ -1026,6 +1389,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
 
@@ -1151,6 +1515,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
 
@@ -1159,6 +1524,7 @@ mod tests {
       &original.overrides,
       &original.heartbeats,
       &original.slider_ranges,
+      &original.remote_sources,
     )
     .unwrap();
 
@@ -1177,6 +1543,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
 
@@ -1413,6 +1780,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
 
@@ -1439,6 +1807,7 @@ mod tests {
       &config.overrides,
       &heartbeats,
       &config.slider_ranges,
+      &config.remote_sources,
     )
     .unwrap();
 
@@ -1457,6 +1826,7 @@ mod tests {
       None,
       None,
       None,
+      &[],
     )
     .unwrap();
 
