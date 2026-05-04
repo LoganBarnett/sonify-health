@@ -1020,3 +1020,62 @@ a:hover {
   border-radius: var(--radius-sm);
   cursor: help;
 }
+
+/* Connection status badge — colored to match metric tier vocab so
+   "connected" reads green, transient states amber, failed red. */
+.source-panel-status {
+  display: inline-block;
+  padding: 0 var(--space-sm);
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius-sm);
+  cursor: help;
+}
+
+.source-panel-status.connected {
+  background: var(--color-healthy);
+  color: var(--color-healthy-text);
+}
+
+.source-panel-status.connecting {
+  background: var(--color-degraded);
+  color: var(--color-degraded-text);
+}
+
+.source-panel-status.disconnected {
+  background: var(--color-down);
+  color: var(--color-down-text);
+}
+
+.source-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.remote-heartbeat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: var(--space-xs) 0;
+  font-size: var(--font-base);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.remote-heartbeat-row:last-child {
+  border-bottom: none;
+}
+
+.remote-heartbeat-name {
+  color: var(--color-text);
+}
+
+.remote-heartbeat-metric {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}

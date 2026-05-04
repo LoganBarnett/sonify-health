@@ -338,6 +338,9 @@ async fn handle_text_message(
         .map_err(|e| format!("invalid state snapshot: {e}"))?;
       apply_state_snapshot(&preview.sources[source_idx], snapshot);
       debug!(source = %source_name, "Mirrored full state snapshot");
+      // Rebroadcast a local snapshot so any frontend connected to
+      // this instance sees the freshly mirrored remote state.
+      let _ = preview.broadcast_tx.send(preview.state_snapshot());
       Ok(())
     }
     "metric_changed" => {
@@ -352,6 +355,10 @@ async fn handle_text_message(
         .ok_or_else(|| "metric_changed missing `value`".to_string())?
         as f32;
       apply_metric_changed(&preview.sources[source_idx], hb_idx, value);
+      // Coarse-grained: rebroadcast a full local snapshot so the
+      // frontend sees the metric change.  Step 6c will refine to
+      // an incremental message that carries the source name.
+      let _ = preview.broadcast_tx.send(preview.state_snapshot());
       Ok(())
     }
     // Anything else (config edits, library changes, probe logs,

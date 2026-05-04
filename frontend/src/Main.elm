@@ -1900,14 +1900,30 @@ viewNavbar model =
 
 viewHome : Model -> Html Msg
 viewHome model =
+    let
+        remotePanels =
+            model.sources
+                |> List.filter
+                    (\s ->
+                        case s.kind of
+                            Remote _ ->
+                                True
+
+                            Local ->
+                                False
+                    )
+                |> List.map viewRemoteSourcePanel
+    in
     div [ class "app-layout" ]
         [ viewToolbar model
         , div [ class "split-panel" ]
             [ div [ class "panel-left" ]
-                [ viewSourcePanel "localhost" model.headless [ viewHeartbeats model ]
-                , viewProbeLog model
-                , viewImport model
-                ]
+                ([ viewSourcePanel "localhost" model.headless [ viewHeartbeats model ]
+                 , viewProbeLog model
+                 , viewImport model
+                 ]
+                    ++ remotePanels
+                )
             , div [ class "panel-right" ]
                 [ viewPatchList model
                 , viewPatchEditor model
@@ -2098,6 +2114,69 @@ viewSourcePanel name headless content =
             ]
             :: content
         )
+
+
+{-| Render a Remote Source panel: header with name, connection
+status, and a (display-only for now) playback toggle, plus a
+read-only list of the remote's heartbeats. Editing controls are
+intentionally absent — remote configuration is owned by the remote
+instance.
+-}
+viewRemoteSourcePanel : SourceInfo -> Html Msg
+viewRemoteSourcePanel source =
+    case source.kind of
+        Local ->
+            text ""
+
+        Remote remote ->
+            let
+                ( statusClass, statusLabel ) =
+                    case remote.connectionStatus of
+                        Connecting ->
+                            ( "source-panel-status connecting", "connecting" )
+
+                        Connected ->
+                            ( "source-panel-status connected", "connected" )
+
+                        Disconnected ->
+                            ( "source-panel-status disconnected", "disconnected" )
+
+                playbackBadge =
+                    if remote.playbackEnabled then
+                        span
+                            [ class "source-panel-badge playback-on"
+                            , title "Local renderer is playing audio for this Source."
+                            ]
+                            [ text "playing" ]
+
+                    else
+                        span
+                            [ class "source-panel-badge playback-off"
+                            , title "State is mirrored but audio is not played for this Source."
+                            ]
+                            [ text "muted" ]
+            in
+            div [ class "source-panel" ]
+                [ div [ class "source-panel-header" ]
+                    [ span [ class "source-panel-name" ] [ text source.name ]
+                    , span [ class statusClass, title remote.url ] [ text statusLabel ]
+                    , playbackBadge
+                    ]
+                , div [ class "source-panel-body" ]
+                    (List.map viewRemoteHeartbeatRow source.heartbeats)
+                ]
+
+
+{-| One read-only row inside a Remote Source's panel. Shows the
+heartbeat name and its current metric value; no editing affordance.
+-}
+viewRemoteHeartbeatRow : HeartbeatInfo -> Html Msg
+viewRemoteHeartbeatRow hb =
+    div [ class "remote-heartbeat-row" ]
+        [ span [ class "remote-heartbeat-name" ] [ text hb.name ]
+        , span [ class "remote-heartbeat-metric" ]
+            [ text (String.fromFloat (toFloat (round (hb.metric * 1000)) / 1000)) ]
+        ]
 
 
 
