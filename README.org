@@ -115,9 +115,24 @@ commands and producing metric data) from the *renderer* (the
 process that owns the audio device).  The two halves don't have
 to live on the same machine.
 
-*** Headless server
+Two independent knobs:
 
-A speakerless host runs the daemon in headless mode:
+- =headless= is a property of /this/ host — "no speakers, don't
+  open an audio device."  It has nothing to do with whether
+  anyone subscribes to this instance.
+- =[[sources]]= declares /other/ instances /this/ host should
+  subscribe to.  Whether subscribed remotes are played locally
+  is per-source via =playback_enabled=.
+
+These compose freely: a non-headless instance can both play its
+own heartbeats and subscribe to remotes; a headless instance can
+declare =[[sources]]= but won't play them (it has no audio
+device).  The two-host laptop/server pattern below is just the
+common case.
+
+*** Speakerless host (headless)
+
+A host without speakers runs the daemon in headless mode:
 
 #+begin_src sh :results none :exports code
 sonify-health --config config.toml --headless daemon
@@ -126,13 +141,19 @@ sonify-health --config config.toml --headless daemon
 Or set =headless = true= in =config.toml=, or
 =services.sonify-health.headless = true= in the NixOS / nix-darwin
 module.  No audio device is opened and no play threads are
-spawned, but heartbeat polling and the WebSocket / metrics
-endpoints stay live so listeners can subscribe.
+spawned (for local heartbeats /or/ for any subscribed remotes).
+Heartbeat polling and the WebSocket / metrics endpoints stay live
+so other instances can subscribe.
 
-*** Subscribing from a listener
+A host /with/ speakers stays at =headless = false= even when
+other instances subscribe to it — both ends will play, which is
+fine if that's what you want.  The listener-side
+=playback_enabled= toggle is the right knob for "don't double up
+the audio."
 
-A listener (laptop, workstation) declares each remote in its
-config under =[[sources]]=:
+*** Subscribing to another instance
+
+A listener declares each remote in its config under =[[sources]]=:
 
 #+begin_src toml :exports code
 [[sources]]
