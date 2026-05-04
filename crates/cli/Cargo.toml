@@ -41,9 +41,9 @@ openidconnect = { workspace = true }
 reqwest = { workspace = true }
 tower-sessions = { workspace = true }
 tempfile = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 [dev-dependencies]
-tokio-tungstenite = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 tracing-journald = "0.3"

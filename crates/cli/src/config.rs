@@ -11,7 +11,12 @@ use tokio_listener::ListenerAddress;
 /// Tracks which patches are overrides (derived from a base patch with
 /// a sparse delta) so the UI can display inherited vs overridden
 /// parameters and exports can emit the compact form.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Serialize`/`Deserialize` are derived to match the on-the-wire
+/// shape that `state_snapshot` already emits — `{"base": "...",
+/// "delta": {...}}` — so a remote-source connector can deserialize
+/// it directly without a separate wire-side mirror struct.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OverrideInfo {
   pub base: String,
   pub delta: HashMap<String, f64>,
