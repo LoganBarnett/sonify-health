@@ -155,7 +155,7 @@ This ensures the correct Rust toolchain and associated tools (such as
 ~git commit~ must also go through the shell:
 
 #+begin_src sh :results none :exports code
-nix develop --command git commit -m "your message"
+nix develop --command git commit --message "your message"
 #+end_src
 
 ** Run all tests after changes

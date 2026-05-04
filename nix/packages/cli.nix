@@ -53,14 +53,14 @@
   binary = craneLib.buildPackage (commonArgs
     // {
       pname = "sonify-health-cli";
-      cargoExtraArgs = "-p sonify-health-cli";
+      cargoExtraArgs = "--package sonify-health-cli";
     });
 in
   pkgs.symlinkJoin {
     name = "sonify-health-cli";
     paths = [binary];
     postBuild = ''
-      mkdir -p $out/share/sonify-health
-      ln -s ${elmFrontend} $out/share/sonify-health/frontend
+      mkdir --parents $out/share/sonify-health
+      ln --symbolic ${elmFrontend} $out/share/sonify-health/frontend
     '';
   }

@@ -222,5 +222,5 @@ The pre-commit hook runs =rustfmt=.  Commits must go through the Nix
 devshell so the correct toolchain is in =PATH=:
 
 #+begin_src sh :results none :exports code
-nix develop --command git commit -m "your message"
+nix develop --command git commit --message "your message"
 #+end_src
