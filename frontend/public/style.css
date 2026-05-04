@@ -982,3 +982,41 @@ a:hover {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* Source panel: wraps a Source's heartbeats, patches, and probe log
+   under a header naming the source.  Today only the localhost
+   Source is rendered; remote-source panels will reuse this
+   structure with extra header elements (connection badge,
+   playback toggle). */
+
+.source-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.source-panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  padding: 0 var(--space-sm);
+}
+
+.source-panel-name {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text);
+}
+
+.source-panel-badge {
+  display: inline-block;
+  padding: 0 var(--space-sm);
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: help;
+}

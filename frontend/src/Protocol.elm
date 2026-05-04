@@ -158,6 +158,7 @@ type ServerMsg
         , overrides : Dict String OverrideInfo
         , configWritable : Bool
         , configPath : Maybe String
+        , headless : Bool
         }
     | PatchParamChanged String String Float
     | MuteChanged Bool
@@ -297,7 +298,7 @@ stateDecoder : D.Decoder ServerMsg
 stateDecoder =
     D.map5
         (\pp lib muted mv hbs ->
-            \sr ovr cw cp ->
+            \sr ovr cw cp hl ->
                 StateMsg
                     { patchParams = pp
                     , library = lib
@@ -308,6 +309,7 @@ stateDecoder =
                     , overrides = ovr
                     , configWritable = cw
                     , configPath = cp
+                    , headless = hl
                     }
         )
         (D.field "patch_params" (D.list patchParamMetaDecoder))
@@ -317,7 +319,7 @@ stateDecoder =
         (D.field "heartbeats" (D.list heartbeatInfoDecoder))
         |> D.andThen
             (\buildState ->
-                D.map4 buildState
+                D.map5 buildState
                     (D.field "slider_ranges" sliderRangesDecoder)
                     (D.field "overrides" overridesDecoder)
                     (D.oneOf
@@ -326,6 +328,11 @@ stateDecoder =
                         ]
                     )
                     (D.maybe (D.field "config_path" D.string))
+                    (D.oneOf
+                        [ D.field "headless" D.bool
+                        , D.succeed False
+                        ]
+                    )
             )
 
 

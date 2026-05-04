@@ -80,6 +80,7 @@ type alias Model =
     , renameInput : String
     , configWritable : Bool
     , configPath : Maybe String
+    , headless : Bool
     , saveStatus : Maybe String
     , playOnChange : Set String
     , metricHistory : Dict Int (List Float)
@@ -198,6 +199,7 @@ init _ url key =
       , renameInput = ""
       , configWritable = False
       , configPath = Nothing
+      , headless = False
       , saveStatus = Nothing
       , playOnChange = Set.empty
       , metricHistory = Dict.empty
@@ -1043,6 +1045,7 @@ handleServerMsg msg model =
                 , sliderRanges = state.sliderRanges
                 , configWritable = state.configWritable
                 , configPath = state.configPath
+                , headless = state.headless
                 , selectedPatch =
                     case model.selectedPatch of
                         Nothing ->
@@ -1898,7 +1901,7 @@ viewHome model =
         [ viewToolbar model
         , div [ class "split-panel" ]
             [ div [ class "panel-left" ]
-                [ viewHeartbeats model
+                [ viewSourcePanel "localhost" model.headless [ viewHeartbeats model ]
                 , viewProbeLog model
                 , viewImport model
                 ]
@@ -2064,6 +2067,34 @@ viewToggle name val msg =
                 )
             ]
         ]
+
+
+
+-- Source panel
+--
+-- Wraps content with a header naming the Source.  Today the only
+-- Source is the local instance (always named "localhost"); when
+-- remote sources land, each one will get its own panel with a
+-- connection-status badge and playback toggle in the header.
+
+
+viewSourcePanel : String -> Bool -> List (Html Msg) -> Html Msg
+viewSourcePanel name headless content =
+    div [ class "source-panel" ]
+        (div [ class "source-panel-header" ]
+            [ span [ class "source-panel-name" ] [ text name ]
+            , if headless then
+                span
+                    [ class "source-panel-badge"
+                    , title "This Source has no audio device; its state can be rendered by another instance."
+                    ]
+                    [ text "no audio" ]
+
+              else
+                text ""
+            ]
+            :: content
+        )
 
 
 
