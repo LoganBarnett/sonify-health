@@ -783,6 +783,30 @@ row into editable local-override mode, with clear visual
 distinction between "this is what the remote actually has" and
 "this is your local override of it".
 
+* TODO Macro for wire-mirror structs
+The remote-source connector defines wire-format structs (e.g.
+~WireHeartbeat~, ~WireNoteConfig~) that mirror the corresponding
+~HeartbeatConfig~/~NoteConfig~ structures field-for-field plus a
+few wire-only additions (~metric~, ~overridden~).  The duplication
+is bounded today (two structs, ~30 lines) but if more wire mirrors
+land it will stop being bounded.
+
+Investigate a small proc macro that derives the wire mirror from a
+source struct, with attributes for "add this field" and (later)
+"omit this field".  Goals:
+
+- Single source of truth for the field list.
+- Preserves ~deny_unknown_fields~ on the strict variant while the
+  wire variant accepts unknown fields for forward compat.
+- No newtype indirection at call sites.
+
+The natural alternative — ~#[serde(flatten)]~ — collides with
+~deny_unknown_fields~, so a macro is the way to keep both
+properties.
+
+Trigger to do this work: when a third or fourth wire mirror struct
+shows up, not before.
+
 * TODO Allow removing the last metric tier from the UI
 The ~RemoveTier~ Msg, its update branch, and the per-row ×
 button are already wired, but the button is gated by ~tierCount >
