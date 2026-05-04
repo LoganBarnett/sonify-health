@@ -15,7 +15,15 @@ use std::sync::{
   Arc, RwLock,
 };
 use std::thread;
+use thiserror::Error;
 use tokio::sync::broadcast;
+
+/// Errors returned by [`PreviewState::add_remote_source`].
+#[derive(Debug, Error)]
+pub enum AddSourceError {
+  #[error("source name {name:?} is already in use")]
+  DuplicateName { name: String },
+}
 
 /// Hardcoded name of the Local Source.  Source names are required
 /// to be unique across `PreviewState::sources` (uniqueness will be
@@ -34,14 +42,64 @@ pub struct HeartbeatState {
   pub effective_volume: Shared,
 }
 
+/// Connection state of a Remote Source's outbound WebSocket.
+#[derive(Debug, Clone)]
+pub enum ConnectionStatus {
+  /// Initial state and the state during a reconnect attempt.
+  Connecting,
+  /// WebSocket handshake completed, mirroring is live.
+  Connected,
+  /// Last attempt failed; the connector is waiting before retrying.
+  /// `error` carries the most recent failure for display / logs.
+  Disconnected { error: Option<String> },
+}
+
+impl ConnectionStatus {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      ConnectionStatus::Connecting => "connecting",
+      ConnectionStatus::Connected => "connected",
+      ConnectionStatus::Disconnected { .. } => "disconnected",
+    }
+  }
+}
+
+/// What kind of Source this is.  Local sources have a poller running
+/// in this process and own configuration that can be edited and
+/// saved; Remote sources mirror state over an outbound WebSocket and
+/// are read-only from the local UI.
+pub enum SourceKind {
+  Local,
+  Remote {
+    /// WebSocket URL (e.g. ~ws://host:3000/ws~ or ~wss://...~).
+    url: String,
+    /// Connection state, written by the connector task.
+    status: RwLock<ConnectionStatus>,
+    /// User toggle: when false, the local renderer mirrors state
+    /// but never schedules audio for this Source's heartbeats.
+    /// Default is false so a newly-added Remote does not start
+    /// playing audio without an explicit opt-in.
+    playback_enabled: AtomicBool,
+  },
+}
+
+impl SourceKind {
+  pub fn is_local(&self) -> bool {
+    matches!(self, SourceKind::Local)
+  }
+
+  pub fn is_remote(&self) -> bool {
+    matches!(self, SourceKind::Remote { .. })
+  }
+}
+
 /// Per-Source state.  A Source is something that produces heartbeat
-/// state for the local instance to render — today only Local Sources
-/// exist (their pollers run in this process), but a future step adds
-/// Remote Sources mirrored in over a WebSocket.  Fields kept here are
-/// the ones that conceptually scope to a single Source: its name,
-/// patch library, heartbeat configs, runtime heartbeat state, slider
-/// ranges, override map, and (Local-only) the path it was loaded
-/// from.
+/// state for the local instance to render: a Local Source's poller
+/// runs in this process, a Remote Source's state is mirrored in over
+/// a WebSocket.  Fields kept here are the ones that conceptually
+/// scope to a single Source: its name, patch library, heartbeat
+/// configs, runtime heartbeat state, slider ranges, override map,
+/// and (Local-only) the path it was loaded from.
 ///
 /// `name` is the Source's user-facing identifier.  It must be unique
 /// across all Sources in a `PreviewState`, and is the preferred form
@@ -50,6 +108,7 @@ pub struct HeartbeatState {
 /// hardcoded local name.
 pub struct Source {
   pub name: String,
+  pub kind: SourceKind,
   pub library: RwLock<PatchLibrary>,
   original_library: PatchLibrary,
   pub overrides: RwLock<HashMap<String, OverrideInfo>>,
@@ -119,6 +178,7 @@ impl PreviewState {
 
     let local = Source {
       name: LOCAL_SOURCE_NAME.to_string(),
+      kind: SourceKind::Local,
       original_library: library.clone(),
       library: RwLock::new(library),
       original_overrides: overrides.clone(),
@@ -196,13 +256,15 @@ impl PreviewState {
   }
 
   /// Revert library patches, transitions, overrides, and master
-  /// volume to their loaded-from-config state.  Today only the Local
-  /// Source has a meaningful "original" snapshot to revert to; future
-  /// Remote Sources will be skipped by this method (their state is
-  /// the live mirror of the remote, which has nothing to revert to
-  /// locally).
+  /// volume to their loaded-from-config state.  Only Local Sources
+  /// have a meaningful "original" snapshot to revert to; Remote
+  /// Sources are skipped — their state is the live mirror of the
+  /// remote, which has nothing to revert to locally.
   pub fn revert(&self) {
     for source in &self.sources {
+      if !source.kind.is_local() {
+        continue;
+      }
       *source.library.write().unwrap_or_recover() =
         source.original_library.clone();
       *source.overrides.write().unwrap_or_recover() =
@@ -291,6 +353,51 @@ impl PreviewState {
       thread::sleep(dur);
       handle.remove(sid);
     });
+  }
+
+  /// Append an empty Remote Source to `self.sources`.  The source
+  /// starts with no library, no heartbeats, and a connection status
+  /// of `Connecting` — the connector task fills these in when it
+  /// receives the remote's first state snapshot.  Playback is
+  /// disabled by default; the user opts in via the per-Source
+  /// playback toggle.
+  ///
+  /// Must be called before `self` is wrapped in an `Arc`, since the
+  /// `sources` Vec is otherwise immutable for the lifetime of the
+  /// shared state.  Returns the new source's index.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error if `name` collides with an existing Source
+  /// name (uniqueness is required across all Sources).
+  pub fn add_remote_source(
+    &mut self,
+    name: String,
+    url: String,
+  ) -> Result<usize, AddSourceError> {
+    if self.sources.iter().any(|s| s.name == name) {
+      return Err(AddSourceError::DuplicateName { name });
+    }
+    let source = Source {
+      name,
+      kind: SourceKind::Remote {
+        url,
+        status: RwLock::new(ConnectionStatus::Connecting),
+        playback_enabled: AtomicBool::new(false),
+      },
+      library: RwLock::new(PatchLibrary::new()),
+      original_library: PatchLibrary::new(),
+      overrides: RwLock::new(HashMap::new()),
+      original_overrides: HashMap::new(),
+      heartbeat_configs: RwLock::new(Vec::new()),
+      original_heartbeat_configs: Vec::new(),
+      heartbeats: RwLock::new(Vec::new()),
+      slider_ranges: SliderRanges::default(),
+      config_path: None,
+      config_writable: false,
+    };
+    self.sources.push(source);
+    Ok(self.sources.len() - 1)
   }
 
   /// Add a new heartbeat to the Local Source at runtime.  Returns
@@ -502,5 +609,84 @@ mod tests {
     let preview = make_preview(false);
     assert_eq!(preview.local().name, LOCAL_SOURCE_NAME);
     assert!(preview.source_by_name(LOCAL_SOURCE_NAME).is_some());
+  }
+
+  #[test]
+  fn add_remote_source_appends_with_remote_kind() {
+    let mut preview = make_preview(false);
+    let idx = preview
+      .add_remote_source(
+        "prod-db-1".to_string(),
+        "ws://db1.example/ws".to_string(),
+      )
+      .unwrap();
+    assert_eq!(idx, 1);
+    assert_eq!(preview.sources.len(), 2);
+    let remote = &preview.sources[idx];
+    assert_eq!(remote.name, "prod-db-1");
+    assert!(remote.kind.is_remote());
+    assert!(remote.heartbeat_configs.read().unwrap().is_empty());
+    assert!(remote.library.read().unwrap().is_empty());
+    match &remote.kind {
+      SourceKind::Remote {
+        url,
+        playback_enabled,
+        status,
+      } => {
+        assert_eq!(url, "ws://db1.example/ws");
+        assert!(!playback_enabled.load(Ordering::Relaxed));
+        assert!(matches!(
+          *status.read().unwrap(),
+          ConnectionStatus::Connecting
+        ));
+      }
+      SourceKind::Local => panic!("expected Remote kind"),
+    }
+  }
+
+  #[test]
+  fn add_remote_source_rejects_duplicate_name() {
+    let mut preview = make_preview(false);
+    // Collides with the Local Source's reserved name.
+    let err = preview
+      .add_remote_source(
+        LOCAL_SOURCE_NAME.to_string(),
+        "ws://elsewhere/ws".to_string(),
+      )
+      .unwrap_err();
+    assert!(matches!(err, AddSourceError::DuplicateName { .. }));
+
+    preview
+      .add_remote_source("only-once".to_string(), "ws://a/ws".to_string())
+      .unwrap();
+    let err = preview
+      .add_remote_source("only-once".to_string(), "ws://b/ws".to_string())
+      .unwrap_err();
+    assert!(matches!(err, AddSourceError::DuplicateName { .. }));
+  }
+
+  #[test]
+  fn revert_skips_remote_sources() {
+    let mut preview = make_preview(false);
+    let remote_idx = preview
+      .add_remote_source("remote".to_string(), "ws://remote/ws".to_string())
+      .unwrap();
+    // Simulate the connector having mirrored some state into the
+    // remote source.
+    preview.sources[remote_idx]
+      .library
+      .write()
+      .unwrap()
+      .insert("from-remote".to_string(), Patch::default());
+
+    preview.revert();
+
+    // The remote's mirrored library survives revert; revert is a
+    // local-config-only concept.
+    assert!(preview.sources[remote_idx]
+      .library
+      .read()
+      .unwrap()
+      .contains_key("from-remote"));
   }
 }
