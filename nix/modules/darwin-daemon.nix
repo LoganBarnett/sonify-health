@@ -599,7 +599,9 @@ in {
     users.knownGroups = [cfg.group];
 
     # Create log and socket directories.  macOS has no tmpfiles equivalent,
-    # so we use nix-darwin activation scripts.
+    # so we use nix-darwin activation scripts.  Activation runs against the
+    # system PATH, which on macOS resolves to BSD coreutils — `mkdir -p`
+    # is required (BSD `mkdir` does not accept GNU's `--parents`).
     system.activationScripts.postActivation.text = let
       logDir = "/var/log/sonify-health";
       sockDir =
