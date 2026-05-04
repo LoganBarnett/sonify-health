@@ -104,6 +104,12 @@ fn handle_client_message(
   let msg: serde_json::Value = serde_json::from_str(text).ok()?;
   let msg_type = msg.get("type").and_then(|v| v.as_str())?;
 
+  // Bind once at the top: handlers that mutate Local Source state
+  // chain `local.X.write()...` and need the Arc to live across the
+  // borrow.  Also a single clone per message instead of one per
+  // chained access.
+  let local = preview.local();
+
   match msg_type {
     "get_state" => Some(preview.state_snapshot()),
 
@@ -112,7 +118,7 @@ fn handle_client_message(
       let param = msg.get("param").and_then(|v| v.as_str())?;
       let value = msg.get("value").and_then(|v| v.as_f64())?;
       {
-        let mut lib = preview.local().library.write().unwrap_or_recover();
+        let mut lib = local.library.write().unwrap_or_recover();
         let patch = lib.get_mut(patch_name)?;
         if !patch.set_param(param, value) {
           return None;
@@ -130,7 +136,7 @@ fn handle_client_message(
 
       // If the target is an override patch, record in its delta.
       {
-        let mut ovr = preview.local().overrides.write().unwrap_or_recover();
+        let mut ovr = local.overrides.write().unwrap_or_recover();
         if let Some(info) = ovr.get_mut(patch_name) {
           info.delta.insert(param.to_string(), value);
         }
@@ -165,11 +171,7 @@ fn handle_client_message(
       let raw = msg.get("transition")?;
       let transition: Transition = serde_json::from_value(raw.clone()).ok()?;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         configs.get_mut(index)?.notes.get_mut(note)?.transition =
           transition.clone();
       }
@@ -188,7 +190,7 @@ fn handle_client_message(
     "add_note" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let first_patch = {
-        let lib = preview.local().library.read().unwrap_or_recover();
+        let lib = local.library.read().unwrap_or_recover();
         lib
           .keys()
           .next()
@@ -207,11 +209,7 @@ fn handle_client_message(
       };
       let notes_json;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         let cfg = configs.get_mut(index)?;
         cfg.notes.push(new_note);
         notes_json = notes_to_json(&cfg.notes);
@@ -232,11 +230,7 @@ fn handle_client_message(
       let note = msg.get("note").and_then(|v| v.as_u64())? as usize;
       let notes_json;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         let cfg = configs.get_mut(index)?;
         if cfg.notes.len() <= 1 {
           return None;
@@ -264,11 +258,7 @@ fn handle_client_message(
       let tiers: Vec<sonify_health_lib::TierConfig> =
         serde_json::from_value(tiers_val.clone()).ok()?;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         let cfg = configs.get_mut(index)?;
         cfg.tiers = tiers.clone();
       }
@@ -289,7 +279,7 @@ fn handle_client_message(
       let clamped = value.clamp(0.0, 1.0);
       tracing::info!(index, value = clamped, "Override heartbeat");
       {
-        let hbs = preview.local().heartbeats.read().unwrap_or_recover();
+        let hbs = local.heartbeats.read().unwrap_or_recover();
         let hb = hbs.get(index)?;
         *hb.override_value.write().unwrap_or_recover() = Some(clamped);
         hb.metric.set_value(clamped);
@@ -309,7 +299,7 @@ fn handle_client_message(
     "clear_override" => {
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       {
-        let hbs = preview.local().heartbeats.read().unwrap_or_recover();
+        let hbs = local.heartbeats.read().unwrap_or_recover();
         let hb = hbs.get(index)?;
         *hb.override_value.write().unwrap_or_recover() = None;
       }
@@ -345,7 +335,7 @@ fn handle_client_message(
       let param = msg.get("param").and_then(|v| v.as_str())?;
       let value = msg.get("value").and_then(|v| v.as_f64())?;
       {
-        let mut lib = preview.local().library.write().unwrap_or_recover();
+        let mut lib = local.library.write().unwrap_or_recover();
         let patch = lib.get_mut(patch_name)?;
         if !patch.set_param(param, value) {
           return None;
@@ -362,7 +352,7 @@ fn handle_client_message(
       );
 
       {
-        let mut ovr = preview.local().overrides.write().unwrap_or_recover();
+        let mut ovr = local.overrides.write().unwrap_or_recover();
         if let Some(info) = ovr.get_mut(patch_name) {
           info.delta.insert(param.to_string(), value);
         }
@@ -450,11 +440,7 @@ fn handle_client_message(
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let value = msg.get("value").and_then(|v| v.as_str())?;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         configs.get_mut(index)?.name = value.to_string();
       }
       let _ = preview.broadcast_tx.send(
@@ -472,11 +458,7 @@ fn handle_client_message(
       let index = msg.get("index").and_then(|v| v.as_u64())? as usize;
       let value = msg.get("value").and_then(|v| v.as_str())?;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         configs.get_mut(index)?.command = value.to_string();
       }
       let _ = preview.broadcast_tx.send(
@@ -497,11 +479,7 @@ fn handle_client_message(
         serde_json::from_value(serde_json::Value::String(raw.to_string()))
           .ok()?;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         configs.get_mut(index)?.result_mode = mode;
       }
       let _ = preview.broadcast_tx.send(
@@ -522,11 +500,7 @@ fn handle_client_message(
         serde_json::from_value(serde_json::Value::String(raw.to_string()))
           .ok()?;
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         configs.get_mut(index)?.playback = playback;
       }
       let _ = preview.broadcast_tx.send(
@@ -560,31 +534,30 @@ fn handle_client_message(
 
     "export_config" => {
       let format = msg.get("format").and_then(|v| v.as_str()).unwrap_or("toml");
-      let lib = preview.local().library.read().unwrap_or_recover();
-      let ovr = preview.local().overrides.read().unwrap_or_recover();
-      let hb_configs =
-        preview.local().heartbeat_configs.read().unwrap_or_recover();
+      let lib = local.library.read().unwrap_or_recover();
+      let ovr = local.overrides.read().unwrap_or_recover();
+      let hb_configs = local.heartbeat_configs.read().unwrap_or_recover();
       let remote_sources = preview.remote_source_configs();
       let result = match format {
         "json" => build_save_json(
           &lib,
           &ovr,
           &hb_configs,
-          &preview.local().slider_ranges,
+          &local.slider_ranges,
           &remote_sources,
         ),
         "nix" => build_save_nix(
           &lib,
           &ovr,
           &hb_configs,
-          &preview.local().slider_ranges,
+          &local.slider_ranges,
           &remote_sources,
         ),
         _ => build_save_toml(
           &lib,
           &ovr,
           &hb_configs,
-          &preview.local().slider_ranges,
+          &local.slider_ranges,
           &remote_sources,
         ),
       };
@@ -610,7 +583,7 @@ fn handle_client_message(
       let text = msg.get("text").and_then(|v| v.as_str())?;
       match parse_import(text) {
         Ok(patches) => {
-          let mut lib = preview.local().library.write().unwrap_or_recover();
+          let mut lib = local.library.write().unwrap_or_recover();
           for (name, patch) in patches {
             lib.insert(name, patch);
           }
@@ -633,13 +606,13 @@ fn handle_client_message(
     "create_patch" => {
       let name = msg.get("name").and_then(|v| v.as_str())?;
       {
-        let lib = preview.local().library.read().unwrap_or_recover();
+        let lib = local.library.read().unwrap_or_recover();
         if lib.contains_key(name) {
           return None;
         }
       }
       {
-        let mut lib = preview.local().library.write().unwrap_or_recover();
+        let mut lib = local.library.write().unwrap_or_recover();
         lib.insert(name.to_string(), Patch::default());
       }
       let snapshot = preview.state_snapshot();
@@ -651,7 +624,7 @@ fn handle_client_message(
       let base = msg.get("base").and_then(|v| v.as_str())?;
       let name = msg.get("name").and_then(|v| v.as_str())?;
       {
-        let lib = preview.local().library.read().unwrap_or_recover();
+        let lib = local.library.read().unwrap_or_recover();
         // Name must not be taken.
         if lib.contains_key(name) {
           return None;
@@ -663,19 +636,19 @@ fn handle_client_message(
       }
       // Base must not itself be an override.
       {
-        let ovr = preview.local().overrides.read().unwrap_or_recover();
+        let ovr = local.overrides.read().unwrap_or_recover();
         if ovr.contains_key(base) {
           return None;
         }
       }
       // Clone the base into the library and register the override.
       {
-        let mut lib = preview.local().library.write().unwrap_or_recover();
+        let mut lib = local.library.write().unwrap_or_recover();
         let cloned = lib[base].clone();
         lib.insert(name.to_string(), cloned);
       }
       {
-        let mut ovr = preview.local().overrides.write().unwrap_or_recover();
+        let mut ovr = local.overrides.write().unwrap_or_recover();
         ovr.insert(
           name.to_string(),
           OverrideInfo {
@@ -696,25 +669,21 @@ fn handle_client_message(
         return None;
       }
       {
-        let lib = preview.local().library.read().unwrap_or_recover();
+        let lib = local.library.read().unwrap_or_recover();
         if !lib.contains_key(old_name) || lib.contains_key(new_name) {
           return None;
         }
       }
       // Rename in library.
       {
-        let mut lib = preview.local().library.write().unwrap_or_recover();
+        let mut lib = local.library.write().unwrap_or_recover();
         if let Some(patch) = lib.remove(old_name) {
           lib.insert(new_name.to_string(), patch);
         }
       }
       // Update heartbeat configs: transition patch references.
       {
-        let mut configs = preview
-          .local()
-          .heartbeat_configs
-          .write()
-          .unwrap_or_recover();
+        let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
         for cfg in configs.iter_mut() {
           for note in &mut cfg.notes {
             rename_in_transition(&mut note.transition, old_name, new_name);
@@ -723,7 +692,7 @@ fn handle_client_message(
       }
       // Update overrides map.
       {
-        let mut ovr = preview.local().overrides.write().unwrap_or_recover();
+        let mut ovr = local.overrides.write().unwrap_or_recover();
         // If any override has old_name as its base, update it.
         for info in ovr.values_mut() {
           if info.base == old_name {
@@ -745,7 +714,7 @@ fn handle_client_message(
       let param = msg.get("param").and_then(|v| v.as_str())?;
       let base_name;
       {
-        let mut ovr = preview.local().overrides.write().unwrap_or_recover();
+        let mut ovr = local.overrides.write().unwrap_or_recover();
         let info = ovr.get_mut(patch_name)?;
         info.delta.remove(param);
         base_name = info.base.clone();
@@ -753,7 +722,7 @@ fn handle_client_message(
       // Copy the base's current value for this param into the
       // resolved override patch.
       {
-        let mut lib = preview.local().library.write().unwrap_or_recover();
+        let mut lib = local.library.write().unwrap_or_recover();
         let base_val = lib.get(&base_name)?.get_param(param)?;
         lib.get_mut(patch_name)?.set_param(param, base_val);
       }
@@ -762,7 +731,7 @@ fn handle_client_message(
           "type": "patch_param_changed",
           "patch_name": patch_name,
           "param": param,
-          "value": preview.local().library.read().unwrap_or_recover()
+          "value": local.library.read().unwrap_or_recover()
             .get(patch_name)
             .and_then(|p| p.get_param(param))
             .unwrap_or(0.0),
@@ -775,31 +744,29 @@ fn handle_client_message(
     }
 
     "save_config" => {
-      let config_path =
-        match (&preview.local().config_path, preview.local().config_writable) {
-          (Some(p), true) => p.clone(),
-          _ => {
-            return Some(
-              json!({
-                "type": "save_error",
-                "message": "No writable config file available.",
-              })
-              .to_string(),
-            );
-          }
-        };
+      let config_path = match (&local.config_path, local.config_writable) {
+        (Some(p), true) => p.clone(),
+        _ => {
+          return Some(
+            json!({
+              "type": "save_error",
+              "message": "No writable config file available.",
+            })
+            .to_string(),
+          );
+        }
+      };
 
-      let lib = preview.local().library.read().unwrap_or_recover();
-      let ovr = preview.local().overrides.read().unwrap_or_recover();
-      let hb_configs =
-        preview.local().heartbeat_configs.read().unwrap_or_recover();
+      let lib = local.library.read().unwrap_or_recover();
+      let ovr = local.overrides.read().unwrap_or_recover();
+      let hb_configs = local.heartbeat_configs.read().unwrap_or_recover();
 
       let remote_sources = preview.remote_source_configs();
       let toml_str = match build_save_toml(
         &lib,
         &ovr,
         &hb_configs,
-        &preview.local().slider_ranges,
+        &local.slider_ranges,
         &remote_sources,
       ) {
         Ok(s) => s,
@@ -861,7 +828,7 @@ fn handle_client_message(
     "create_heartbeat" => {
       let name = msg.get("name").and_then(|v| v.as_str())?;
       let first_patch = {
-        let lib = preview.local().library.read().unwrap_or_recover();
+        let lib = local.library.read().unwrap_or_recover();
         lib
           .keys()
           .next()
@@ -869,7 +836,7 @@ fn handle_client_message(
           .unwrap_or_else(|| "sine".to_string())
       };
       let alarm_patch = {
-        let lib = preview.local().library.read().unwrap_or_recover();
+        let lib = local.library.read().unwrap_or_recover();
         if lib.contains_key("alarm") {
           "alarm".to_string()
         } else {
@@ -932,11 +899,8 @@ fn set_heartbeat_field(
   let value = msg.get("value").and_then(|v| v.as_f64())?;
   let clamped = value.max(0.0);
   {
-    let mut configs = preview
-      .local()
-      .heartbeat_configs
-      .write()
-      .unwrap_or_recover();
+    let local = preview.local();
+    let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
     setter(configs.get_mut(index)?, clamped);
   }
   let _ = preview.broadcast_tx.send(
@@ -962,11 +926,8 @@ fn set_note_field(
   let note_idx = msg.get("note").and_then(|v| v.as_u64())? as usize;
   let value = msg.get("value").and_then(|v| v.as_f64())?;
   {
-    let mut configs = preview
-      .local()
-      .heartbeat_configs
-      .write()
-      .unwrap_or_recover();
+    let local = preview.local();
+    let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
     setter(configs.get_mut(index)?.notes.get_mut(note_idx)?, value);
   }
   let _ = preview.broadcast_tx.send(
@@ -997,7 +958,8 @@ fn notes_to_json(notes: &[NoteConfig]) -> Vec<serde_json::Value> {
 
 /// Broadcast the full library to all connected clients.
 fn broadcast_library(preview: &PreviewState) {
-  let lib = preview.local().library.read().unwrap_or_recover();
+  let local = preview.local();
+  let lib = local.library.read().unwrap_or_recover();
   let lib_json: serde_json::Map<String, serde_json::Value> = lib
     .iter()
     .map(|(name, patch)| {
@@ -1032,7 +994,8 @@ fn propagate_base_change(
   param: &str,
   value: f64,
 ) {
-  let ovr = preview.local().overrides.read().unwrap_or_recover();
+  let local = preview.local();
+  let ovr = local.overrides.read().unwrap_or_recover();
   let dependents: Vec<String> = ovr
     .iter()
     .filter(|(_, info)| {
@@ -1046,7 +1009,7 @@ fn propagate_base_change(
     return;
   }
 
-  let mut lib = preview.local().library.write().unwrap_or_recover();
+  let mut lib = local.library.write().unwrap_or_recover();
   for dep_name in &dependents {
     if let Some(patch) = lib.get_mut(dep_name) {
       patch.set_param(param, value);
@@ -1134,15 +1097,9 @@ mod tests {
   }
 
   fn get_param(preview: &PreviewState, patch: &str, param: &str) -> f64 {
-    preview
-      .local()
-      .library
-      .read()
-      .unwrap()
-      .get(patch)
-      .unwrap()
-      .get_param(param)
-      .unwrap()
+    let local = preview.local();
+    let lib = local.library.read().unwrap();
+    lib.get(patch).unwrap().get_param(param).unwrap()
   }
 
   /// `set_patch_param_and_play` must apply the param change to the
@@ -1228,16 +1185,17 @@ mod tests {
   #[test]
   fn atomic_handler_propagates_to_dependent_overrides() {
     let preview = test_preview();
+    let local = preview.local();
 
     // Create an override of "sine" with an empty delta so "freq"
     // is inherited from the base.
     {
-      let mut lib = preview.local().library.write().unwrap();
+      let mut lib = local.library.write().unwrap();
       let base = lib.get("sine").cloned().unwrap();
       lib.insert("sine-copy".to_string(), base);
     }
     {
-      let mut ovr = preview.local().overrides.write().unwrap();
+      let mut ovr = local.overrides.write().unwrap();
       ovr.insert(
         "sine-copy".to_string(),
         OverrideInfo {
@@ -1272,15 +1230,16 @@ mod tests {
   #[test]
   fn atomic_handler_respects_override_delta() {
     let preview = test_preview();
+    let local = preview.local();
 
     {
-      let mut lib = preview.local().library.write().unwrap();
+      let mut lib = local.library.write().unwrap();
       let mut copy = lib.get("sine").cloned().unwrap();
       copy.set_param("freq", 1234.0);
       lib.insert("sine-copy".to_string(), copy);
     }
     {
-      let mut ovr = preview.local().overrides.write().unwrap();
+      let mut ovr = local.overrides.write().unwrap();
       let mut delta = HashMap::new();
       delta.insert("freq".to_string(), 1234.0);
       ovr.insert(

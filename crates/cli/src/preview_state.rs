@@ -80,6 +80,11 @@ pub enum SourceKind {
     /// Default is false so a newly-added Remote does not start
     /// playing audio without an explicit opt-in.
     playback_enabled: AtomicBool,
+    /// Set to false by `remove_remote_source` so the connector
+    /// task and any play threads holding an `Arc<Source>` exit
+    /// cleanly even though the Arc keeps the Source itself alive
+    /// until the last reference drops.
+    alive: AtomicBool,
   },
 }
 
@@ -90,6 +95,17 @@ impl SourceKind {
 
   pub fn is_remote(&self) -> bool {
     matches!(self, SourceKind::Remote { .. })
+  }
+
+  /// True when the Source is still part of `PreviewState::sources`.
+  /// Local sources are always alive (they're never removed).
+  /// Remote sources flip `alive` to false when removed, so async
+  /// tasks holding an `Arc<Source>` notice and exit.
+  pub fn is_alive(&self) -> bool {
+    match self {
+      SourceKind::Local => true,
+      SourceKind::Remote { alive, .. } => alive.load(Ordering::Relaxed),
+    }
   }
 }
 
@@ -135,7 +151,13 @@ pub struct Source {
 /// [`PreviewState::local`] so the assumption is grep-able when the
 /// protocol grows a source field.
 pub struct PreviewState {
-  pub sources: Vec<Source>,
+  /// All Sources this instance knows about — Local and Remote.
+  /// Wrapped in `RwLock<Vec<Arc<Source>>>` so sources can be added
+  /// (via `add_remote_source`) and removed (via
+  /// `remove_remote_source`) at runtime: readers clone the Arc out
+  /// under a brief read lock and use it without holding the outer
+  /// guard.
+  pub sources: RwLock<Vec<Arc<Source>>>,
   pub running: Arc<AtomicBool>,
   pub muted: Arc<AtomicBool>,
   pub metrics: Metrics,
@@ -192,7 +214,7 @@ impl PreviewState {
     };
 
     Self {
-      sources: vec![local],
+      sources: RwLock::new(vec![Arc::new(local)]),
       running,
       muted,
       metrics,
@@ -204,19 +226,29 @@ impl PreviewState {
     }
   }
 
-  /// Borrow the Source named `name`, or `None` if no such Source
-  /// exists.  This is the name-based lookup the WebSocket protocol
-  /// will use once it carries source identifiers.
-  pub fn source_by_name(&self, name: &str) -> Option<&Source> {
-    self.sources.iter().find(|s| s.name == name)
+  /// Snapshot the current Sources list as a `Vec<Arc<Source>>`.
+  /// Holds the read lock only long enough to clone the Arcs;
+  /// callers can iterate at leisure without blocking writers.
+  pub fn sources_snapshot(&self) -> Vec<Arc<Source>> {
+    self.sources.read().unwrap_or_recover().clone()
   }
 
-  /// Borrow the Local Source.  Used by call sites whose external
-  /// inputs (most WebSocket messages, save/export, the runtime
+  /// Look up a Source by name.  Returns `None` if no such Source
+  /// exists.
+  pub fn source_by_name(&self, name: &str) -> Option<Arc<Source>> {
+    self
+      .sources
+      .read()
+      .unwrap_or_recover()
+      .iter()
+      .find(|s| s.name == name)
+      .map(Arc::clone)
+  }
+
+  /// The Local Source.  Used by call sites whose external inputs
+  /// (most WebSocket mutation messages, save/export, the runtime
   /// `add_heartbeat` API) implicitly address the local instance.
-  /// When the protocol grows a source identifier, those call sites
-  /// will instead pass the wire-supplied name to `source_by_name`.
-  pub fn local(&self) -> &Source {
+  pub fn local(&self) -> Arc<Source> {
     self
       .source_by_name(LOCAL_SOURCE_NAME)
       .expect("Local Source must exist in PreviewState::sources")
@@ -247,7 +279,7 @@ impl PreviewState {
       1.0
     };
     let vol = self.master_volume.value() * mute_factor;
-    for source in &self.sources {
+    for source in self.sources_snapshot() {
       let hbs = source.heartbeats.read().unwrap_or_recover();
       for hb in hbs.iter() {
         hb.effective_volume.set_value(vol);
@@ -261,7 +293,7 @@ impl PreviewState {
   /// Sources are skipped — their state is the live mirror of the
   /// remote, which has nothing to revert to locally.
   pub fn revert(&self) {
-    for source in &self.sources {
+    for source in self.sources_snapshot() {
       if !source.kind.is_local() {
         continue;
       }
@@ -301,7 +333,7 @@ impl PreviewState {
     }
 
     let local = self.local();
-    self.update_effective_volume(local, hb_idx);
+    self.update_effective_volume(&local, hb_idx);
     let eff_vol = {
       let hbs = local.heartbeats.read().unwrap_or_recover();
       match hbs.get(hb_idx) {
@@ -383,7 +415,7 @@ impl PreviewState {
   /// runtime changes (e.g. the user toggling `playback_enabled`).
   pub fn remote_source_configs(&self) -> Vec<RemoteSourceConfig> {
     self
-      .sources
+      .sources_snapshot()
       .iter()
       .filter_map(|s| match &s.kind {
         SourceKind::Remote {
@@ -407,20 +439,23 @@ impl PreviewState {
   /// disabled by default; the user opts in via the per-Source
   /// playback toggle.
   ///
-  /// Must be called before `self` is wrapped in an `Arc`, since the
-  /// `sources` Vec is otherwise immutable for the lifetime of the
-  /// shared state.  Returns the new source's index.
+  /// Returns the index of the new source within `self.sources`.
   ///
   /// # Errors
   ///
   /// Returns an error if `name` collides with an existing Source
-  /// name (uniqueness is required across all Sources).
+  /// name (uniqueness is required across all Sources) or if `name`
+  /// is the reserved Local Source name.
   pub fn add_remote_source(
-    &mut self,
+    &self,
     name: String,
     url: String,
   ) -> Result<usize, AddSourceError> {
-    if self.sources.iter().any(|s| s.name == name) {
+    if name == LOCAL_SOURCE_NAME {
+      return Err(AddSourceError::DuplicateName { name });
+    }
+    let mut sources = self.sources.write().unwrap_or_recover();
+    if sources.iter().any(|s| s.name == name) {
       return Err(AddSourceError::DuplicateName { name });
     }
     let source = Source {
@@ -429,6 +464,7 @@ impl PreviewState {
         url,
         status: RwLock::new(ConnectionStatus::Connecting),
         playback_enabled: AtomicBool::new(false),
+        alive: AtomicBool::new(true),
       },
       library: RwLock::new(PatchLibrary::new()),
       original_library: PatchLibrary::new(),
@@ -441,8 +477,34 @@ impl PreviewState {
       config_path: None,
       config_writable: false,
     };
-    self.sources.push(source);
-    Ok(self.sources.len() - 1)
+    sources.push(Arc::new(source));
+    Ok(sources.len() - 1)
+  }
+
+  /// Remove the Remote Source named `name` from `self.sources` and
+  /// signal any tasks holding an `Arc<Source>` to that entry — the
+  /// connector task and any play threads for the source's
+  /// heartbeats — to exit cleanly via the `alive` flag.  Returns
+  /// `true` if a matching Remote Source was removed, `false` if no
+  /// such Source exists or `name` referred to the Local Source
+  /// (which is never removed).
+  pub fn remove_remote_source(&self, name: &str) -> bool {
+    if name == LOCAL_SOURCE_NAME {
+      return false;
+    }
+    let mut sources = self.sources.write().unwrap_or_recover();
+    let position = sources.iter().position(|s| s.name == name);
+    let Some(idx) = position else {
+      return false;
+    };
+    if !sources[idx].kind.is_remote() {
+      return false;
+    }
+    if let SourceKind::Remote { alive, .. } = &sources[idx].kind {
+      alive.store(false, Ordering::Relaxed);
+    }
+    sources.remove(idx);
+    true
   }
 
   /// Add a new heartbeat to the Local Source at runtime.  Returns
@@ -462,7 +524,7 @@ impl PreviewState {
     });
     drop(hbs);
 
-    self.update_effective_volume(local, hb_idx);
+    self.update_effective_volume(&local, hb_idx);
     hb_idx
   }
 
@@ -521,11 +583,12 @@ impl PreviewState {
       })
       .collect();
 
+    let snapshot = self.sources_snapshot();
     let sources_json: Vec<_> =
-      self.sources.iter().map(source_state_json).collect();
+      snapshot.iter().map(|s| source_state_json(s)).collect();
 
     let local = self.local();
-    let local_json = source_state_json(local);
+    let local_json = source_state_json(&local);
 
     json!({
       "type": "state",
@@ -546,7 +609,7 @@ impl PreviewState {
 
   /// Serialize the local override map to a JSON value.
   pub fn overrides_json(&self) -> serde_json::Value {
-    source_overrides_json(self.local())
+    source_overrides_json(&self.local())
   }
 }
 
@@ -626,6 +689,7 @@ fn source_state_json(source: &Source) -> serde_json::Value {
       url,
       status,
       playback_enabled,
+      alive: _,
     } => {
       obj.insert("kind".to_string(), json!("remote"));
       obj.insert("url".to_string(), json!(url));
@@ -720,7 +784,7 @@ mod tests {
 
   #[test]
   fn add_remote_source_appends_with_remote_kind() {
-    let mut preview = make_preview(false);
+    let preview = make_preview(false);
     let idx = preview
       .add_remote_source(
         "prod-db-1".to_string(),
@@ -728,8 +792,7 @@ mod tests {
       )
       .unwrap();
     assert_eq!(idx, 1);
-    assert_eq!(preview.sources.len(), 2);
-    let remote = &preview.sources[idx];
+    let remote = preview.source_by_name("prod-db-1").expect("source exists");
     assert_eq!(remote.name, "prod-db-1");
     assert!(remote.kind.is_remote());
     assert!(remote.heartbeat_configs.read().unwrap().is_empty());
@@ -739,9 +802,11 @@ mod tests {
         url,
         playback_enabled,
         status,
+        alive,
       } => {
         assert_eq!(url, "ws://db1.example/ws");
         assert!(!playback_enabled.load(Ordering::Relaxed));
+        assert!(alive.load(Ordering::Relaxed));
         assert!(matches!(
           *status.read().unwrap(),
           ConnectionStatus::Connecting
@@ -753,7 +818,7 @@ mod tests {
 
   #[test]
   fn add_remote_source_rejects_duplicate_name() {
-    let mut preview = make_preview(false);
+    let preview = make_preview(false);
     // Collides with the Local Source's reserved name.
     let err = preview
       .add_remote_source(
@@ -773,8 +838,33 @@ mod tests {
   }
 
   #[test]
+  fn remove_remote_source_drops_from_list_and_clears_alive() {
+    let preview = make_preview(false);
+    preview
+      .add_remote_source(
+        "edge-1".to_string(),
+        "ws://edge1.example/ws".to_string(),
+      )
+      .unwrap();
+    let source = preview
+      .source_by_name("edge-1")
+      .expect("present before remove");
+
+    assert!(preview.remove_remote_source("edge-1"));
+    assert!(preview.source_by_name("edge-1").is_none());
+    // Tasks holding the Arc still see is_alive() == false so they
+    // can exit cleanly.
+    assert!(!source.kind.is_alive());
+
+    // Removing a non-existent source is a no-op (returns false).
+    assert!(!preview.remove_remote_source("not-there"));
+    // Local cannot be removed.
+    assert!(!preview.remove_remote_source(LOCAL_SOURCE_NAME));
+  }
+
+  #[test]
   fn state_snapshot_includes_sources_array() {
-    let mut preview = make_preview(false);
+    let preview = make_preview(false);
     preview
       .add_remote_source(
         "edge-1".to_string(),
@@ -809,10 +899,7 @@ mod tests {
 
   #[test]
   fn state_snapshot_flat_fields_still_mirror_local() {
-    // Backward-compat assertion: until the frontend cuts over to
-    // `sources`, the existing flat fields must keep reflecting the
-    // Local Source so step 6a is invisible to the current UI.
-    let mut preview = make_preview(false);
+    let preview = make_preview(false);
     preview
       .add_remote_source(
         "edge-1".to_string(),
@@ -832,13 +919,14 @@ mod tests {
 
   #[test]
   fn revert_skips_remote_sources() {
-    let mut preview = make_preview(false);
-    let remote_idx = preview
+    let preview = make_preview(false);
+    preview
       .add_remote_source("remote".to_string(), "ws://remote/ws".to_string())
       .unwrap();
+    let remote = preview.source_by_name("remote").unwrap();
     // Simulate the connector having mirrored some state into the
     // remote source.
-    preview.sources[remote_idx]
+    remote
       .library
       .write()
       .unwrap()
@@ -848,10 +936,6 @@ mod tests {
 
     // The remote's mirrored library survives revert; revert is a
     // local-config-only concept.
-    assert!(preview.sources[remote_idx]
-      .library
-      .read()
-      .unwrap()
-      .contains_key("from-remote"));
+    assert!(remote.library.read().unwrap().contains_key("from-remote"));
   }
 }

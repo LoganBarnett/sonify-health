@@ -37,21 +37,22 @@ fn override_does_not_leak_to_other_heartbeats() {
     false,
   ));
 
-  let h0 = spawn_poll_thread(&preview, 0, 0);
-  let h1 = spawn_poll_thread(&preview, 0, 1);
+  let h0 = spawn_poll_thread(&preview, "localhost", 0);
+  let h1 = spawn_poll_thread(&preview, "localhost", 1);
 
   // Let both heartbeats poll a few times at 0.1s interval.
   std::thread::sleep(Duration::from_millis(350));
 
+  let local = preview.local();
   // Both should be healthy (0.0).
-  let m0 = preview.local().heartbeats.read().unwrap()[0].metric.value();
-  let m1 = preview.local().heartbeats.read().unwrap()[1].metric.value();
+  let m0 = local.heartbeats.read().unwrap()[0].metric.value();
+  let m1 = local.heartbeats.read().unwrap()[1].metric.value();
   assert!(m0.abs() < 0.001, "alpha should be 0.0 before override, got {m0}");
   assert!(m1.abs() < 0.001, "beta should be 0.0 before override, got {m1}");
 
   // Override heartbeat 1 to 1.0.
   {
-    let hbs = preview.local().heartbeats.read().unwrap();
+    let hbs = local.heartbeats.read().unwrap();
     *hbs[1].override_value.write().unwrap() = Some(1.0);
   }
 
@@ -59,8 +60,8 @@ fn override_does_not_leak_to_other_heartbeats() {
   std::thread::sleep(Duration::from_millis(500));
 
   // Heartbeat 0 must still be 0.0.
-  let m0 = preview.local().heartbeats.read().unwrap()[0].metric.value();
-  let m1 = preview.local().heartbeats.read().unwrap()[1].metric.value();
+  let m0 = local.heartbeats.read().unwrap()[0].metric.value();
+  let m1 = local.heartbeats.read().unwrap()[1].metric.value();
   assert!(
     m0.abs() < 0.001,
     "alpha should remain 0.0 after overriding beta, got {m0}"

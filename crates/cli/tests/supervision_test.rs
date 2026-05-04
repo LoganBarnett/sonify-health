@@ -41,7 +41,7 @@ fn poll_thread_survives_poisoned_lock() {
   ));
 
   // Spawn the poll thread.
-  let h = spawn_poll_thread(&preview, 0, 0);
+  let h = spawn_poll_thread(&preview, "localhost", 0);
 
   // Let it run a few cycles.
   std::thread::sleep(Duration::from_millis(350));
@@ -113,14 +113,14 @@ fn poll_thread_panic_is_capturable() {
     false,
   ));
 
-  let h = spawn_poll_thread(&preview, 0, 0);
+  let h = spawn_poll_thread(&preview, "localhost", 0);
 
   // Let one cycle complete, then remove all configs so the next
   // iteration panics on out-of-bounds access.
   std::thread::sleep(Duration::from_millis(200));
   {
-    let mut configs = preview
-      .local()
+    let local = preview.local();
+    let mut configs = local
       .heartbeat_configs
       .write()
       .unwrap_or_else(|e| e.into_inner());

@@ -197,13 +197,24 @@ fn set_status(source: &Source, status: ConnectionStatus) {
   }
 }
 
-/// Run the outbound WebSocket loop for the Remote Source at
-/// `source_idx`.  Opens the connection, mirrors state, and on
+/// Run the outbound WebSocket loop for the Remote Source named
+/// `source_name`.  Opens the connection, mirrors state, and on
 /// disconnect or error sleeps with exponential backoff before
-/// retrying.  Exits when `preview.running` flips to false.
-pub async fn run_connector(preview: Arc<PreviewState>, source_idx: usize) {
-  let source_name = preview.sources[source_idx].name.clone();
-  let url = match &preview.sources[source_idx].kind {
+/// retrying.  Exits when `preview.running` flips to false, or when
+/// the Source is removed at runtime (signaled via
+/// `kind.is_alive() == false`).
+pub async fn run_connector(preview: Arc<PreviewState>, source_name: String) {
+  let source = match preview.source_by_name(&source_name) {
+    Some(s) => s,
+    None => {
+      error!(
+        source = %source_name,
+        "run_connector called for a Source that no longer exists"
+      );
+      return;
+    }
+  };
+  let url = match &source.kind {
     SourceKind::Remote { url, .. } => url.clone(),
     SourceKind::Local => {
       error!(
@@ -216,18 +227,18 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_idx: usize) {
 
   let mut backoff = INITIAL_BACKOFF;
 
-  while preview.running.load(Ordering::Relaxed) {
-    set_status(&preview.sources[source_idx], ConnectionStatus::Connecting);
+  while preview.running.load(Ordering::Relaxed) && source.kind.is_alive() {
+    set_status(&source, ConnectionStatus::Connecting);
     info!(source = %source_name, url = %url, "Remote source connecting");
 
     match connect_async(&url).await {
       Ok((ws, _resp)) => {
         backoff = INITIAL_BACKOFF;
-        set_status(&preview.sources[source_idx], ConnectionStatus::Connected);
+        set_status(&source, ConnectionStatus::Connected);
         info!(source = %source_name, "Remote source connected");
 
         let disconnect_reason =
-          run_session(&preview, source_idx, &source_name, ws).await;
+          run_session(&preview, &source, &source_name, ws).await;
 
         warn!(
           source = %source_name,
@@ -235,7 +246,7 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_idx: usize) {
           "Remote source disconnected"
         );
         set_status(
-          &preview.sources[source_idx],
+          &source,
           ConnectionStatus::Disconnected {
             error: Some(disconnect_reason),
           },
@@ -250,13 +261,13 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_idx: usize) {
           "Remote source connection failed"
         );
         set_status(
-          &preview.sources[source_idx],
+          &source,
           ConnectionStatus::Disconnected { error: Some(msg) },
         );
       }
     }
 
-    if !preview.running.load(Ordering::Relaxed) {
+    if !preview.running.load(Ordering::Relaxed) || !source.kind.is_alive() {
       break;
     }
 
@@ -272,7 +283,7 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_idx: usize) {
 /// string for the disconnect log.
 async fn run_session(
   preview: &Arc<PreviewState>,
-  source_idx: usize,
+  source: &Source,
   source_name: &str,
   ws: tokio_tungstenite::WebSocketStream<
     tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -284,16 +295,14 @@ async fn run_session(
     if !preview.running.load(Ordering::Relaxed) {
       return "shutdown".to_string();
     }
+    if !source.kind.is_alive() {
+      return "source removed".to_string();
+    }
     match frame {
       Ok(Message::Text(text)) => {
-        if let Err(e) = handle_text_message(
-          preview,
-          source_idx,
-          source_name,
-          &text,
-          &mut ws_tx,
-        )
-        .await
+        if let Err(e) =
+          handle_text_message(preview, source, source_name, &text, &mut ws_tx)
+            .await
         {
           return format!("message-handling error: {e}");
         }
@@ -315,7 +324,7 @@ async fn run_session(
 /// sync.
 async fn handle_text_message(
   preview: &Arc<PreviewState>,
-  source_idx: usize,
+  source: &Source,
   source_name: &str,
   text: &str,
   ws_tx: &mut futures::stream::SplitSink<
@@ -336,7 +345,7 @@ async fn handle_text_message(
     "state" => {
       let snapshot: WireStateSnapshot = serde_json::from_value(raw.clone())
         .map_err(|e| format!("invalid state snapshot: {e}"))?;
-      apply_state_snapshot(&preview.sources[source_idx], snapshot);
+      apply_state_snapshot(source, snapshot);
       debug!(source = %source_name, "Mirrored full state snapshot");
       // Rebroadcast a local snapshot so any frontend connected to
       // this instance sees the freshly mirrored remote state.
@@ -354,7 +363,7 @@ async fn handle_text_message(
         .and_then(|v| v.as_f64())
         .ok_or_else(|| "metric_changed missing `value`".to_string())?
         as f32;
-      apply_metric_changed(&preview.sources[source_idx], hb_idx, value);
+      apply_metric_changed(source, hb_idx, value);
       // Coarse-grained: rebroadcast a full local snapshot so the
       // frontend sees the metric change.  Step 6c will refine to
       // an incremental message that carries the source name.
@@ -392,8 +401,8 @@ mod tests {
   use sonify_health_lib::builtin_library;
   use std::sync::atomic::AtomicBool;
 
-  fn make_preview_with_remote() -> (Arc<PreviewState>, usize) {
-    let mut preview = PreviewState::new(
+  fn make_preview_with_remote() -> (Arc<PreviewState>, String) {
+    let preview = PreviewState::new(
       builtin_library(),
       HashMap::new(),
       vec![],
@@ -405,13 +414,12 @@ mod tests {
       false,
       false,
     );
-    let idx = preview
-      .add_remote_source(
-        "test-remote".to_string(),
-        "ws://example/ws".to_string(),
-      )
+    let preview = Arc::new(preview);
+    let name = "test-remote".to_string();
+    preview
+      .add_remote_source(name.clone(), "ws://example/ws".to_string())
       .unwrap();
-    (Arc::new(preview), idx)
+    (preview, name)
   }
 
   fn sample_snapshot_json() -> String {
@@ -454,59 +462,63 @@ mod tests {
 
   #[test]
   fn apply_state_snapshot_replaces_mirror() {
-    let (preview, idx) = make_preview_with_remote();
+    let (preview, name) = make_preview_with_remote();
+    let source = preview.source_by_name(&name).unwrap();
     let json = sample_snapshot_json();
     let snap: WireStateSnapshot =
       serde_json::from_str(&json).expect("snapshot decodes");
 
-    apply_state_snapshot(&preview.sources[idx], snap);
+    apply_state_snapshot(&source, snap);
 
-    let configs = preview.sources[idx].heartbeat_configs.read().unwrap();
+    let configs = source.heartbeat_configs.read().unwrap();
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].name, "remote-hb");
     drop(configs);
 
-    let lib = preview.sources[idx].library.read().unwrap();
+    let lib = source.library.read().unwrap();
     assert!(lib.contains_key("sine"));
     drop(lib);
 
-    let hbs = preview.sources[idx].heartbeats.read().unwrap();
+    let hbs = source.heartbeats.read().unwrap();
     assert_eq!(hbs.len(), 1);
     assert!((hbs[0].metric.value() - 0.42).abs() < 1e-6);
   }
 
   #[test]
   fn apply_metric_changed_updates_existing_entry() {
-    let (preview, idx) = make_preview_with_remote();
+    let (preview, name) = make_preview_with_remote();
+    let source = preview.source_by_name(&name).unwrap();
     let snap: WireStateSnapshot =
       serde_json::from_str(&sample_snapshot_json()).unwrap();
-    apply_state_snapshot(&preview.sources[idx], snap);
+    apply_state_snapshot(&source, snap);
 
-    apply_metric_changed(&preview.sources[idx], 0, 0.91);
+    apply_metric_changed(&source, 0, 0.91);
 
-    let hbs = preview.sources[idx].heartbeats.read().unwrap();
+    let hbs = source.heartbeats.read().unwrap();
     assert!((hbs[0].metric.value() - 0.91).abs() < 1e-6);
   }
 
   #[test]
   fn apply_metric_changed_ignores_out_of_range() {
-    let (preview, idx) = make_preview_with_remote();
+    let (preview, name) = make_preview_with_remote();
+    let source = preview.source_by_name(&name).unwrap();
     // No heartbeats yet — the call should be a no-op, not panic.
-    apply_metric_changed(&preview.sources[idx], 0, 0.5);
-    apply_metric_changed(&preview.sources[idx], 99, 0.5);
+    apply_metric_changed(&source, 0, 0.5);
+    apply_metric_changed(&source, 99, 0.5);
   }
 
   #[test]
   fn snapshot_replace_preserves_shared_handles_when_shape_matches() {
-    let (preview, idx) = make_preview_with_remote();
+    let (preview, name) = make_preview_with_remote();
+    let source = preview.source_by_name(&name).unwrap();
     let snap: WireStateSnapshot =
       serde_json::from_str(&sample_snapshot_json()).unwrap();
-    apply_state_snapshot(&preview.sources[idx], snap);
+    apply_state_snapshot(&source, snap);
 
     // Hold a clone of the existing Shared metric handle (this is
     // what the play thread would do).
     let metric_handle = {
-      let hbs = preview.sources[idx].heartbeats.read().unwrap();
+      let hbs = source.heartbeats.read().unwrap();
       hbs[0].metric.clone()
     };
 
@@ -514,7 +526,8 @@ mod tests {
     // metric value.
     let json = sample_snapshot_json().replace("0.42", "0.77");
     let snap: WireStateSnapshot = serde_json::from_str(&json).unwrap();
-    apply_state_snapshot(&preview.sources[idx], snap);
+    apply_state_snapshot(&source, snap);
+    let _ = preview;
 
     // The held handle reflects the new value — the underlying
     // atomic was reused rather than recreated.

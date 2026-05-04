@@ -81,7 +81,6 @@ impl std::fmt::Display for ThreadRole {
 
 pub struct SupervisedThread {
   pub handle: Option<thread::JoinHandle<()>>,
-  pub source_idx: usize,
   pub source_name: String,
   pub hb_idx: usize,
   pub role: ThreadRole,
@@ -91,14 +90,12 @@ pub struct SupervisedThread {
 impl SupervisedThread {
   fn new(
     handle: thread::JoinHandle<()>,
-    source_idx: usize,
     source_name: String,
     hb_idx: usize,
     role: ThreadRole,
   ) -> Self {
     Self {
       handle: Some(handle),
-      source_idx,
       source_name,
       hb_idx,
       role,
@@ -178,23 +175,27 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   // Source even though today only the Local Source exists, so the
   // poll/play thread topology already understands per-Source
   // addressing when remote Sources arrive.
-  for (source_idx, source) in preview.sources.iter().enumerate() {
+  let initial_sources = preview.sources_snapshot();
+  let source_count = initial_sources.len();
+  for source in &initial_sources {
     let hb_count = source.heartbeats.read().unwrap_or_recover().len();
     total_heartbeats += hb_count;
+    // Poll threads run only for Local sources — remote heartbeats
+    // are probed by the remote instance and arrive over the wire.
     for hb_idx in 0..hb_count {
-      let poll_h = spawn_poll_thread(&preview, source_idx, hb_idx);
-      supervised.push(SupervisedThread::new(
-        poll_h,
-        source_idx,
-        source.name.clone(),
-        hb_idx,
-        ThreadRole::Poll,
-      ));
+      if source.kind.is_local() {
+        let poll_h = spawn_poll_thread(&preview, &source.name, hb_idx);
+        supervised.push(SupervisedThread::new(
+          poll_h,
+          source.name.clone(),
+          hb_idx,
+          ThreadRole::Poll,
+        ));
+      }
       if !headless {
-        let play_h = spawn_play_thread(&preview, source_idx, hb_idx);
+        let play_h = spawn_play_thread(&preview, &source.name, hb_idx);
         supervised.push(SupervisedThread::new(
           play_h,
-          source_idx,
           source.name.clone(),
           hb_idx,
           ThreadRole::Play,
@@ -204,7 +205,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   }
 
   info!(
-    sources = preview.sources.len(),
+    sources = source_count,
     heartbeats = total_heartbeats,
     headless,
     "Daemon started"
@@ -284,10 +285,10 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
             );
             let new_handle = match st.role {
               ThreadRole::Poll => {
-                spawn_poll_thread(&preview, st.source_idx, st.hb_idx)
+                spawn_poll_thread(&preview, &st.source_name, st.hb_idx)
               }
               ThreadRole::Play => {
-                spawn_play_thread(&preview, st.source_idx, st.hb_idx)
+                spawn_play_thread(&preview, &st.source_name, st.hb_idx)
               }
             };
             st.handle = Some(new_handle);
@@ -501,13 +502,6 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
 // Thread spawning
 // ---------------------------------------------------------------------------
 
-/// Borrow the Source at `source_idx` from `preview`.  Panics if the
-/// index is out of bounds — the supervisor only constructs valid
-/// indices.
-fn source_at(preview: &PreviewState, source_idx: usize) -> &Source {
-  &preview.sources[source_idx]
-}
-
 /// Whether the play threads for a Source should currently emit
 /// audio.  Local sources always play (the global `headless` flag
 /// already gates whether play threads exist at all).  Remote
@@ -522,31 +516,35 @@ fn source_should_play(source: &Source) -> bool {
   }
 }
 
-/// Spawn a poll thread for `(source_idx, hb_idx)`.  Re-reads config
-/// each iteration so live UI edits take effect.
+/// Spawn a poll thread for the heartbeat at `hb_idx` within the
+/// source named `source_name`.  Captures an `Arc<Source>` at spawn
+/// time; the thread checks `kind.is_alive()` each iteration and
+/// exits cleanly when the Source is removed at runtime.  Re-reads
+/// the heartbeat config on every iteration so live UI edits take
+/// effect.
 pub fn spawn_poll_thread(
   preview: &Arc<PreviewState>,
-  source_idx: usize,
+  source_name: &str,
   hb_idx: usize,
 ) -> thread::JoinHandle<()> {
   let poll_running = Arc::clone(&preview.running);
   let poll_preview = Arc::clone(preview);
-  let cfg = source_at(preview, source_idx)
-    .heartbeat_configs
-    .read()
-    .unwrap_or_recover()[hb_idx]
-    .clone();
+  let source = preview
+    .source_by_name(source_name)
+    .unwrap_or_else(|| panic!("source {source_name:?} not found"));
+  let source_name = source.name.clone();
+  let cfg = source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].clone();
   let poll_counter = preview
     .metrics
     .probes_completed
     .with_label_values(&[&cfg.name]);
   let poll_gauge = preview.metrics.probe_value.with_label_values(&[&cfg.name]);
 
-  let source_name = source_at(preview, source_idx).name.clone();
-
   thread::spawn(move || {
     while poll_running.load(Ordering::Relaxed) {
-      let source = source_at(&poll_preview, source_idx);
+      if !source.kind.is_alive() {
+        return;
+      }
       let (cfg_name, command, mode, tiers, interval) = {
         let configs = source.heartbeat_configs.read().unwrap_or_recover();
         let cfg = &configs[hb_idx];
@@ -668,12 +666,15 @@ pub fn spawn_poll_thread(
   })
 }
 
-/// Spawn a play thread for `(source_idx, hb_idx)`.  Extracted from
-/// `spawn_heartbeat_threads` so both poll and play can be respawned
-/// independently by the supervisor.
+/// Spawn a play thread for the heartbeat at `hb_idx` within the
+/// source named `source_name`.  Captures an `Arc<Source>` at spawn
+/// time; the thread checks `kind.is_alive()` each iteration so a
+/// runtime-removed Source's play threads exit cleanly.  Re-reads
+/// the heartbeat config on every iteration so live edits and remote
+/// state mirror updates take effect.
 pub fn spawn_play_thread(
   preview: &Arc<PreviewState>,
-  source_idx: usize,
+  source_name: &str,
   hb_idx: usize,
 ) -> thread::JoinHandle<()> {
   let play_running = Arc::clone(&preview.running);
@@ -684,10 +685,10 @@ pub fn spawn_play_thread(
     .unwrap_or_recover()
     .clone()
     .expect("Mixer handle must be set before spawning threads");
-  let cfg_name = source_at(preview, source_idx)
-    .heartbeat_configs
-    .read()
-    .unwrap_or_recover()[hb_idx]
+  let source = preview
+    .source_by_name(source_name)
+    .unwrap_or_else(|| panic!("source {source_name:?} not found"));
+  let cfg_name = source.heartbeat_configs.read().unwrap_or_recover()[hb_idx]
     .name
     .clone();
   let play_counter = preview
@@ -696,8 +697,6 @@ pub fn spawn_play_thread(
     .with_label_values(&[&cfg_name]);
 
   thread::spawn(move || {
-    let source = source_at(&play_preview, source_idx);
-
     // Align to the wall-clock grid before the first play so that
     // clock-mode heartbeats with different offsets start staggered.
     // Loop and Continuous modes skip this to start playing immediately.
@@ -715,6 +714,10 @@ pub fn spawn_play_thread(
     }
 
     while play_running.load(Ordering::Relaxed) {
+      // Exit cleanly when the Source is removed at runtime.
+      if !source.kind.is_alive() {
+        return;
+      }
       // Exit cleanly when the heartbeat is removed (e.g. a remote
       // shape change that shrinks the list past `hb_idx`).
       let mode = match source
@@ -729,7 +732,7 @@ pub fn spawn_play_thread(
 
       // For Remote sources, idle while the user has playback off.
       // The thread stays alive; it just doesn't produce audio.
-      if !source_should_play(source) {
+      if !source_should_play(&source) {
         sleep_checking(&play_running, Duration::from_millis(200));
         continue;
       }
@@ -739,8 +742,8 @@ pub fn spawn_play_thread(
           play_continuous_tick(
             &play_running,
             &play_preview,
+            &source,
             &play_mix,
-            source_idx,
             hb_idx,
             &play_counter,
           );
@@ -749,8 +752,8 @@ pub fn spawn_play_thread(
           play_loop(
             &play_running,
             &play_preview,
+            &source,
             &play_mix,
-            source_idx,
             hb_idx,
             &play_counter,
           );
@@ -759,8 +762,8 @@ pub fn spawn_play_thread(
           play_oneshot_once(
             &play_running,
             &play_preview,
+            &source,
             &play_mix,
-            source_idx,
             hb_idx,
             true,
             &play_counter,
@@ -788,64 +791,74 @@ fn rebalance_play_threads(
   preview: &Arc<PreviewState>,
   supervised: &mut Vec<SupervisedThread>,
 ) {
-  for (source_idx, source) in preview.sources.iter().enumerate() {
-    let hb_count = source.heartbeats.read().unwrap_or_recover().len();
-    for hb_idx in 0..hb_count {
-      let live = supervised.iter().any(|st| {
-        st.source_idx == source_idx
-          && st.hb_idx == hb_idx
-          && st.role == ThreadRole::Play
-          && st
-            .handle
-            .as_ref()
-            .map(|h| !h.is_finished())
-            .unwrap_or(false)
-      });
-      if live {
-        continue;
+  // Build the desired set of (source_name, hb_idx) play targets.
+  let snapshot = preview.sources_snapshot();
+  let desired: Vec<(String, usize)> = snapshot
+    .iter()
+    .flat_map(|source| {
+      let name = source.name.clone();
+      let hb_count = source.heartbeats.read().unwrap_or_recover().len();
+      (0..hb_count).map(move |hb_idx| (name.clone(), hb_idx))
+    })
+    .collect();
+
+  // Drop play-thread entries whose Source no longer exists.  The
+  // threads themselves see `kind.is_alive() == false` and exit, but
+  // their `SupervisedThread` slots would otherwise pile up forever.
+  supervised.retain(|st| {
+    if st.role != ThreadRole::Play {
+      return true;
+    }
+    desired.iter().any(|(name, _)| name == &st.source_name)
+  });
+
+  for (name, hb_idx) in &desired {
+    let live = supervised.iter().any(|st| {
+      st.role == ThreadRole::Play
+        && st.source_name == *name
+        && st.hb_idx == *hb_idx
+        && st
+          .handle
+          .as_ref()
+          .map(|h| !h.is_finished())
+          .unwrap_or(false)
+    });
+    if live {
+      continue;
+    }
+    let play_h = spawn_play_thread(preview, name, *hb_idx);
+    let existing = supervised.iter_mut().find(|st| {
+      st.role == ThreadRole::Play
+        && st.source_name == *name
+        && st.hb_idx == *hb_idx
+    });
+    match existing {
+      Some(st) => {
+        st.handle = Some(play_h);
       }
-      let play_h = spawn_play_thread(preview, source_idx, hb_idx);
-      let existing = supervised.iter_mut().find(|st| {
-        st.source_idx == source_idx
-          && st.hb_idx == hb_idx
-          && st.role == ThreadRole::Play
-      });
-      match existing {
-        Some(st) => {
-          st.handle = Some(play_h);
-        }
-        None => {
-          supervised.push(SupervisedThread::new(
-            play_h,
-            source_idx,
-            source.name.clone(),
-            hb_idx,
-            ThreadRole::Play,
-          ));
-        }
+      None => {
+        supervised.push(SupervisedThread::new(
+          play_h,
+          name.clone(),
+          *hb_idx,
+          ThreadRole::Play,
+        ));
       }
     }
   }
 }
 
 /// Spawn poll and play threads for the heartbeat at `hb_idx` within
-/// the source named `source_name`.  Looks up the source's index
-/// once at spawn time; threads then keep the index for the rest of
-/// their lifetime.
+/// the source named `source_name`.  Used by the runtime
+/// `add_heartbeat` path to wire fresh threads for a newly-added
+/// Local heartbeat.
 pub fn spawn_heartbeat_threads(
   preview: &Arc<PreviewState>,
   source_name: &str,
   hb_idx: usize,
 ) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
-  let source_idx = preview
-    .sources
-    .iter()
-    .position(|s| s.name == source_name)
-    .unwrap_or_else(|| {
-      panic!("source {source_name:?} not found in PreviewState::sources")
-    });
-  let poll_handle = spawn_poll_thread(preview, source_idx, hb_idx);
-  let play_handle = spawn_play_thread(preview, source_idx, hb_idx);
+  let poll_handle = spawn_poll_thread(preview, source_name, hb_idx);
+  let play_handle = spawn_play_thread(preview, source_name, hb_idx);
   (poll_handle, play_handle)
 }
 
@@ -853,22 +866,23 @@ pub fn spawn_heartbeat_threads(
 // Audio playback helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve all notes for `(source_idx, hb_idx)` from the current
-/// metric and transition config.  Shared by loop, oneshot, and
-/// continuous playback.
-fn resolve_notes(
-  preview: &PreviewState,
-  source_idx: usize,
-  hb_idx: usize,
-) -> Vec<ResolvedNote> {
-  let source = source_at(preview, source_idx);
+/// Resolve all notes for the heartbeat at `hb_idx` within
+/// `source`.  Returns an empty Vec when `hb_idx` is out of range
+/// (e.g. a remote shape change shrunk the list past `hb_idx`).
+fn resolve_notes(source: &Source, hb_idx: usize) -> Vec<ResolvedNote> {
   let metric = {
     let hbs = source.heartbeats.read().unwrap_or_recover();
-    hbs[hb_idx].metric.value() as f64
+    match hbs.get(hb_idx) {
+      Some(hb) => hb.metric.value() as f64,
+      None => return vec![],
+    }
   };
   let note_configs = {
-    let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
-    cfg.notes.clone()
+    let configs = source.heartbeat_configs.read().unwrap_or_recover();
+    match configs.get(hb_idx) {
+      Some(cfg) => cfg.notes.clone(),
+      None => return vec![],
+    }
   };
   let lib = source.library.read().unwrap_or_recover();
   note_configs
@@ -891,20 +905,19 @@ fn notes_to_continuous_pairs(notes: &[ResolvedNote]) -> Vec<(Patch, f64)> {
   notes.iter().map(|n| (n.patch.clone(), n.volume)).collect()
 }
 
-/// Clone the effective_volume Shared for `(source_idx, hb_idx)`.
-/// The clone shares the same underlying atomic, so updates via
-/// `update_effective_volume` are immediately visible.
+/// Clone the effective_volume Shared for the heartbeat at `hb_idx`
+/// within `source`.  The clone shares the same underlying atomic,
+/// so updates via `update_effective_volume` are immediately visible.
+/// Returns a default `Shared(1.0)` if `hb_idx` is out of range —
+/// callers in that case will see no notes to resolve and exit.
 fn clone_effective_volume(
-  preview: &PreviewState,
-  source_idx: usize,
+  source: &Source,
   hb_idx: usize,
 ) -> fundsp::shared::Shared {
-  source_at(preview, source_idx)
-    .heartbeats
-    .read()
-    .unwrap_or_recover()[hb_idx]
-    .effective_volume
-    .clone()
+  match source.heartbeats.read().unwrap_or_recover().get(hb_idx) {
+    Some(hb) => hb.effective_volume.clone(),
+    None => fundsp::prelude32::shared(1.0),
+  }
 }
 
 /// Continuous morph playback: build a multi-note graph with
@@ -915,38 +928,44 @@ fn clone_effective_volume(
 fn play_continuous_tick(
   running: &AtomicBool,
   preview: &PreviewState,
+  source: &Source,
   play_mix: &MixerHandle,
-  source_idx: usize,
   hb_idx: usize,
   counter: &prometheus::IntCounter,
 ) {
-  let source = source_at(preview, source_idx);
-
   // Wait for at least one valid note.
   let initial_notes = loop {
     if !running.load(Ordering::Relaxed) {
       return;
     }
-    if source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback
-      != Playback::Continuous
-    {
+    let configs = source.heartbeat_configs.read().unwrap_or_recover();
+    let Some(cfg) = configs.get(hb_idx) else {
+      return;
+    };
+    if cfg.playback != Playback::Continuous {
       return;
     }
-    let notes = resolve_notes(preview, source_idx, hb_idx);
+    drop(configs);
+    let notes = resolve_notes(source, hb_idx);
     if !notes.is_empty() {
       break notes;
     }
     thread::sleep(Duration::from_secs(1));
   };
 
-  let crossfade_ms = {
-    let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
-    cfg.crossfade_ms
+  let crossfade_ms = match source
+    .heartbeat_configs
+    .read()
+    .unwrap_or_recover()
+    .get(hb_idx)
+  {
+    Some(cfg) => cfg.crossfade_ms,
+    None => return,
   };
   let smoothing = crossfade_ms / 1000.0;
 
   let pairs = notes_to_continuous_pairs(&initial_notes);
-  let eff_vol = clone_effective_volume(preview, source_idx, hb_idx);
+  let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
   let (graph, mut all_controls, mut all_structural) =
     continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
@@ -962,23 +981,24 @@ fn play_continuous_tick(
       break;
     }
 
-    if source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback
-      != Playback::Continuous
+    let crossfade_ms = match source
+      .heartbeat_configs
+      .read()
+      .unwrap_or_recover()
+      .get(hb_idx)
     {
-      break;
-    }
-
-    let crossfade_ms = {
-      let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
-      cfg.crossfade_ms
+      Some(cfg) if cfg.playback == Playback::Continuous => cfg.crossfade_ms,
+      Some(_) => break,
+      None => break,
     };
 
-    let notes = resolve_notes(preview, source_idx, hb_idx);
+    let notes = resolve_notes(source, hb_idx);
     if notes.is_empty() {
       continue;
     }
 
     preview.update_effective_volume(source, hb_idx);
+
     let pairs = notes_to_continuous_pairs(&notes);
 
     // Full rebuild if note count changed.
@@ -1054,19 +1074,18 @@ fn play_continuous_tick(
 fn play_loop(
   running: &AtomicBool,
   preview: &PreviewState,
+  source: &Source,
   play_mix: &MixerHandle,
-  source_idx: usize,
   hb_idx: usize,
   counter: &prometheus::IntCounter,
 ) {
-  let source = source_at(preview, source_idx);
-  let notes = resolve_notes(preview, source_idx, hb_idx);
+  let notes = resolve_notes(source, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
     return;
   }
 
-  let eff_vol = clone_effective_volume(preview, source_idx, hb_idx);
+  let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
@@ -1076,17 +1095,16 @@ fn play_loop(
   sleep_checking(running, content_dur);
 
   while running.load(Ordering::Relaxed) {
-    if source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].playback
-      != Playback::Loop
+    let crossfade_ms = match source
+      .heartbeat_configs
+      .read()
+      .unwrap_or_recover()
+      .get(hb_idx)
     {
-      break;
-    }
-
-    let crossfade_ms = {
-      let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
-      cfg.crossfade_ms
+      Some(cfg) if cfg.playback == Playback::Loop => cfg.crossfade_ms,
+      _ => break,
     };
-    let notes = resolve_notes(preview, source_idx, hb_idx);
+    let notes = resolve_notes(source, hb_idx);
     if notes.is_empty() {
       break;
     }
@@ -1110,24 +1128,28 @@ fn play_loop(
 fn play_oneshot_once(
   running: &AtomicBool,
   preview: &PreviewState,
+  source: &Source,
   play_mix: &MixerHandle,
-  source_idx: usize,
   hb_idx: usize,
   wait_for_clock: bool,
   counter: &prometheus::IntCounter,
 ) {
-  let source = source_at(preview, source_idx);
-  let (cycle_secs, cycle_offset) = {
-    let cfg = &source.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
-    (cfg.cycle_secs, cfg.cycle_offset_secs)
+  let (cycle_secs, cycle_offset) = match source
+    .heartbeat_configs
+    .read()
+    .unwrap_or_recover()
+    .get(hb_idx)
+  {
+    Some(cfg) => (cfg.cycle_secs, cfg.cycle_offset_secs),
+    None => return,
   };
-  let notes = resolve_notes(preview, source_idx, hb_idx);
+  let notes = resolve_notes(source, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
     return;
   }
 
-  let eff_vol = clone_effective_volume(preview, source_idx, hb_idx);
+  let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let dur = heartbeat::heartbeat_notes_duration(&notes);
@@ -1212,7 +1234,7 @@ mod tests {
     // Use a dummy handle (spawn a no-op thread).
     let h = thread::spawn(|| {});
     let mut st =
-      SupervisedThread::new(h, 0, "localhost".to_string(), 0, ThreadRole::Poll);
+      SupervisedThread::new(h, "localhost".to_string(), 0, ThreadRole::Poll);
     for _ in 0..MAX_FAILURES_PER_THREAD {
       assert!(!st.record_failure(), "should not be exhausted yet");
     }
@@ -1223,7 +1245,7 @@ mod tests {
   fn supervised_thread_budget_exhaustion() {
     let h = thread::spawn(|| {});
     let mut st =
-      SupervisedThread::new(h, 0, "localhost".to_string(), 0, ThreadRole::Play);
+      SupervisedThread::new(h, "localhost".to_string(), 0, ThreadRole::Play);
     for _ in 0..MAX_FAILURES_PER_THREAD {
       st.record_failure();
     }
@@ -1235,7 +1257,7 @@ mod tests {
   fn supervised_thread_prunes_old_failures() {
     let h = thread::spawn(|| {});
     let mut st =
-      SupervisedThread::new(h, 0, "localhost".to_string(), 0, ThreadRole::Poll);
+      SupervisedThread::new(h, "localhost".to_string(), 0, ThreadRole::Poll);
 
     // Insert old failures that would be outside the window.
     let old = Instant::now() - FAILURE_WINDOW - Duration::from_secs(1);
