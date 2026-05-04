@@ -547,6 +547,17 @@ fn handle_client_message(
       None
     }
 
+    "set_remote_playback_enabled" => {
+      let source = msg.get("source").and_then(|v| v.as_str())?;
+      let enabled = msg.get("enabled").and_then(|v| v.as_bool())?;
+      // No-op if the named source doesn't exist or is the Local
+      // Source — Local has no playback toggle.
+      if preview.set_remote_playback_enabled(source, enabled) {
+        let _ = preview.broadcast_tx.send(preview.state_snapshot());
+      }
+      None
+    }
+
     "export_config" => {
       let format = msg.get("format").and_then(|v| v.as_str()).unwrap_or("toml");
       let lib = preview.local().library.read().unwrap_or_recover();

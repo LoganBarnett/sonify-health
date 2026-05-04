@@ -355,6 +355,29 @@ impl PreviewState {
     });
   }
 
+  /// Flip the `playback_enabled` atomic on the Remote Source named
+  /// `source_name`.  Returns `true` if the source exists, is a
+  /// Remote (Local sources don't carry the toggle), and the value
+  /// was applied; `false` otherwise.
+  pub fn set_remote_playback_enabled(
+    &self,
+    source_name: &str,
+    enabled: bool,
+  ) -> bool {
+    match self.source_by_name(source_name) {
+      Some(source) => match &source.kind {
+        SourceKind::Remote {
+          playback_enabled, ..
+        } => {
+          playback_enabled.store(enabled, Ordering::Relaxed);
+          true
+        }
+        SourceKind::Local => false,
+      },
+      None => false,
+    }
+  }
+
   /// Project the current Remote Sources back to their config-side
   /// `RemoteSourceConfig` shape so save/export round-trips pick up
   /// runtime changes (e.g. the user toggling `playback_enabled`).

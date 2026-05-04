@@ -99,6 +99,7 @@ type Msg
     | SetPatchParam String String String
     | PatchParamDebounce String String Int Float
     | ToggleMute
+    | ToggleRemotePlayback String
     | SetMasterVolume String
     | MasterVolDebounce Int Float
     | SetNoteSlider NoteSlider Int Int String
@@ -372,6 +373,25 @@ update msg model =
         ToggleMute ->
             ( model
             , Ports.websocketSend (encodeSetMuted (not model.muted))
+            )
+
+        ToggleRemotePlayback sourceName ->
+            -- Optimistic flip: update the matching remote source's
+            -- playbackEnabled in the model, then send the wire
+            -- message.  The state snapshot the backend rebroadcasts
+            -- after applying will overwrite the model anyway, but
+            -- the optimistic update keeps the UI feeling
+            -- responsive.
+            let
+                updatedSources =
+                    List.map (toggleSourcePlayback sourceName) model.sources
+
+                newEnabled =
+                    findSourcePlayback sourceName updatedSources
+            in
+            ( { model | sources = updatedSources }
+            , Ports.websocketSend
+                (encodeSetRemotePlaybackEnabled sourceName newEnabled)
             )
 
         SetMasterVolume rawVal ->
@@ -2141,30 +2161,81 @@ viewRemoteSourcePanel source =
                         Disconnected ->
                             ( "source-panel-status disconnected", "disconnected" )
 
-                playbackBadge =
+                ( playbackClass, playbackLabel, playbackTitle ) =
                     if remote.playbackEnabled then
-                        span
-                            [ class "source-panel-badge playback-on"
-                            , title "Local renderer is playing audio for this Source."
-                            ]
-                            [ text "playing" ]
+                        ( "source-panel-badge playback-on"
+                        , "playing"
+                        , "Click to stop playing audio for this Source."
+                        )
 
                     else
-                        span
-                            [ class "source-panel-badge playback-off"
-                            , title "State is mirrored but audio is not played for this Source."
-                            ]
-                            [ text "muted" ]
+                        ( "source-panel-badge playback-off"
+                        , "muted"
+                        , "Click to start playing audio for this Source."
+                        )
             in
             div [ class "source-panel" ]
                 [ div [ class "source-panel-header" ]
                     [ span [ class "source-panel-name" ] [ text source.name ]
                     , span [ class statusClass, title remote.url ] [ text statusLabel ]
-                    , playbackBadge
+                    , button
+                        [ class playbackClass
+                        , title playbackTitle
+                        , onClick (ToggleRemotePlayback source.name)
+                        ]
+                        [ text playbackLabel ]
                     ]
                 , div [ class "source-panel-body" ]
                     (List.map viewRemoteHeartbeatRow source.heartbeats)
                 ]
+
+
+{-| Flip `playbackEnabled` on the Remote Source named `name`.
+No-op on Local sources and on names that don't match anything.
+-}
+toggleSourcePlayback : String -> SourceInfo -> SourceInfo
+toggleSourcePlayback name source =
+    if source.name /= name then
+        source
+
+    else
+        case source.kind of
+            Local ->
+                source
+
+            Remote remote ->
+                { source
+                    | kind =
+                        Remote
+                            { remote
+                                | playbackEnabled = not remote.playbackEnabled
+                            }
+                }
+
+
+{-| Read the (post-toggle) `playbackEnabled` value for the named
+Remote Source so the wire message reflects the new state. Defaults
+to False if the name doesn't match — the message would be a no-op
+on the backend in that case anyway.
+-}
+findSourcePlayback : String -> List SourceInfo -> Bool
+findSourcePlayback name sources =
+    sources
+        |> List.filterMap
+            (\s ->
+                if s.name == name then
+                    case s.kind of
+                        Remote remote ->
+                            Just remote.playbackEnabled
+
+                        Local ->
+                            Nothing
+
+                else
+                    Nothing
+            )
+        |> List.head
+        |> Maybe.withDefault False
 
 
 {-| One read-only row inside a Remote Source's panel. Shows the

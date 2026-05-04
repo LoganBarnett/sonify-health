@@ -40,6 +40,7 @@ module Protocol exposing
     , encodeSetPatchParam
     , encodeSetPatchParamAndPlay
     , encodeSetPlayback
+    , encodeSetRemotePlaybackEnabled
     , encodeSetTiers
     , encodeTriggerHeartbeat
     )
@@ -907,6 +908,16 @@ encodeSetMuted muted =
     E.object
         [ ( "type", E.string "set_muted" )
         , ( "muted", E.bool muted )
+        ]
+        |> E.encode 0
+
+
+encodeSetRemotePlaybackEnabled : String -> Bool -> String
+encodeSetRemotePlaybackEnabled sourceName enabled =
+    E.object
+        [ ( "type", E.string "set_remote_playback_enabled" )
+        , ( "source", E.string sourceName )
+        , ( "enabled", E.bool enabled )
         ]
         |> E.encode 0
 
