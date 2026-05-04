@@ -532,6 +532,55 @@ fn handle_client_message(
       None
     }
 
+    "add_remote_source" => {
+      let name = msg.get("name").and_then(|v| v.as_str())?.trim().to_string();
+      let url = msg.get("url").and_then(|v| v.as_str())?.trim().to_string();
+      if name.is_empty() || url.is_empty() {
+        let _ = preview.broadcast_tx.send(
+          json!({
+            "type": "add_source_error",
+            "message": "name and url are required",
+          })
+          .to_string(),
+        );
+        return None;
+      }
+      match preview.add_remote_source(name.clone(), url) {
+        Ok(_) => {
+          let connector_preview = Arc::clone(preview);
+          let connector_name = name.clone();
+          tokio::spawn(async move {
+            crate::remote_source::run_connector(
+              connector_preview,
+              connector_name,
+            )
+            .await;
+          });
+          let _ = preview.broadcast_tx.send(preview.state_snapshot());
+        }
+        Err(e) => {
+          let _ = preview.broadcast_tx.send(
+            json!({
+              "type": "add_source_error",
+              "message": format!("{e}"),
+            })
+            .to_string(),
+          );
+        }
+      }
+      None
+    }
+
+    "remove_remote_source" => {
+      let name = msg.get("name").and_then(|v| v.as_str())?;
+      // Silently no-op if the source doesn't exist or is local —
+      // the wire shouldn't be able to remove the Local Source.
+      if preview.remove_remote_source(name) {
+        let _ = preview.broadcast_tx.send(preview.state_snapshot());
+      }
+      None
+    }
+
     "export_config" => {
       let format = msg.get("format").and_then(|v| v.as_str()).unwrap_or("toml");
       let lib = local.library.read().unwrap_or_recover();

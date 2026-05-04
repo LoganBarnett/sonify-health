@@ -17,6 +17,7 @@ module Protocol exposing
     , TransitionInfo(..)
     , decodeServerMsg
     , encodeAddNote
+    , encodeAddRemoteSource
     , encodeClearOverride
     , encodeCreateHeartbeat
     , encodeCreateOverride
@@ -29,6 +30,7 @@ module Protocol exposing
     , encodeNoteSlider
     , encodeOverrideHeartbeat
     , encodeRemoveNote
+    , encodeRemoveRemoteSource
     , encodeRenamePatch
     , encodeResetOverrideParam
     , encodeRevertAll
@@ -918,6 +920,25 @@ encodeSetRemotePlaybackEnabled sourceName enabled =
         [ ( "type", E.string "set_remote_playback_enabled" )
         , ( "source", E.string sourceName )
         , ( "enabled", E.bool enabled )
+        ]
+        |> E.encode 0
+
+
+encodeAddRemoteSource : String -> String -> String
+encodeAddRemoteSource name url =
+    E.object
+        [ ( "type", E.string "add_remote_source" )
+        , ( "name", E.string name )
+        , ( "url", E.string url )
+        ]
+        |> E.encode 0
+
+
+encodeRemoveRemoteSource : String -> String
+encodeRemoveRemoteSource name =
+    E.object
+        [ ( "type", E.string "remove_remote_source" )
+        , ( "name", E.string name )
         ]
         |> E.encode 0
 

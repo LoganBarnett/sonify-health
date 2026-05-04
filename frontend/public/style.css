@@ -1079,3 +1079,81 @@ a:hover {
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* Per-remote-source remove control: a tiny × button, replaced
+   inline by a "Remove? Yes / No" prompt while a confirmation is
+   pending — same inline-confirm pattern the rest of the UI uses. */
+.source-remove-btn {
+  margin-left: auto;
+  padding: 0 var(--space-sm);
+  font-size: var(--font-base);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.source-remove-btn:hover {
+  color: var(--color-down-text);
+  border-color: var(--color-border);
+}
+
+.source-remove-confirm {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  font-size: var(--font-sm);
+  color: var(--color-text-muted);
+}
+
+/* "+ Add source" inline form.  Stacked rows for URL and Name; a
+   tiny error region; and Add / Cancel actions. */
+.add-source-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.add-source-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.add-source-label {
+  width: 4rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.add-source-input {
+  flex: 1;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--font-base);
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.add-source-error {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--font-sm);
+  color: var(--color-error);
+  background: var(--color-bg-error);
+  border: 1px solid var(--color-border-error);
+  border-radius: var(--radius-sm);
+}
+
+.add-source-actions {
+  display: flex;
+  gap: var(--space-sm);
+}

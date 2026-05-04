@@ -53,6 +53,19 @@ type MeStatus
     | MeFailed
 
 
+{-| Inline form state for the "+ Add source" flow. Cleared when
+the user submits or cancels. `nameEdited` flips to True on the
+first keystroke in the name field so URL-driven hostname auto-fill
+stops clobbering a name the user typed deliberately.
+-}
+type alias AddSourceForm =
+    { name : String
+    , url : String
+    , nameEdited : Bool
+    , error : Maybe String
+    }
+
+
 type alias Model =
     { key : Nav.Key
     , url : Url
@@ -82,6 +95,8 @@ type alias Model =
     , configPath : Maybe String
     , headless : Bool
     , sources : List SourceInfo
+    , addSourceForm : Maybe AddSourceForm
+    , pendingRemoveSource : Set String
     , saveStatus : Maybe String
     , playOnChange : Set String
     , metricHistory : Dict Int (List Float)
@@ -100,6 +115,14 @@ type Msg
     | PatchParamDebounce String String Int Float
     | ToggleMute
     | ToggleRemotePlayback String
+    | OpenAddSourceForm
+    | CloseAddSourceForm
+    | SetAddSourceName String
+    | SetAddSourceUrl String
+    | SubmitAddSource
+    | RequestRemoveSource String
+    | ConfirmRemoveSource String
+    | CancelRemoveSource String
     | SetMasterVolume String
     | MasterVolDebounce Int Float
     | SetNoteSlider NoteSlider Int Int String
@@ -203,6 +226,8 @@ init _ url key =
       , configPath = Nothing
       , headless = False
       , sources = []
+      , addSourceForm = Nothing
+      , pendingRemoveSource = Set.empty
       , saveStatus = Nothing
       , playOnChange = Set.empty
       , metricHistory = Dict.empty
@@ -392,6 +417,121 @@ update msg model =
             ( { model | sources = updatedSources }
             , Ports.websocketSend
                 (encodeSetRemotePlaybackEnabled sourceName newEnabled)
+            )
+
+        OpenAddSourceForm ->
+            ( { model
+                | addSourceForm =
+                    Just
+                        { name = ""
+                        , url = ""
+                        , nameEdited = False
+                        , error = Nothing
+                        }
+              }
+            , Cmd.none
+            )
+
+        CloseAddSourceForm ->
+            ( { model | addSourceForm = Nothing }, Cmd.none )
+
+        SetAddSourceName n ->
+            ( { model
+                | addSourceForm =
+                    Maybe.map
+                        (\f -> { f | name = n, nameEdited = True })
+                        model.addSourceForm
+              }
+            , Cmd.none
+            )
+
+        SetAddSourceUrl u ->
+            ( { model
+                | addSourceForm =
+                    Maybe.map
+                        (\f ->
+                            { f
+                                | url = u
+                                , name =
+                                    if f.nameEdited then
+                                        f.name
+
+                                    else
+                                        parseHostname u
+                            }
+                        )
+                        model.addSourceForm
+              }
+            , Cmd.none
+            )
+
+        SubmitAddSource ->
+            case model.addSourceForm of
+                Just f ->
+                    let
+                        trimmedName =
+                            String.trim f.name
+
+                        trimmedUrl =
+                            String.trim f.url
+                    in
+                    if String.isEmpty trimmedName || String.isEmpty trimmedUrl then
+                        ( { model
+                            | addSourceForm =
+                                Just
+                                    { f
+                                        | error =
+                                            Just
+                                                "Name and URL are both required."
+                                    }
+                          }
+                        , Cmd.none
+                        )
+
+                    else if trimmedName == "localhost" then
+                        ( { model
+                            | addSourceForm =
+                                Just
+                                    { f
+                                        | error =
+                                            Just
+                                                "`localhost` is reserved for the Local Source."
+                                    }
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( { model | addSourceForm = Nothing }
+                        , Ports.websocketSend
+                            (encodeAddRemoteSource trimmedName trimmedUrl)
+                        )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RequestRemoveSource name ->
+            ( { model
+                | pendingRemoveSource =
+                    Set.insert name model.pendingRemoveSource
+              }
+            , Cmd.none
+            )
+
+        CancelRemoveSource name ->
+            ( { model
+                | pendingRemoveSource =
+                    Set.remove name model.pendingRemoveSource
+              }
+            , Cmd.none
+            )
+
+        ConfirmRemoveSource name ->
+            ( { model
+                | pendingRemoveSource =
+                    Set.remove name model.pendingRemoveSource
+              }
+            , Ports.websocketSend (encodeRemoveRemoteSource name)
             )
 
         SetMasterVolume rawVal ->
@@ -1932,7 +2072,7 @@ viewHome model =
                             Local ->
                                 False
                     )
-                |> List.map viewRemoteSourcePanel
+                |> List.map (viewRemoteSourcePanel model.pendingRemoveSource)
     in
     div [ class "app-layout" ]
         [ viewToolbar model
@@ -1943,6 +2083,7 @@ viewHome model =
                  , viewImport model
                  ]
                     ++ remotePanels
+                    ++ [ viewAddSourceButton model.addSourceForm ]
                 )
             , div [ class "panel-right" ]
                 [ viewPatchList model
@@ -2142,8 +2283,8 @@ read-only list of the remote's heartbeats. Editing controls are
 intentionally absent — remote configuration is owned by the remote
 instance.
 -}
-viewRemoteSourcePanel : SourceInfo -> Html Msg
-viewRemoteSourcePanel source =
+viewRemoteSourcePanel : Set String -> SourceInfo -> Html Msg
+viewRemoteSourcePanel pendingRemove source =
     case source.kind of
         Local ->
             text ""
@@ -2173,6 +2314,30 @@ viewRemoteSourcePanel source =
                         , "muted"
                         , "Click to start playing audio for this Source."
                         )
+
+                removeControl =
+                    if Set.member source.name pendingRemove then
+                        span [ class "source-remove-confirm" ]
+                            [ text "Remove?"
+                            , button
+                                [ class "btn btn-danger btn-sm"
+                                , onClick (ConfirmRemoveSource source.name)
+                                ]
+                                [ text "Yes" ]
+                            , button
+                                [ class "btn btn-sm"
+                                , onClick (CancelRemoveSource source.name)
+                                ]
+                                [ text "No" ]
+                            ]
+
+                    else
+                        button
+                            [ class "source-remove-btn"
+                            , title "Remove this Remote Source"
+                            , onClick (RequestRemoveSource source.name)
+                            ]
+                            [ text "×" ]
             in
             div [ class "source-panel" ]
                 [ div [ class "source-panel-header" ]
@@ -2184,9 +2349,61 @@ viewRemoteSourcePanel source =
                         , onClick (ToggleRemotePlayback source.name)
                         ]
                         [ text playbackLabel ]
+                    , removeControl
                     ]
                 , div [ class "source-panel-body" ]
                     (List.map viewRemoteHeartbeatRow source.heartbeats)
+                ]
+
+
+{-| The "+ Add source" affordance. When `addSourceForm` is
+`Nothing`, renders a small button that opens the form. When the
+form is open, replaces the button with an inline two-input form
+plus submit/cancel — same inline-disclosure pattern the rest of
+the UI uses (no modals).
+-}
+viewAddSourceButton : Maybe AddSourceForm -> Html Msg
+viewAddSourceButton form =
+    case form of
+        Nothing ->
+            button
+                [ class "btn btn-add", onClick OpenAddSourceForm ]
+                [ text "+ Add Source" ]
+
+        Just f ->
+            div [ class "add-source-form" ]
+                [ div [ class "add-source-row" ]
+                    [ Html.label [ class "add-source-label" ] [ text "URL" ]
+                    , input
+                        [ class "add-source-input"
+                        , Html.Attributes.value f.url
+                        , Html.Attributes.placeholder "wss://host/ws"
+                        , onInput SetAddSourceUrl
+                        ]
+                        []
+                    ]
+                , div [ class "add-source-row" ]
+                    [ Html.label [ class "add-source-label" ] [ text "Name" ]
+                    , input
+                        [ class "add-source-input"
+                        , Html.Attributes.value f.name
+                        , Html.Attributes.placeholder "(defaults to hostname)"
+                        , onInput SetAddSourceName
+                        ]
+                        []
+                    ]
+                , case f.error of
+                    Just msg ->
+                        div [ class "add-source-error" ] [ text msg ]
+
+                    Nothing ->
+                        text ""
+                , div [ class "add-source-actions" ]
+                    [ button [ class "btn", onClick SubmitAddSource ]
+                        [ text "Add" ]
+                    , button [ class "btn", onClick CloseAddSourceForm ]
+                        [ text "Cancel" ]
+                    ]
                 ]
 
 
@@ -2211,6 +2428,37 @@ toggleSourcePlayback name source =
                                 | playbackEnabled = not remote.playbackEnabled
                             }
                 }
+
+
+{-| Extract the hostname from a `ws://` or `wss://` URL. Drops
+the scheme, the path, the query, and any port — leaving just the
+host. Returns the input unchanged when no scheme separator is
+present so partial input doesn't fight the user's typing.
+-}
+parseHostname : String -> String
+parseHostname url =
+    let
+        afterScheme =
+            case String.split "://" url of
+                _ :: rest :: _ ->
+                    rest
+
+                _ ->
+                    url
+
+        beforeDelimiter delim s =
+            case String.split delim s of
+                head :: _ ->
+                    head
+
+                _ ->
+                    s
+    in
+    afterScheme
+        |> beforeDelimiter "/"
+        |> beforeDelimiter "?"
+        |> beforeDelimiter "#"
+        |> beforeDelimiter ":"
 
 
 {-| Read the (post-toggle) `playbackEnabled` value for the named
