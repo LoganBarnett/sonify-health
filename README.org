@@ -100,12 +100,12 @@ Long-running mode that spawns probe commands, updates shared state,
 plays heartbeats, and serves the web frontend:
 
 #+begin_src sh :results none :exports code
-sonify-health -c config.toml daemon
+sonify-health --config config.toml daemon
 #+end_src
 
 Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
 
-Note that global options like =--config= / =-c=, =--headless=, and
+Note that global options like =--config=, =--headless=, and
 =--source= must appear *before* the subcommand.
 
 ** Multi-instance setup
@@ -120,7 +120,7 @@ to live on the same machine.
 A speakerless host runs the daemon in headless mode:
 
 #+begin_src sh :results none :exports code
-sonify-health -c config.toml --headless daemon
+sonify-health --config config.toml --headless daemon
 #+end_src
 
 Or set =headless = true= in =config.toml=, or
