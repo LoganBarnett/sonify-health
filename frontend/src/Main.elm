@@ -2078,12 +2078,21 @@ viewHome model =
         [ viewToolbar model
         , div [ class "split-panel" ]
             [ div [ class "panel-left" ]
+                -- The probe log is the one section whose height
+                -- grows with traffic (capped to 200 px by
+                -- `.log-container { max-height }`, but still 0 →
+                -- 200 px between an empty log and a full one).
+                -- Putting it last in the column keeps everything
+                -- above it stationary as entries arrive instead of
+                -- shoving the import/add-source/remote panels down
+                -- by a fluctuating amount.
                 ([ viewSourcePanel "localhost" model.headless [ viewHeartbeats model ]
-                 , viewProbeLog model
                  , viewImport model
                  ]
                     ++ remotePanels
-                    ++ [ viewAddSourceButton model.addSourceForm ]
+                    ++ [ viewAddSourceButton model.addSourceForm
+                       , viewProbeLog model
+                       ]
                 )
             , div [ class "panel-right" ]
                 [ viewPatchList model
