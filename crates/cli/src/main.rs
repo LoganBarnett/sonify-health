@@ -62,6 +62,35 @@ enum ApplicationError {
 
   #[error("Failed to initialize metrics: {0}")]
   MetricsInit(#[from] metrics::MetricsInitError),
+
+  /// Failed to install a synchronous signal handler at startup
+  /// (ctrlc backend).  The `signal` field carries the human
+  /// signal name so logs identify which install tripped.
+  #[error("Failed to install {signal} handler: {source}")]
+  SignalHandlerInstallFailed {
+    signal: &'static str,
+    #[source]
+    source: ctrlc::Error,
+  },
+
+  /// Failed to install an async signal subscription via tokio.
+  /// Distinct from the sync variant because the underlying error
+  /// type differs (`std::io::Error`) and the failure mode is
+  /// different — the binary loses graceful-shutdown coverage for
+  /// that one signal but can sometimes continue.
+  #[error("Failed to install async {signal} subscription: {source}")]
+  AsyncSignalSubscriptionFailed {
+    signal: &'static str,
+    #[source]
+    source: std::io::Error,
+  },
+
+  /// The daemon `spawn_blocking` task itself panicked.  Carries
+  /// the `JoinError` so the panic payload can be inspected /
+  /// re-raised by the caller if desired.  See
+  /// `std::panic::resume_unwind` for the explicit re-raise path.
+  #[error("Daemon task panicked or was cancelled: {0}")]
+  DaemonTaskJoin(#[source] tokio::task::JoinError),
 }
 
 #[derive(Parser)]
@@ -270,7 +299,10 @@ fn run_continuous_preview(
   ctrlc::set_handler(move || {
     let _ = tx.send(());
   })
-  .expect("Failed to install Ctrl-C handler");
+  .map_err(|source| ApplicationError::SignalHandlerInstallFailed {
+    signal: "Ctrl-C",
+    source,
+  })?;
 
   info!("Playing continuously, press Ctrl-C to stop");
   let play_run = Arc::clone(&run);
@@ -486,13 +518,13 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
       info!("Web server shut down, waiting for daemon loop");
       daemon_handle
         .await
-        .expect("Daemon task panicked")
+        .map_err(ApplicationError::DaemonTaskJoin)?
         .map_err(ApplicationError::Daemon)?;
     }
     result = &mut daemon_handle => {
       running.store(false, Ordering::Relaxed);
       result
-        .expect("Daemon task panicked")
+        .map_err(ApplicationError::DaemonTaskJoin)?
         .map_err(ApplicationError::Daemon)?;
     }
   }
@@ -501,19 +533,42 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   Ok(())
 }
 
+/// axum's `with_graceful_shutdown` requires a future producing
+/// `()`, so we can't propagate signal-install errors out of this
+/// function.  When a subscription fails we log the error and fall
+/// back to `pending::<()>()` for that branch — the binary loses
+/// graceful-shutdown coverage for the signal that failed but
+/// continues to run, with the failure visible in the log.
 async fn shutdown_signal(running: Arc<AtomicBool>) {
   let ctrl_c = async {
-    signal::ctrl_c()
-      .await
-      .expect("Failed to install Ctrl+C handler");
+    match signal::ctrl_c().await {
+      Ok(()) => {}
+      Err(e) => {
+        tracing::error!(
+          error = %e,
+          "Failed to subscribe to Ctrl+C; \
+           graceful shutdown via Ctrl+C disabled",
+        );
+        std::future::pending::<()>().await
+      }
+    }
   };
 
   #[cfg(unix)]
   let terminate = async {
-    signal::unix::signal(signal::unix::SignalKind::terminate())
-      .expect("Failed to install SIGTERM handler")
-      .recv()
-      .await;
+    match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+      Ok(mut s) => {
+        s.recv().await;
+      }
+      Err(e) => {
+        tracing::error!(
+          error = %e,
+          "Failed to subscribe to SIGTERM; \
+           graceful shutdown via SIGTERM disabled",
+        );
+        std::future::pending::<()>().await
+      }
+    }
   };
 
   #[cfg(not(unix))]
