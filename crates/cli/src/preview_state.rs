@@ -708,15 +708,21 @@ fn source_state_json(source: &Source) -> serde_json::Value {
     })
     .collect();
 
-  let mut entry = json!({
-    "name": source.name,
-    "library": lib_json,
-    "heartbeats": heartbeats_json,
-    "slider_ranges": serde_json::to_value(&source.slider_ranges).unwrap_or_default(),
-    "overrides": source_overrides_json(source),
-  });
+  // Build as a `serde_json::Map` directly rather than constructing
+  // a `Value::Object` and immediately re-extracting it via
+  // `as_object_mut()`.  Operating on the typed `Map` makes
+  // kind-specific fields a straight series of `insert` calls and
+  // removes the runtime "must still be an object" assertion.
+  let mut obj = serde_json::Map::new();
+  obj.insert("name".to_string(), json!(source.name));
+  obj.insert("library".to_string(), json!(lib_json));
+  obj.insert("heartbeats".to_string(), json!(heartbeats_json));
+  obj.insert(
+    "slider_ranges".to_string(),
+    serde_json::to_value(&source.slider_ranges).unwrap_or_default(),
+  );
+  obj.insert("overrides".to_string(), source_overrides_json(source));
 
-  let obj = entry.as_object_mut().expect("entry built as object");
   match &source.kind {
     SourceKind::Local => {
       obj.insert("kind".to_string(), json!("local"));
@@ -752,7 +758,7 @@ fn source_state_json(source: &Source) -> serde_json::Value {
       );
     }
   }
-  entry
+  serde_json::Value::Object(obj)
 }
 
 /// Serialize a Source's override map to a JSON value matching the
