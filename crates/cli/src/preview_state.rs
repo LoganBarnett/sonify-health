@@ -159,19 +159,23 @@ pub struct Source {
 /// process-global state shared across all Sources (one mixer, one
 /// mute switch, one metrics registry).
 ///
-/// Today `sources` contains exactly one entry — the Local Source —
-/// and the WebSocket protocol implicitly addresses that one Source.
-/// Call sites that depend on that convention go through
-/// [`PreviewState::local`] so the assumption is grep-able when the
-/// protocol grows a source field.
+/// The WebSocket protocol implicitly addresses the Local Source
+/// today; call sites that depend on that convention go through
+/// [`PreviewState::local`].  Storing `local` as a separate
+/// `Arc<Source>` field rather than as element 0 of a `Vec` lets
+/// the type system carry the "Local always exists" invariant —
+/// no runtime assertion (no `.expect()`) is needed to access it.
 pub struct PreviewState {
-  /// All Sources this instance knows about — Local and Remote.
-  /// Wrapped in `RwLock<Vec<Arc<Source>>>` so sources can be added
-  /// (via `add_remote_source`) and removed (via
-  /// `remove_remote_source`) at runtime: readers clone the Arc out
-  /// under a brief read lock and use it without holding the outer
-  /// guard.
-  pub sources: RwLock<Vec<Arc<Source>>>,
+  /// The Local Source.  Set once at construction and never
+  /// removed; the type system enforces "always present" so
+  /// `local()` doesn't need to assert it at runtime.
+  pub local: Arc<Source>,
+  /// Remote Sources mirrored over outbound WebSockets.  Wrapped
+  /// in `RwLock<Vec<...>>` so remotes can be added (via
+  /// `add_remote_source`) and removed (via `remove_remote_source`)
+  /// at runtime: readers clone the Arc out under a brief read
+  /// lock and use it without holding the outer guard.
+  pub remote_sources: RwLock<Vec<Arc<Source>>>,
   pub running: Arc<AtomicBool>,
   pub muted: Arc<AtomicBool>,
   pub metrics: Metrics,
@@ -228,7 +232,8 @@ impl PreviewState {
     };
 
     Self {
-      sources: RwLock::new(vec![Arc::new(local)]),
+      local: Arc::new(local),
+      remote_sources: RwLock::new(Vec::new()),
       running,
       muted,
       metrics,
@@ -240,18 +245,29 @@ impl PreviewState {
     }
   }
 
-  /// Snapshot the current Sources list as a `Vec<Arc<Source>>`.
-  /// Holds the read lock only long enough to clone the Arcs;
-  /// callers can iterate at leisure without blocking writers.
+  /// Snapshot the current Sources list as a `Vec<Arc<Source>>` —
+  /// the Local Source first, then every Remote Source in
+  /// insertion order.  Holds the remote read lock only long
+  /// enough to clone the Arcs; callers can iterate at leisure
+  /// without blocking writers.
   pub fn sources_snapshot(&self) -> Vec<Arc<Source>> {
-    self.sources.read().unwrap_or_recover().clone()
+    let remotes = self.remote_sources.read().unwrap_or_recover();
+    let mut out = Vec::with_capacity(remotes.len() + 1);
+    out.push(Arc::clone(&self.local));
+    out.extend(remotes.iter().cloned());
+    out
   }
 
   /// Look up a Source by name.  Returns `None` if no such Source
-  /// exists.
+  /// exists.  Checks Local first (it's the most common lookup);
+  /// if `name` isn't `LOCAL_SOURCE_NAME` we fall through to a
+  /// linear scan of the remotes Vec.
   pub fn source_by_name(&self, name: &str) -> Option<Arc<Source>> {
+    if name == LOCAL_SOURCE_NAME {
+      return Some(Arc::clone(&self.local));
+    }
     self
-      .sources
+      .remote_sources
       .read()
       .unwrap_or_recover()
       .iter()
@@ -262,10 +278,11 @@ impl PreviewState {
   /// The Local Source.  Used by call sites whose external inputs
   /// (most WebSocket mutation messages, save/export, the runtime
   /// `add_heartbeat` API) implicitly address the local instance.
+  /// `local` is structurally guaranteed to exist — it's a direct
+  /// `Arc<Source>` field on `PreviewState` rather than an entry in
+  /// a `Vec`, so this accessor never has to assert presence.
   pub fn local(&self) -> Arc<Source> {
-    self
-      .source_by_name(LOCAL_SOURCE_NAME)
-      .expect("Local Source must exist in PreviewState::sources")
+    Arc::clone(&self.local)
   }
 
   /// Update the effective volume for `hb_idx` within `source`,
@@ -462,20 +479,21 @@ impl PreviewState {
       .collect()
   }
 
-  /// Append an empty Remote Source to `self.sources`.  The source
-  /// starts with no library, no heartbeats, and a connection status
-  /// of `Connecting` — the connector task fills these in when it
-  /// receives the remote's first state snapshot.  Playback is
-  /// disabled by default; the user opts in via the per-Source
-  /// playback toggle.
+  /// Append an empty Remote Source to `self.remote_sources`.  The
+  /// source starts with no library, no heartbeats, and a
+  /// connection status of `Connecting` — the connector task fills
+  /// these in when it receives the remote's first state snapshot.
+  /// Playback is disabled by default; the user opts in via the
+  /// per-Source playback toggle.
   ///
-  /// Returns the index of the new source within `self.sources`.
+  /// Returns the index of the new source within
+  /// `self.remote_sources`.
   ///
   /// # Errors
   ///
   /// Returns an error if `name` collides with an existing Source
-  /// name (uniqueness is required across all Sources) or if `name`
-  /// is the reserved Local Source name.
+  /// name (uniqueness is required across all Sources, Local and
+  /// Remote) or if `name` is the reserved Local Source name.
   pub fn add_remote_source(
     &self,
     name: String,
@@ -484,8 +502,8 @@ impl PreviewState {
     if name == LOCAL_SOURCE_NAME {
       return Err(AddSourceError::DuplicateName { name });
     }
-    let mut sources = self.sources.write().unwrap_or_recover();
-    if sources.iter().any(|s| s.name == name) {
+    let mut remotes = self.remote_sources.write().unwrap_or_recover();
+    if remotes.iter().any(|s| s.name == name) {
       return Err(AddSourceError::DuplicateName { name });
     }
     let source = Source {
@@ -507,33 +525,29 @@ impl PreviewState {
       config_path: None,
       config_writable: false,
     };
-    sources.push(Arc::new(source));
-    Ok(sources.len() - 1)
+    remotes.push(Arc::new(source));
+    Ok(remotes.len() - 1)
   }
 
-  /// Remove the Remote Source named `name` from `self.sources` and
-  /// signal any tasks holding an `Arc<Source>` to that entry — the
-  /// connector task and any play threads for the source's
-  /// heartbeats — to exit cleanly via the `alive` flag.  Returns
-  /// `true` if a matching Remote Source was removed, `false` if no
-  /// such Source exists or `name` referred to the Local Source
-  /// (which is never removed).
+  /// Remove the Remote Source named `name` from
+  /// `self.remote_sources` and signal any tasks holding an
+  /// `Arc<Source>` to that entry — the connector task and any play
+  /// threads for the source's heartbeats — to exit cleanly via the
+  /// `alive` flag.  Returns `true` if a matching Remote Source was
+  /// removed, `false` if no such Source exists or `name` referred
+  /// to the Local Source (which is never removed).
   pub fn remove_remote_source(&self, name: &str) -> bool {
     if name == LOCAL_SOURCE_NAME {
       return false;
     }
-    let mut sources = self.sources.write().unwrap_or_recover();
-    let position = sources.iter().position(|s| s.name == name);
-    let Some(idx) = position else {
+    let mut remotes = self.remote_sources.write().unwrap_or_recover();
+    let Some(idx) = remotes.iter().position(|s| s.name == name) else {
       return false;
     };
-    if !sources[idx].kind.is_remote() {
-      return false;
-    }
-    if let SourceKind::Remote { alive, .. } = &sources[idx].kind {
+    if let SourceKind::Remote { alive, .. } = &remotes[idx].kind {
       alive.store(false, Ordering::Relaxed);
     }
-    sources.remove(idx);
+    remotes.remove(idx);
     true
   }
 
@@ -826,7 +840,9 @@ mod tests {
         "ws://db1.example/ws".to_string(),
       )
       .unwrap();
-    assert_eq!(idx, 1);
+    // First remote in `remote_sources` is at index 0 — local has
+    // its own field and is no longer mixed into the same Vec.
+    assert_eq!(idx, 0);
     let remote = preview.source_by_name("prod-db-1").expect("source exists");
     assert_eq!(remote.name, "prod-db-1");
     assert!(remote.kind.is_remote());
