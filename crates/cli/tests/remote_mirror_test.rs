@@ -63,7 +63,7 @@ async fn start_remote_instance() -> (std::net::SocketAddr, Arc<PreviewState>) {
     vec![heartbeat],
     muted.clone(),
     running,
-    Metrics::new(),
+    Metrics::new().expect("Metrics::new in test"),
     SliderRanges::default(),
     None,
     false,
@@ -72,7 +72,7 @@ async fn start_remote_instance() -> (std::net::SocketAddr, Arc<PreviewState>) {
 
   let state = AppState::init(
     muted,
-    Metrics::new(),
+    Metrics::new().expect("Metrics::new in test"),
     std::path::PathBuf::from("frontend/public"),
     Arc::clone(&preview),
     None,
@@ -99,7 +99,7 @@ fn start_subscriber(remote_addr: std::net::SocketAddr) -> Arc<PreviewState> {
     vec![],
     Arc::new(AtomicBool::new(false)),
     Arc::new(AtomicBool::new(true)),
-    Metrics::new(),
+    Metrics::new().expect("Metrics::new in test"),
     SliderRanges::default(),
     None,
     false,

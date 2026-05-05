@@ -30,7 +30,7 @@ fn override_does_not_leak_to_other_heartbeats() {
     heartbeats,
     Arc::new(AtomicBool::new(false)),
     Arc::clone(&running),
-    Metrics::new(),
+    Metrics::new().expect("Metrics::new in test"),
     SliderRanges::default(),
     None,
     false,

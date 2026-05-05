@@ -59,6 +59,9 @@ enum ApplicationError {
 
   #[error("Server encountered a runtime error: {0}")]
   ServerRuntime(#[source] std::io::Error),
+
+  #[error("Failed to initialize metrics: {0}")]
+  MetricsInit(#[from] metrics::MetricsInitError),
 }
 
 #[derive(Parser)]
@@ -324,7 +327,7 @@ fn run_print(
 async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let muted = Arc::new(AtomicBool::new(false));
   let running = Arc::new(AtomicBool::new(true));
-  let metrics = metrics::Metrics::new();
+  let metrics = metrics::Metrics::new()?;
 
   let config_writable = config.config_path.as_ref().map_or(false, |p| {
     std::fs::metadata(p).map_or(false, |m| !m.permissions().readonly())

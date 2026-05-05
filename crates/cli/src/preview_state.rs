@@ -789,7 +789,7 @@ mod tests {
       vec![],
       Arc::new(AtomicBool::new(false)),
       Arc::new(AtomicBool::new(true)),
-      Metrics::new(),
+      Metrics::new().expect("Metrics::new in test"),
       SliderRanges::default(),
       None,
       false,
