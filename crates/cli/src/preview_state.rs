@@ -358,10 +358,18 @@ impl PreviewState {
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
-    let sid = handle.add(graph);
+    let sid = match handle.add(graph) {
+      Ok(s) => s,
+      Err(e) => {
+        tracing::error!(error = %e, hb_idx, "play_heartbeat_immediate: skipping");
+        return;
+      }
+    };
     thread::spawn(move || {
       thread::sleep(dur);
-      handle.remove(sid);
+      if let Err(e) = handle.remove(sid) {
+        tracing::error!(error = %e, sid, "fire-and-forget remove failed");
+      }
     });
   }
 
@@ -394,10 +402,18 @@ impl PreviewState {
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
-    let sid = handle.add(graph);
+    let sid = match handle.add(graph) {
+      Ok(s) => s,
+      Err(e) => {
+        tracing::error!(error = %e, patch = name, "play_patch_immediate: skipping");
+        return;
+      }
+    };
     thread::spawn(move || {
       thread::sleep(dur);
-      handle.remove(sid);
+      if let Err(e) = handle.remove(sid) {
+        tracing::error!(error = %e, sid, "fire-and-forget remove failed");
+      }
     });
   }
 

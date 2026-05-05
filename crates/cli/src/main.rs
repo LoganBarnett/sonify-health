@@ -281,9 +281,18 @@ fn run_continuous_preview(
       }];
       let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
       let dur = heartbeat::heartbeat_notes_duration(&notes);
-      let slot = handle.add(graph);
+      let slot = match handle.add(graph) {
+        Ok(s) => s,
+        Err(e) => {
+          tracing::error!(error = %e, "preview play thread: stopping");
+          return;
+        }
+      };
       std::thread::sleep(dur);
-      handle.remove(slot);
+      if let Err(e) = handle.remove(slot) {
+        tracing::error!(error = %e, "preview play thread: stopping");
+        return;
+      }
     }
   });
 

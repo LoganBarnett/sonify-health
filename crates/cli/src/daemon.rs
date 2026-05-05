@@ -313,7 +313,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           }
         }
         if let Some(m) = mixer.as_mut() {
-          m.clear();
+          // Don't `?` — we want the original ThreadBudgetExhausted
+          // to propagate.  Best-effort clear during shutdown; log
+          // any poison and let the outer error stand.
+          if let Err(e) = m.clear() {
+            warn!(error = %e, "Mixer clear during shutdown failed");
+          }
         }
         return Err(DaemonError::ThreadBudgetExhausted {
           source_name,
@@ -492,7 +497,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     }
   }
   if let Some(mixer) = mixer.as_mut() {
-    mixer.clear();
+    if let Err(e) = mixer.clear() {
+      warn!(error = %e, "Mixer clear during daemon stop failed");
+    }
   }
   info!("Daemon stopped");
   Ok(())
@@ -737,38 +744,46 @@ pub fn spawn_play_thread(
         continue;
       }
 
-      match mode {
-        Playback::Continuous => {
-          play_continuous_tick(
-            &play_running,
-            &play_preview,
-            &source,
-            &play_mix,
-            hb_idx,
-            &play_counter,
-          );
-        }
-        Playback::Loop => {
-          play_loop(
-            &play_running,
-            &play_preview,
-            &source,
-            &play_mix,
-            hb_idx,
-            &play_counter,
-          );
-        }
-        Playback::Clock => {
-          play_oneshot_once(
-            &play_running,
-            &play_preview,
-            &source,
-            &play_mix,
-            hb_idx,
-            true,
-            &play_counter,
-          );
-        }
+      // Each `play_*` returns Result so a poisoned mixer lock
+      // surfaces as an error rather than a panic.  We log and exit
+      // the thread on any AudioError — the supervisor will see the
+      // exit and decide whether to escalate; spinning on a broken
+      // mixer would just spam logs.
+      let result = match mode {
+        Playback::Continuous => play_continuous_tick(
+          &play_running,
+          &play_preview,
+          &source,
+          &play_mix,
+          hb_idx,
+          &play_counter,
+        ),
+        Playback::Loop => play_loop(
+          &play_running,
+          &play_preview,
+          &source,
+          &play_mix,
+          hb_idx,
+          &play_counter,
+        ),
+        Playback::Clock => play_oneshot_once(
+          &play_running,
+          &play_preview,
+          &source,
+          &play_mix,
+          hb_idx,
+          true,
+          &play_counter,
+        ),
+      };
+      if let Err(e) = result {
+        tracing::error!(
+          source = %source.name,
+          heartbeat = hb_idx,
+          error = %e,
+          "Play thread exiting on AudioError",
+        );
+        return;
       }
     }
   })
@@ -932,18 +947,18 @@ fn play_continuous_tick(
   play_mix: &MixerHandle,
   hb_idx: usize,
   counter: &prometheus::IntCounter,
-) {
+) -> Result<(), sonify_health_lib::audio::AudioError> {
   // Wait for at least one valid note.
   let initial_notes = loop {
     if !running.load(Ordering::Relaxed) {
-      return;
+      return Ok(());
     }
     let configs = source.heartbeat_configs.read().unwrap_or_recover();
     let Some(cfg) = configs.get(hb_idx) else {
-      return;
+      return Ok(());
     };
     if cfg.playback != Playback::Continuous {
-      return;
+      return Ok(());
     }
     drop(configs);
     let notes = resolve_notes(source, hb_idx);
@@ -960,7 +975,7 @@ fn play_continuous_tick(
     .get(hb_idx)
   {
     Some(cfg) => cfg.crossfade_ms,
-    None => return,
+    None => return Ok(()),
   };
   let smoothing = crossfade_ms / 1000.0;
 
@@ -970,7 +985,7 @@ fn play_continuous_tick(
   let (graph, mut all_controls, mut all_structural) =
     continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
   let mut note_count = pairs.len();
-  let sid = play_mix.add(graph);
+  let sid = play_mix.add(graph)?;
   counter.inc();
   let mut last_rebuild = Instant::now();
 
@@ -1008,7 +1023,7 @@ fn play_continuous_tick(
         continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-      play_mix.replace(sid, graph, cf);
+      play_mix.replace(sid, graph, cf)?;
       all_controls = new_controls;
       all_structural = new_structural;
       note_count = pairs.len();
@@ -1035,7 +1050,7 @@ fn play_continuous_tick(
         continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-      play_mix.replace(sid, graph, cf);
+      play_mix.replace(sid, graph, cf)?;
       all_controls = new_controls;
       all_structural = new_structural;
       last_rebuild = Instant::now();
@@ -1055,14 +1070,15 @@ fn play_continuous_tick(
         continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-      play_mix.replace(sid, graph, cf);
+      play_mix.replace(sid, graph, cf)?;
       all_controls = new_controls;
       all_structural = new_structural;
       last_rebuild = Instant::now();
     }
   }
 
-  play_mix.remove(sid);
+  play_mix.remove(sid)?;
+  Ok(())
 }
 
 /// Loop playback: keep a persistent mixer slot and crossfade each
@@ -1078,18 +1094,18 @@ fn play_loop(
   play_mix: &MixerHandle,
   hb_idx: usize,
   counter: &prometheus::IntCounter,
-) {
+) -> Result<(), sonify_health_lib::audio::AudioError> {
   let notes = resolve_notes(source, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
-    return;
+    return Ok(());
   }
 
   let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
-  let sid = play_mix.add(graph);
+  let sid = play_mix.add(graph)?;
   counter.inc();
 
   sleep_checking(running, content_dur);
@@ -1113,13 +1129,14 @@ fn play_loop(
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
     let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
     let cf = ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-    play_mix.replace(sid, graph, cf);
+    play_mix.replace(sid, graph, cf)?;
     counter.inc();
 
     sleep_checking(running, content_dur);
   }
 
-  play_mix.remove(sid);
+  play_mix.remove(sid)?;
+  Ok(())
 }
 
 /// One-shot playback: build and play a single heartbeat, then
@@ -1133,7 +1150,7 @@ fn play_oneshot_once(
   hb_idx: usize,
   wait_for_clock: bool,
   counter: &prometheus::IntCounter,
-) {
+) -> Result<(), sonify_health_lib::audio::AudioError> {
   let (cycle_secs, cycle_offset) = match source
     .heartbeat_configs
     .read()
@@ -1141,12 +1158,12 @@ fn play_oneshot_once(
     .get(hb_idx)
   {
     Some(cfg) => (cfg.cycle_secs, cfg.cycle_offset_secs),
-    None => return,
+    None => return Ok(()),
   };
   let notes = resolve_notes(source, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
-    return;
+    return Ok(());
   }
 
   let eff_vol = clone_effective_volume(source, hb_idx);
@@ -1154,13 +1171,13 @@ fn play_oneshot_once(
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let dur = heartbeat::heartbeat_notes_duration(&notes);
 
-  let sid = play_mix.add(graph);
+  let sid = play_mix.add(graph)?;
   sleep_checking(running, dur);
-  play_mix.remove(sid);
+  play_mix.remove(sid)?;
   counter.inc();
 
   if !running.load(Ordering::Relaxed) {
-    return;
+    return Ok(());
   }
 
   if wait_for_clock {
@@ -1169,6 +1186,7 @@ fn play_oneshot_once(
   } else {
     thread::sleep(Duration::from_millis(50));
   }
+  Ok(())
 }
 
 /// Sleep for `dur` in ~100 ms increments, checking `running` flag.
