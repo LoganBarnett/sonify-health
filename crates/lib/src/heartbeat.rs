@@ -237,24 +237,22 @@ pub fn heartbeat_graph_with_notes(
   notes: &[ResolvedNote],
   external_volume: Option<&Shared>,
 ) -> Box<dyn AudioUnit> {
-  if notes.is_empty() {
+  let mut iter = notes.iter().map(|n| {
+    let mut p = n.patch.clone();
+    p.amplitude *= n.volume;
+    Net::wrap(note_graph(&p, n.offset, external_volume))
+  });
+  let Some(first) = iter.next() else {
+    // Empty notes — return silence with the same external-volume
+    // wiring the populated case uses, so a downstream consumer
+    // that compares the two graphs sees the same I/O shape.
     let ext = match external_volume {
       Some(s) => s.clone(),
       None => fundsp::prelude32::shared(1.0),
     };
     return Box::new(dc(0.0) * var(&ext) | dc(0.0) * var(&ext));
-  }
-
-  let net = notes
-    .iter()
-    .map(|n| {
-      let mut p = n.patch.clone();
-      p.amplitude *= n.volume;
-      Net::wrap(note_graph(&p, n.offset, external_volume))
-    })
-    .reduce(|acc, n| acc + n)
-    .unwrap();
-  Box::new(net)
+  };
+  Box::new(iter.fold(first, |acc, n| acc + n))
 }
 
 /// Build an audio graph for a single boop.  Duration and

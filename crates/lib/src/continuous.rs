@@ -279,7 +279,26 @@ pub fn continuous_graph_with_notes(
   smoothing_secs: f64,
   external_volume: Option<&Shared>,
 ) -> (Box<dyn AudioUnit>, Vec<ContinuousControls>, Vec<StructuralParams>) {
-  if patches.is_empty() {
+  let mut all_controls = Vec::with_capacity(patches.len());
+  let mut all_structural = Vec::with_capacity(patches.len());
+
+  let mut iter = patches.iter().map(|(patch, volume)| {
+    let mut p = patch.clone();
+    p.amplitude *= *volume;
+    let controls = ContinuousControls::from_patch(&p);
+    let structural = StructuralParams::from_patch(&p);
+    let graph =
+      continuous_graph(&controls, smoothing_secs, &structural, external_volume);
+    all_controls.push(controls);
+    all_structural.push(structural);
+    Net::wrap(graph)
+  });
+
+  let Some(first) = iter.next() else {
+    // Empty patches — return silence with matching external-volume
+    // wiring so the consumer's I/O shape is identical to the
+    // populated case.  The control/structural Vecs come back
+    // empty because nothing was iterated.
     let ext = match external_volume {
       Some(s) => s.clone(),
       None => shared(1.0),
@@ -289,30 +308,8 @@ pub fn continuous_graph_with_notes(
       Vec::new(),
       Vec::new(),
     );
-  }
-
-  let mut all_controls = Vec::with_capacity(patches.len());
-  let mut all_structural = Vec::with_capacity(patches.len());
-
-  let net = patches
-    .iter()
-    .map(|(patch, volume)| {
-      let mut p = patch.clone();
-      p.amplitude *= *volume;
-      let controls = ContinuousControls::from_patch(&p);
-      let structural = StructuralParams::from_patch(&p);
-      let graph = continuous_graph(
-        &controls,
-        smoothing_secs,
-        &structural,
-        external_volume,
-      );
-      all_controls.push(controls);
-      all_structural.push(structural);
-      Net::wrap(graph)
-    })
-    .reduce(|acc, n| acc + n)
-    .unwrap();
+  };
+  let net = iter.fold(first, |acc, n| acc + n);
 
   (Box::new(net), all_controls, all_structural)
 }
