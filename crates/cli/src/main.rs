@@ -161,6 +161,18 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<(), ApplicationError> {
+  // rustls 0.23 requires a process-level CryptoProvider to be
+  // selected before the first TLS handshake.  We use ring (already
+  // in the dep tree via reqwest's rustls 0.21 backend); without
+  // this call, the first outbound `wss://` connection panics with
+  // "Could not automatically determine the process-level
+  // CryptoProvider".  `install_default` returns Err only if a
+  // provider was already installed on this process — impossible
+  // here since main runs once and we're the first caller.
+  rustls::crypto::ring::default_provider()
+    .install_default()
+    .expect("rustls crypto provider already installed");
+
   let cli = Cli::parse();
   // Only forward the CLI flag when explicitly set; clap's `bool`
   // can't distinguish "absent" from "false", so we use `Some(true)`

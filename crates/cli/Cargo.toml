@@ -42,6 +42,16 @@ reqwest = { workspace = true }
 tower-sessions = { workspace = true }
 tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
+# rustls 0.23 requires a CryptoProvider to be selected before the
+# first TLS handshake.  tokio-tungstenite's
+# rustls-tls-native-roots feature pulls rustls in but does not
+# enable a provider feature on it, so without this dep the first
+# `wss://` connection panics with "Could not automatically
+# determine the process-level CryptoProvider".  We pick `ring`
+# because it's already in the tree (used by reqwest's rustls 0.21
+# backend), and call `install_default()` from `main` to make the
+# choice explicit and visible.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 
