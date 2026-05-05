@@ -922,10 +922,14 @@ fn handle_client_message(
         vec![],
       );
       let hb_idx = preview.add_heartbeat(cfg);
+      let local = preview.local();
+      let mixer_handle =
+        preview.mixer_handle.read().unwrap_or_recover().clone();
       crate::daemon::spawn_heartbeat_threads(
         preview,
-        crate::preview_state::LOCAL_SOURCE_NAME,
+        &local,
         hb_idx,
+        mixer_handle,
       );
       let snapshot = preview.state_snapshot();
       let _ = preview.broadcast_tx.send(snapshot);

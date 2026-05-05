@@ -41,7 +41,8 @@ fn poll_thread_survives_poisoned_lock() {
   ));
 
   // Spawn the poll thread.
-  let h = spawn_poll_thread(&preview, "localhost", 0);
+  let local = preview.local();
+  let h = spawn_poll_thread(&preview, &local, 0);
 
   // Let it run a few cycles.
   std::thread::sleep(Duration::from_millis(350));
@@ -113,7 +114,8 @@ fn poll_thread_panic_is_capturable() {
     false,
   ));
 
-  let h = spawn_poll_thread(&preview, "localhost", 0);
+  let local = preview.local();
+  let h = spawn_poll_thread(&preview, &local, 0);
 
   // Let one cycle complete, then remove all configs so the next
   // iteration panics on out-of-bounds access.

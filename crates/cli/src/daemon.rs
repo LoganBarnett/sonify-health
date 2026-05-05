@@ -177,6 +177,12 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   // addressing when remote Sources arrive.
   let initial_sources = preview.sources_snapshot();
   let source_count = initial_sources.len();
+  // Bind the mixer handle once.  `Some(handle)` and `!headless`
+  // are equivalent invariants, so gating play-thread spawns on
+  // `if let Some(...)` lets the type system carry the
+  // "non-headless implies handle exists" claim instead of a
+  // separate `if !headless` check followed by an `.expect()`.
+  let mixer_handle = mixer.as_ref().map(AudioMixer::handle);
   for source in &initial_sources {
     let hb_count = source.heartbeats.read().unwrap_or_recover().len();
     total_heartbeats += hb_count;
@@ -184,7 +190,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     // are probed by the remote instance and arrive over the wire.
     for hb_idx in 0..hb_count {
       if source.kind.is_local() {
-        let poll_h = spawn_poll_thread(&preview, &source.name, hb_idx);
+        let poll_h = spawn_poll_thread(&preview, source, hb_idx);
         supervised.push(SupervisedThread::new(
           poll_h,
           source.name.clone(),
@@ -192,8 +198,9 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           ThreadRole::Poll,
         ));
       }
-      if !headless {
-        let play_h = spawn_play_thread(&preview, &source.name, hb_idx);
+      if let Some(handle) = mixer_handle.as_ref() {
+        let play_h =
+          spawn_play_thread(&preview, source, hb_idx, handle.clone());
         supervised.push(SupervisedThread::new(
           play_h,
           source.name.clone(),
@@ -238,13 +245,14 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       let mut budget_exhausted: Option<(String, usize, String)> = None;
 
       for st in supervised.iter_mut() {
-        let finished =
-          st.handle.as_ref().map(|h| h.is_finished()).unwrap_or(false);
-        if !finished {
+        // Combine the "is this thread finished?" check and the
+        // `take()` into a single conditional take so the borrow
+        // checker carries the invariant — no separate predicate
+        // followed by an `.unwrap()` that could rot under
+        // refactoring.
+        let Some(handle) = st.handle.take_if(|h| h.is_finished()) else {
           continue;
-        }
-
-        let handle = st.handle.take().unwrap();
+        };
         match handle.join() {
           Ok(()) => {
             debug!(
@@ -275,7 +283,20 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
               break;
             }
 
-            // Respawn.
+            // Respawn.  Resolve the source by name first — if
+            // it has been removed in the interim, log and skip
+            // instead of asserting.  For play threads, the same
+            // structural rule as initial spawn applies: a handle
+            // exists IFF we are not headless.
+            let Some(source) = preview.source_by_name(&st.source_name) else {
+              warn!(
+                source = %st.source_name,
+                heartbeat = st.hb_idx,
+                role = %st.role,
+                "Cannot respawn thread: source no longer exists",
+              );
+              continue;
+            };
             info!(
               source = %st.source_name,
               heartbeat = st.hb_idx,
@@ -283,12 +304,26 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
               recent_failures = st.failures.len(),
               "Respawning thread"
             );
-            let new_handle = match st.role {
-              ThreadRole::Poll => {
-                spawn_poll_thread(&preview, &st.source_name, st.hb_idx)
+            let new_handle = match (&st.role, mixer_handle.as_ref()) {
+              (ThreadRole::Poll, _) => {
+                spawn_poll_thread(&preview, &source, st.hb_idx)
               }
-              ThreadRole::Play => {
-                spawn_play_thread(&preview, &st.source_name, st.hb_idx)
+              (ThreadRole::Play, Some(handle)) => {
+                spawn_play_thread(&preview, &source, st.hb_idx, handle.clone())
+              }
+              (ThreadRole::Play, None) => {
+                // Should be unreachable: Play roles only enter
+                // `supervised` when a mixer handle exists, and
+                // the handle is set-once at daemon start.  Log
+                // structurally rather than panic so the bug — if
+                // it ever happens — surfaces in operator logs.
+                error!(
+                  source = %st.source_name,
+                  heartbeat = st.hb_idx,
+                  "Cannot respawn play thread without mixer handle; \
+                   this is a daemon-startup invariant violation",
+                );
+                continue;
               }
             };
             st.handle = Some(new_handle);
@@ -331,8 +366,8 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       //    Catches Remote Sources whose heartbeats arrive after
       //    startup, and respawns any that exited cleanly because
       //    a heartbeat was removed and then re-added.
-      if !headless {
-        rebalance_play_threads(&preview, &mut supervised);
+      if let Some(handle) = mixer_handle.as_ref() {
+        rebalance_play_threads(&preview, &mut supervised, handle);
       }
 
       // -- Stream recovery: if the audio stream has failed, attempt
@@ -531,14 +566,12 @@ fn source_should_play(source: &Source) -> bool {
 /// effect.
 pub fn spawn_poll_thread(
   preview: &Arc<PreviewState>,
-  source_name: &str,
+  source: &Arc<Source>,
   hb_idx: usize,
 ) -> thread::JoinHandle<()> {
   let poll_running = Arc::clone(&preview.running);
   let poll_preview = Arc::clone(preview);
-  let source = preview
-    .source_by_name(source_name)
-    .unwrap_or_else(|| panic!("source {source_name:?} not found"));
+  let source = Arc::clone(source);
   let source_name = source.name.clone();
   let cfg = source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].clone();
   let poll_counter = preview
@@ -681,20 +714,13 @@ pub fn spawn_poll_thread(
 /// state mirror updates take effect.
 pub fn spawn_play_thread(
   preview: &Arc<PreviewState>,
-  source_name: &str,
+  source: &Arc<Source>,
   hb_idx: usize,
+  play_mix: MixerHandle,
 ) -> thread::JoinHandle<()> {
   let play_running = Arc::clone(&preview.running);
   let play_preview = Arc::clone(preview);
-  let play_mix = preview
-    .mixer_handle
-    .read()
-    .unwrap_or_recover()
-    .clone()
-    .expect("Mixer handle must be set before spawning threads");
-  let source = preview
-    .source_by_name(source_name)
-    .unwrap_or_else(|| panic!("source {source_name:?} not found"));
+  let source = Arc::clone(source);
   let cfg_name = source.heartbeat_configs.read().unwrap_or_recover()[hb_idx]
     .name
     .clone();
@@ -805,15 +831,19 @@ pub fn spawn_play_thread(
 fn rebalance_play_threads(
   preview: &Arc<PreviewState>,
   supervised: &mut Vec<SupervisedThread>,
+  play_mix: &MixerHandle,
 ) {
-  // Build the desired set of (source_name, hb_idx) play targets.
+  // Build the desired set of (Arc<Source>, hb_idx) play targets.
+  // Carrying the Arc<Source> rather than just the name lets the
+  // spawn call below skip a re-lookup that would otherwise have to
+  // assert the source still exists.
   let snapshot = preview.sources_snapshot();
-  let desired: Vec<(String, usize)> = snapshot
+  let desired: Vec<(Arc<Source>, usize)> = snapshot
     .iter()
     .flat_map(|source| {
-      let name = source.name.clone();
-      let hb_count = source.heartbeats.read().unwrap_or_recover().len();
-      (0..hb_count).map(move |hb_idx| (name.clone(), hb_idx))
+      let s = Arc::clone(source);
+      let hb_count = s.heartbeats.read().unwrap_or_recover().len();
+      (0..hb_count).map(move |hb_idx| (Arc::clone(&s), hb_idx))
     })
     .collect();
 
@@ -824,13 +854,15 @@ fn rebalance_play_threads(
     if st.role != ThreadRole::Play {
       return true;
     }
-    desired.iter().any(|(name, _)| name == &st.source_name)
+    desired
+      .iter()
+      .any(|(source, _)| source.name == st.source_name)
   });
 
-  for (name, hb_idx) in &desired {
+  for (source, hb_idx) in &desired {
     let live = supervised.iter().any(|st| {
       st.role == ThreadRole::Play
-        && st.source_name == *name
+        && st.source_name == source.name
         && st.hb_idx == *hb_idx
         && st
           .handle
@@ -841,10 +873,10 @@ fn rebalance_play_threads(
     if live {
       continue;
     }
-    let play_h = spawn_play_thread(preview, name, *hb_idx);
+    let play_h = spawn_play_thread(preview, source, *hb_idx, play_mix.clone());
     let existing = supervised.iter_mut().find(|st| {
       st.role == ThreadRole::Play
-        && st.source_name == *name
+        && st.source_name == source.name
         && st.hb_idx == *hb_idx
     });
     match existing {
@@ -854,7 +886,7 @@ fn rebalance_play_threads(
       None => {
         supervised.push(SupervisedThread::new(
           play_h,
-          name.clone(),
+          source.name.clone(),
           *hb_idx,
           ThreadRole::Play,
         ));
@@ -863,17 +895,21 @@ fn rebalance_play_threads(
   }
 }
 
-/// Spawn poll and play threads for the heartbeat at `hb_idx` within
-/// the source named `source_name`.  Used by the runtime
+/// Spawn poll and (conditionally) play threads for the heartbeat
+/// at `hb_idx` within `source`.  Used by the runtime
 /// `add_heartbeat` path to wire fresh threads for a newly-added
-/// Local heartbeat.
+/// Local heartbeat.  The play thread is only spawned when
+/// `play_mix` is `Some`; in headless deployments the caller
+/// passes `None` and only the poll thread runs.
 pub fn spawn_heartbeat_threads(
   preview: &Arc<PreviewState>,
-  source_name: &str,
+  source: &Arc<Source>,
   hb_idx: usize,
-) -> (thread::JoinHandle<()>, thread::JoinHandle<()>) {
-  let poll_handle = spawn_poll_thread(preview, source_name, hb_idx);
-  let play_handle = spawn_play_thread(preview, source_name, hb_idx);
+  play_mix: Option<MixerHandle>,
+) -> (thread::JoinHandle<()>, Option<thread::JoinHandle<()>>) {
+  let poll_handle = spawn_poll_thread(preview, source, hb_idx);
+  let play_handle =
+    play_mix.map(|h| spawn_play_thread(preview, source, hb_idx, h));
   (poll_handle, play_handle)
 }
 

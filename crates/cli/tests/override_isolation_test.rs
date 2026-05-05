@@ -37,13 +37,13 @@ fn override_does_not_leak_to_other_heartbeats() {
     false,
   ));
 
-  let h0 = spawn_poll_thread(&preview, "localhost", 0);
-  let h1 = spawn_poll_thread(&preview, "localhost", 1);
+  let local = preview.local();
+  let h0 = spawn_poll_thread(&preview, &local, 0);
+  let h1 = spawn_poll_thread(&preview, &local, 1);
 
   // Let both heartbeats poll a few times at 0.1s interval.
   std::thread::sleep(Duration::from_millis(350));
 
-  let local = preview.local();
   // Both should be healthy (0.0).
   let m0 = local.heartbeats.read().unwrap()[0].metric.value();
   let m1 = local.heartbeats.read().unwrap()[1].metric.value();
