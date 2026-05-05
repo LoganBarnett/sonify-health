@@ -2291,16 +2291,19 @@ viewRemoteSourcePanel pendingRemove source =
 
         Remote remote ->
             let
-                ( statusClass, statusLabel ) =
+                ( statusClass, statusLabel, statusError ) =
                     case remote.connectionStatus of
                         Connecting ->
-                            ( "source-panel-status connecting", "connecting" )
+                            ( "source-panel-status connecting", "connecting", Nothing )
 
                         Connected ->
-                            ( "source-panel-status connected", "connected" )
+                            ( "source-panel-status connected", "connected", Nothing )
 
                         Disconnected ->
-                            ( "source-panel-status disconnected", "disconnected" )
+                            ( "source-panel-status disconnected", "disconnected", Nothing )
+
+                        Error msg ->
+                            ( "source-panel-status error", "error", Just msg )
 
                 ( playbackClass, playbackLabel, playbackTitle ) =
                     if remote.playbackEnabled then
@@ -2339,7 +2342,16 @@ viewRemoteSourcePanel pendingRemove source =
                             ]
                             [ text "×" ]
             in
-            div [ class "source-panel" ]
+            let
+                errorRow =
+                    case statusError of
+                        Just msg ->
+                            [ div [ class "source-panel-error", title msg ] [ text msg ] ]
+
+                        Nothing ->
+                            []
+            in
+            div [ class "source-panel" ] <|
                 [ div [ class "source-panel-header" ]
                     [ span [ class "source-panel-name" ] [ text source.name ]
                     , span [ class statusClass, title remote.url ] [ text statusLabel ]
@@ -2351,9 +2363,11 @@ viewRemoteSourcePanel pendingRemove source =
                         [ text playbackLabel ]
                     , removeControl
                     ]
-                , div [ class "source-panel-body" ]
-                    (List.map viewRemoteHeartbeatRow source.heartbeats)
                 ]
+                    ++ errorRow
+                    ++ [ div [ class "source-panel-body" ]
+                            (List.map viewRemoteHeartbeatRow source.heartbeats)
+                       ]
 
 
 {-| The "+ Add source" affordance. When `addSourceForm` is

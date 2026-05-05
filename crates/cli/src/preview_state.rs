@@ -55,11 +55,25 @@ pub enum ConnectionStatus {
 }
 
 impl ConnectionStatus {
+  /// Wire-format discriminator.  An error-bearing `Disconnected`
+  /// reports as `"error"` so the UI can render it distinctly from
+  /// a clean disconnect (which doesn't currently happen but is
+  /// represented for symmetry).
   pub fn as_str(&self) -> &'static str {
     match self {
       ConnectionStatus::Connecting => "connecting",
       ConnectionStatus::Connected => "connected",
-      ConnectionStatus::Disconnected { .. } => "disconnected",
+      ConnectionStatus::Disconnected { error: None } => "disconnected",
+      ConnectionStatus::Disconnected { error: Some(_) } => "error",
+    }
+  }
+
+  /// Human-readable failure message when the connector ended
+  /// abnormally.  `None` whenever the state is not an error case.
+  pub fn error_message(&self) -> Option<&str> {
+    match self {
+      ConnectionStatus::Disconnected { error: Some(msg) } => Some(msg.as_str()),
+      _ => None,
     }
   }
 }
@@ -693,10 +707,15 @@ fn source_state_json(source: &Source) -> serde_json::Value {
     } => {
       obj.insert("kind".to_string(), json!("remote"));
       obj.insert("url".to_string(), json!(url));
-      obj.insert(
-        "connection_status".to_string(),
-        json!(status.read().unwrap_or_recover().as_str()),
-      );
+      let status_guard = status.read().unwrap_or_recover();
+      obj.insert("connection_status".to_string(), json!(status_guard.as_str()));
+      // Emit `connection_error` only when the status is an error
+      // case; absent for connecting/connected/clean-disconnect so
+      // the frontend can branch on field presence as well as on
+      // status discriminator.
+      if let Some(msg) = status_guard.error_message() {
+        obj.insert("connection_error".to_string(), json!(msg));
+      }
       obj.insert(
         "playback_enabled".to_string(),
         json!(playback_enabled.load(Ordering::Relaxed)),
@@ -893,8 +912,45 @@ mod tests {
     assert_eq!(remote["url"], "wss://edge1.example/ws");
     assert_eq!(remote["connection_status"], "connecting");
     assert_eq!(remote["playback_enabled"], false);
+    // `connection_error` is omitted whenever the status isn't an
+    // error case so the frontend can branch on field presence.
+    assert!(remote.get("connection_error").is_none());
     // Empty mirror until the connector populates it.
     assert!(remote["heartbeats"].as_array().unwrap().is_empty());
+  }
+
+  #[test]
+  fn state_snapshot_surfaces_connection_error() {
+    let preview = make_preview(false);
+    preview
+      .add_remote_source(
+        "edge-1".to_string(),
+        "wss://edge1.example/ws".to_string(),
+      )
+      .unwrap();
+    // Simulate a connector that handed back a failure reason.
+    let source = preview.source_by_name("edge-1").unwrap();
+    if let SourceKind::Remote { status, .. } = &source.kind {
+      *status.write().unwrap() = ConnectionStatus::Disconnected {
+        error: Some("URL error: TLS support not compiled in".to_string()),
+      };
+    } else {
+      panic!("edge-1 was not Remote");
+    }
+
+    let snap: serde_json::Value =
+      serde_json::from_str(&preview.state_snapshot()).unwrap();
+    let remote = snap["sources"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .find(|s| s["name"] == "edge-1")
+      .unwrap();
+    assert_eq!(remote["connection_status"], "error");
+    assert_eq!(
+      remote["connection_error"],
+      "URL error: TLS support not compiled in"
+    );
   }
 
   #[test]

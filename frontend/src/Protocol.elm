@@ -153,6 +153,7 @@ type ConnectionStatus
     = Connecting
     | Connected
     | Disconnected
+    | Error String
 
 
 type SourceKind
@@ -417,7 +418,7 @@ sourceKindDecoder =
                                     }
                             )
                             (D.field "url" D.string)
-                            (D.field "connection_status" connectionStatusDecoder)
+                            connectionStatusDecoder
                             (D.field "playback_enabled" D.bool)
 
                     other ->
@@ -425,9 +426,14 @@ sourceKindDecoder =
             )
 
 
+{-| Reads `connection_status` and (when status is "error") the
+sibling `connection_error` field, so the failure reason can be
+surfaced in the UI. Operates at the parent-object level rather
+than on a single field value, since the second field is conditional.
+-}
 connectionStatusDecoder : D.Decoder ConnectionStatus
 connectionStatusDecoder =
-    D.string
+    D.field "connection_status" D.string
         |> D.andThen
             (\s ->
                 case s of
@@ -439,6 +445,9 @@ connectionStatusDecoder =
 
                     "disconnected" ->
                         D.succeed Disconnected
+
+                    "error" ->
+                        D.map Error (D.field "connection_error" D.string)
 
                     other ->
                         D.fail ("Unknown connection status: " ++ other)

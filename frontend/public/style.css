@@ -1048,6 +1048,20 @@ a:hover {
   color: var(--color-down-text);
 }
 
+.source-panel-status.error {
+  background: var(--color-down);
+  color: var(--color-down-text);
+}
+
+.source-panel-error {
+  padding: var(--space-xs) var(--space-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-down-text);
+  background: var(--color-down);
+  border-radius: var(--radius-sm);
+  word-break: break-word;
+}
+
 .source-panel-body {
   display: flex;
   flex-direction: column;
