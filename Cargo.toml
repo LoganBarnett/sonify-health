@@ -7,19 +7,25 @@ members = [
     "crates/voice-derive",
 ]
 
-# Lints enforced workspace-wide.  The unwrap / expect / panic
-# family is denied to mechanically enforce the project's
-# no-unwrap policy (see ~/.claude/CLAUDE.md "No unwrap or expect
-# in non-test code").  Each crate opts in via
-# `[lints] workspace = true`.  The matching `clippy.toml` sets
-# `allow-{unwrap,expect,panic}-in-tests = true`, which scopes the
-# exemption to `#[cfg(test)]` modules and `tests/*.rs` integration
-# tests automatically — no per-file `#![allow]` headers needed.
+# Project-wide lint policy, enforced via clippy.  Test code is
+# exempted from the panicking-variant bans by `clippy.toml`'s
+# `allow-{unwrap,expect,panic}-in-tests`, which cover both
+# `#[cfg(test)]` modules in `src/` and integration tests under
+# `tests/`.  Member crates opt in by setting
+# `[lints] workspace = true`.
 #
-# Matches rust-template's lint set so a sync (template HEAD
-# 74e7e84b at the time of this commit) doesn't drift on the
-# clippy block alone.  See `docs/compliance.org` in the template.
+# `clippy::all` (the default groups: correctness, style,
+# complexity, perf, suspicious) is denied so that any clippy
+# warning fails the build, not just the panicking-variant bans.
+# Priority -1 is required whenever a lint group and individual
+# lints from that group share a table — otherwise cargo errors
+# with "lints contain duplicate".
+#
+# Matches rust-template's lint set so a sync run doesn't drift on
+# the clippy block alone.  See `docs/compliance.org` in the
+# template.
 [workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
