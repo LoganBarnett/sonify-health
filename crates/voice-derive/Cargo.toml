@@ -17,3 +17,6 @@ proc-macro2 = { workspace = true }
 
 [dev-dependencies]
 trybuild = { workspace = true }
+
+[lints]
+workspace = true

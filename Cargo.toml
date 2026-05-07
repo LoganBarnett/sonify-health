@@ -6,6 +6,22 @@ members = [
     "crates/voice-derive",
 ]
 
+# Lints enforced workspace-wide.  The unwrap / expect / panic family
+# is denied to mechanically enforce the project's no-unwrap policy
+# (see ~/.claude/CLAUDE.md "No unwrap or expect in non-test code").
+# Each crate opts in via `[lints] workspace = true`.  Tests stay
+# exempt via `#![cfg_attr(test, allow(...))]` at each crate root,
+# so `#[cfg(test)] mod tests {}` blocks and `tests/*.rs` integration
+# tests can keep using `.unwrap()` / `.expect()` / `panic!()` —
+# panicking *is* the test-failure signal there.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

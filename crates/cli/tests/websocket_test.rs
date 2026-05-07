@@ -1,3 +1,14 @@
+// Tests-only exemption from the workspace's no-unwrap policy.
+// See workspace `[lints.clippy]` in the root Cargo.toml.
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  clippy::panic,
+  clippy::unreachable,
+  clippy::todo,
+  clippy::unimplemented
+)]
+
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use sonify_health_cli::{
