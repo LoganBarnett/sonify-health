@@ -190,7 +190,8 @@ async fn set_playback_all_modes() {
     .unwrap();
 
     let msg = read_until_type(&mut ws, "playback_changed").await;
-    let msg = msg.expect(&format!("Expected playback_changed for {mode}"));
+    let msg =
+      msg.unwrap_or_else(|| panic!("Expected playback_changed for {mode}"));
     assert_eq!(msg["value"], mode);
   }
 }

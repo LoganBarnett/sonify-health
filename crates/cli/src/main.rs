@@ -43,8 +43,14 @@ use web_base::AppState;
 
 #[derive(Debug, Error)]
 enum ApplicationError {
+  // ConfigError carries large embedded errors (toml::de::Error,
+  // serde_json::Error) so it pushes the enum size into clippy's
+  // result_large_err territory.  Box the inner error to keep
+  // the discriminant-plus-pointer small.  The manual From impl
+  // below preserves `?`-conversion ergonomics — callers still
+  // write `cfg_load()?` against `Result<T, ConfigError>`.
   #[error("Failed to load configuration: {0}")]
-  ConfigurationLoad(#[from] ConfigError),
+  ConfigurationLoad(#[source] Box<ConfigError>),
 
   #[error("Unknown patch name: {0}")]
   UnknownPatch(String),
@@ -86,24 +92,21 @@ enum ApplicationError {
     source: ctrlc::Error,
   },
 
-  /// Failed to install an async signal subscription via tokio.
-  /// Distinct from the sync variant because the underlying error
-  /// type differs (`std::io::Error`) and the failure mode is
-  /// different — the binary loses graceful-shutdown coverage for
-  /// that one signal but can sometimes continue.
-  #[error("Failed to install async {signal} subscription: {source}")]
-  AsyncSignalSubscriptionFailed {
-    signal: &'static str,
-    #[source]
-    source: std::io::Error,
-  },
-
   /// The daemon `spawn_blocking` task itself panicked.  Carries
   /// the `JoinError` so the panic payload can be inspected /
   /// re-raised by the caller if desired.  See
   /// `std::panic::resume_unwind` for the explicit re-raise path.
   #[error("Daemon task panicked or was cancelled: {0}")]
   DaemonTaskJoin(#[source] tokio::task::JoinError),
+}
+
+/// Manual `From<ConfigError>` so `?` keeps converting cleanly
+/// even though the variant boxes the inner error to satisfy
+/// `clippy::result_large_err`.
+impl From<ConfigError> for ApplicationError {
+  fn from(e: ConfigError) -> Self {
+    Self::ConfigurationLoad(Box::new(e))
+  }
 }
 
 #[derive(Parser)]
@@ -365,8 +368,8 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new()?;
 
-  let config_writable = config.config_path.as_ref().map_or(false, |p| {
-    std::fs::metadata(p).map_or(false, |m| !m.permissions().readonly())
+  let config_writable = config.config_path.as_ref().is_some_and(|p| {
+    std::fs::metadata(p).is_ok_and(|m| !m.permissions().readonly())
   });
 
   let preview = Arc::new(preview_state::PreviewState::new(
@@ -388,9 +391,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     preview
       .add_remote_source(rs.name.clone(), rs.url.clone())
       .map_err(|e| {
-        ApplicationError::ConfigurationLoad(config::ConfigError::Validation(
-          format!("{e}"),
-        ))
+        ApplicationError::from(config::ConfigError::Validation(format!("{e}")))
       })?;
     if let Some(source) = preview.source_by_name(&rs.name) {
       if let preview_state::SourceKind::Remote {

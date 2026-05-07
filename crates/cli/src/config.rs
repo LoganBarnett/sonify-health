@@ -1435,7 +1435,7 @@ url = "ws://file/ws"
     std::fs::set_permissions(&tmp, perms).unwrap();
 
     let readonly_flag =
-      std::fs::metadata(&tmp).map_or(false, |m| !m.permissions().readonly());
+      std::fs::metadata(&tmp).is_ok_and(|m| !m.permissions().readonly());
     assert!(!readonly_flag, "Should be non-writable");
 
     // Make writable again.
@@ -1444,7 +1444,7 @@ url = "ws://file/ws"
     std::fs::set_permissions(&tmp, perms).unwrap();
 
     let writable_flag =
-      std::fs::metadata(&tmp).map_or(false, |m| !m.permissions().readonly());
+      std::fs::metadata(&tmp).is_ok_and(|m| !m.permissions().readonly());
     assert!(writable_flag, "Should be writable");
 
     std::fs::remove_file(&tmp).ok();

@@ -1046,13 +1046,13 @@ mod tests {
     let frames = 2048;
 
     let mut graph_a: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     graph_a.set_sample_rate(44100.0);
     graph_a.allocate();
     let mut adapter_a = BigBlockAdapter::new(graph_a);
 
     let mut graph_b: Box<dyn AudioUnit> =
-      Box::new(sine_hz(880.0) * 0.3 >> pan(0.0));
+      Box::new((sine_hz(880.0) * 0.3) >> pan(0.0));
     graph_b.set_sample_rate(44100.0);
     graph_b.allocate();
     let mut adapter_b = BigBlockAdapter::new(graph_b);
@@ -1195,7 +1195,7 @@ mod tests {
 
     // Insert a sine wave into slot 0.
     let mut graph: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
@@ -1234,7 +1234,7 @@ mod tests {
 
     // Only slot 0 has a graph.
     let mut graph: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
@@ -1304,7 +1304,7 @@ mod tests {
     let frames = 256;
 
     let mut graph: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
@@ -1353,7 +1353,7 @@ mod tests {
     let frames = 256;
 
     let mut graph: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
@@ -1489,7 +1489,7 @@ mod tests {
     new_graph.set_sample_rate(44100.0);
     new_graph.allocate();
     let mut prev_graph: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     prev_graph.set_sample_rate(44100.0);
     prev_graph.allocate();
     {
@@ -1537,7 +1537,7 @@ mod tests {
     new_graph.set_sample_rate(44100.0);
     new_graph.allocate();
     let mut prev_graph: Box<dyn AudioUnit> =
-      Box::new(sine_hz(440.0) * 0.5 >> pan(0.0));
+      Box::new((sine_hz(440.0) * 0.5) >> pan(0.0));
     prev_graph.set_sample_rate(44100.0);
     prev_graph.allocate();
     {
@@ -1592,7 +1592,7 @@ mod tests {
       }
     };
 
-    let first = mixer.add(Box::new(sine_hz(440.0) * 0.5 >> pan(0.0)));
+    let first = mixer.add(Box::new((sine_hz(440.0) * 0.5) >> pan(0.0)));
     mixer.remove(first);
 
     // The fadeout lasts REMOVE_FADEOUT_FRAMES frames; at the
@@ -1601,7 +1601,7 @@ mod tests {
     // prev.remaining_frames == 0 and cleared the slot.
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    let second = mixer.add(Box::new(sine_hz(660.0) * 0.5 >> pan(0.0)));
+    let second = mixer.add(Box::new((sine_hz(660.0) * 0.5) >> pan(0.0)));
     assert_eq!(
       first, second,
       "add() should reuse the freed slot position after remove() drains"

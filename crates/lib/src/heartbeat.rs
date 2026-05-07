@@ -250,7 +250,7 @@ pub fn heartbeat_graph_with_notes(
       Some(s) => s.clone(),
       None => fundsp::prelude32::shared(1.0),
     };
-    return Box::new(dc(0.0) * var(&ext) | dc(0.0) * var(&ext));
+    return Box::new((dc(0.0) * var(&ext)) | (dc(0.0) * var(&ext)));
   };
   Box::new(iter.fold(first, |acc, n| acc + n))
 }

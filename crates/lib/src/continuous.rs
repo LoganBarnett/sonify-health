@@ -226,7 +226,7 @@ pub fn continuous_graph(
 
   // Filter.
   let cutoff_smooth = var(&controls.filter_cutoff) >> follow(smooth);
-  let q_smooth = var(&controls.filter_q) >> follow(smooth) * 0.2;
+  let q_smooth = var(&controls.filter_q) >> (follow(smooth) * 0.2);
 
   // Amplitude.
   let amp_smooth = var(&controls.amplitude) >> follow(smooth);
@@ -304,7 +304,7 @@ pub fn continuous_graph_with_notes(
       None => shared(1.0),
     };
     return (
-      Box::new(dc(0.0) * var(&ext) | dc(0.0) * var(&ext)),
+      Box::new((dc(0.0) * var(&ext)) | (dc(0.0) * var(&ext))),
       Vec::new(),
       Vec::new(),
     );

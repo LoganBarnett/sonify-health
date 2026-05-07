@@ -665,7 +665,7 @@ fn source_state_json(source: &Source) -> serde_json::Value {
         "name": cfg.name,
         "command": cfg.command,
         "result_mode": serde_json::to_value(&cfg.result_mode).unwrap_or_default(),
-        "playback": serde_json::to_value(&cfg.playback).unwrap_or_default(),
+        "playback": serde_json::to_value(cfg.playback).unwrap_or_default(),
         "metric": hb.metric.value(),
         "overridden": overridden,
         "poll_interval_secs": cfg.poll_interval_secs,

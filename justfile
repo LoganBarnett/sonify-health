@@ -18,15 +18,15 @@ test-rust:
 
 # Lint the workspace.  The `[workspace.lints.clippy]` block in
 # Cargo.toml denies the unwrap / expect / panic family in
-# production code; running this with `--all-targets` also covers
-# integration tests (which are exempted via per-file `#![allow]`)
-# and benches.  Policy lints (deny in workspace config) become
-# hard errors; non-policy clippy warnings stay as warnings rather
-# than blanket-failing the build via `-D warnings` — those tend
-# to be domain-specific false positives (e.g. clippy::precedence
-# on fundsp's `>>` graph-composition operator).
+# production code, and `-D warnings` promotes every other clippy
+# warning to a hard error.  Steady state is zero warnings:
+# warnings are treated like errors we can temporarily ship when
+# things are dicey (via a targeted `#[allow(clippy::...)]` with a
+# justifying comment), not background noise to ignore.
+# `--all-targets` also lints integration tests (exempted from the
+# unwrap policy via per-file `#![allow]`) and benches.
 lint-rust:
-    cargo clippy --workspace --all-targets
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Build Elm then run via cargo, forwarding all arguments.
 run *args: build-elm

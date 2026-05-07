@@ -111,6 +111,17 @@ pub struct HeartbeatConfig {
 impl HeartbeatConfig {
   /// Build a HeartbeatConfig with the given fields and sensible
   /// defaults for legacy/internal fields.
+  ///
+  /// The 12-arg signature is deliberate: every parameter is a
+  /// public field with no obvious default, and the constructor
+  /// exists specifically to keep the legacy `continuous` field
+  /// out of the call site (it's set to `false` here so callers
+  /// outside the deserializer can never accidentally turn on the
+  /// legacy code path).  A builder would add a typestate layer
+  /// for no real benefit; the per-call-site verbosity is the
+  /// honest cost of carrying twelve independent configuration
+  /// knobs.
+  #[allow(clippy::too_many_arguments)]
   pub fn new(
     name: String,
     command: String,
