@@ -45,23 +45,23 @@ fn override_does_not_leak_to_other_heartbeats() {
   std::thread::sleep(Duration::from_millis(350));
 
   // Both should be healthy (0.0).
-  let m0 = local.heartbeats.read().unwrap()[0].metric.value();
-  let m1 = local.heartbeats.read().unwrap()[1].metric.value();
+  let m0 = local.heartbeats.read()[0].metric.value();
+  let m1 = local.heartbeats.read()[1].metric.value();
   assert!(m0.abs() < 0.001, "alpha should be 0.0 before override, got {m0}");
   assert!(m1.abs() < 0.001, "beta should be 0.0 before override, got {m1}");
 
   // Override heartbeat 1 to 1.0.
   {
-    let hbs = local.heartbeats.read().unwrap();
-    *hbs[1].override_value.write().unwrap() = Some(1.0);
+    let hbs = local.heartbeats.read();
+    *hbs[1].override_value.write() = Some(1.0);
   }
 
   // Wait for several more poll cycles.
   std::thread::sleep(Duration::from_millis(500));
 
   // Heartbeat 0 must still be 0.0.
-  let m0 = local.heartbeats.read().unwrap()[0].metric.value();
-  let m1 = local.heartbeats.read().unwrap()[1].metric.value();
+  let m0 = local.heartbeats.read()[0].metric.value();
+  let m1 = local.heartbeats.read()[1].metric.value();
   assert!(
     m0.abs() < 0.001,
     "alpha should remain 0.0 after overriding beta, got {m0}"

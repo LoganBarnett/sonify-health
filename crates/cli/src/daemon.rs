@@ -1,4 +1,3 @@
-use crate::lock_util::RecoverPoison;
 use crate::preview_state::{metric_label, PreviewState, Source, SourceKind};
 use serde_json::json;
 use sonify_health_lib::{
@@ -184,7 +183,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
   // separate `if !headless` check followed by an `.expect()`.
   let mixer_handle = mixer.as_ref().map(AudioMixer::handle);
   for source in &initial_sources {
-    let hb_count = source.heartbeats.read().unwrap_or_recover().len();
+    let hb_count = source.heartbeats.read().len();
     total_heartbeats += hb_count;
     // Poll threads run only for Local sources — remote heartbeats
     // are probed by the remote instance and arrive over the wire.
@@ -348,12 +347,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
           }
         }
         if let Some(m) = mixer.as_mut() {
-          // Don't `?` — we want the original ThreadBudgetExhausted
-          // to propagate.  Best-effort clear during shutdown; log
-          // any poison and let the outer error stand.
-          if let Err(e) = m.clear() {
-            warn!(error = %e, "Mixer clear during shutdown failed");
-          }
+          m.clear();
         }
         return Err(DaemonError::ThreadBudgetExhausted {
           source_name,
@@ -532,9 +526,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
     }
   }
   if let Some(mixer) = mixer.as_mut() {
-    if let Err(e) = mixer.clear() {
-      warn!(error = %e, "Mixer clear during daemon stop failed");
-    }
+    mixer.clear();
   }
   info!("Daemon stopped");
   Ok(())
@@ -573,7 +565,7 @@ pub fn spawn_poll_thread(
   let poll_preview = Arc::clone(preview);
   let source = Arc::clone(source);
   let source_name = source.name.clone();
-  let cfg = source.heartbeat_configs.read().unwrap_or_recover()[hb_idx].clone();
+  let cfg = source.heartbeat_configs.read()[hb_idx].clone();
   let poll_counter = preview
     .metrics
     .probes_completed
@@ -586,7 +578,7 @@ pub fn spawn_poll_thread(
         return;
       }
       let (cfg_name, command, mode, tiers, interval) = {
-        let configs = source.heartbeat_configs.read().unwrap_or_recover();
+        let configs = source.heartbeat_configs.read();
         let cfg = &configs[hb_idx];
         (
           cfg.name.clone(),
@@ -598,15 +590,15 @@ pub fn spawn_poll_thread(
       };
 
       let overridden = {
-        let hbs = source.heartbeats.read().unwrap_or_recover();
-        let val = *hbs[hb_idx].override_value.read().unwrap_or_recover();
+        let hbs = source.heartbeats.read();
+        let val = *hbs[hb_idx].override_value.read();
         val
       };
 
       let resolved = if let Some(metric) = overridden {
         let clamped = metric.clamp(0.0, 1.0);
         {
-          let hbs = source.heartbeats.read().unwrap_or_recover();
+          let hbs = source.heartbeats.read();
           hbs[hb_idx].metric.set_value(clamped);
         }
         send_probe_log(
@@ -637,7 +629,7 @@ pub fn spawn_poll_thread(
               "Probe completed"
             );
             {
-              let hbs = source.heartbeats.read().unwrap_or_recover();
+              let hbs = source.heartbeats.read();
               hbs[hb_idx].metric.set_value(output.metric);
             }
             send_probe_log(&poll_preview, &cfg_name, &label, false);
@@ -686,7 +678,7 @@ pub fn spawn_poll_thread(
       }
 
       let metric_val = {
-        let hbs = source.heartbeats.read().unwrap_or_recover();
+        let hbs = source.heartbeats.read();
         hbs[hb_idx].metric.value()
       };
       // The wire protocol does not yet carry source identifiers, so
@@ -721,9 +713,7 @@ pub fn spawn_play_thread(
   let play_running = Arc::clone(&preview.running);
   let play_preview = Arc::clone(preview);
   let source = Arc::clone(source);
-  let cfg_name = source.heartbeat_configs.read().unwrap_or_recover()[hb_idx]
-    .name
-    .clone();
+  let cfg_name = source.heartbeat_configs.read()[hb_idx].name.clone();
   let play_counter = preview
     .metrics
     .heartbeats_played
@@ -734,7 +724,7 @@ pub fn spawn_play_thread(
     // clock-mode heartbeats with different offsets start staggered.
     // Loop and Continuous modes skip this to start playing immediately.
     {
-      let configs = source.heartbeat_configs.read().unwrap_or_recover();
+      let configs = source.heartbeat_configs.read();
       let Some(cfg) = configs.get(hb_idx) else {
         return;
       };
@@ -753,12 +743,7 @@ pub fn spawn_play_thread(
       }
       // Exit cleanly when the heartbeat is removed (e.g. a remote
       // shape change that shrinks the list past `hb_idx`).
-      let mode = match source
-        .heartbeat_configs
-        .read()
-        .unwrap_or_recover()
-        .get(hb_idx)
-      {
+      let mode = match source.heartbeat_configs.read().get(hb_idx) {
         Some(cfg) => cfg.playback,
         None => return,
       };
@@ -770,12 +755,7 @@ pub fn spawn_play_thread(
         continue;
       }
 
-      // Each `play_*` returns Result so a poisoned mixer lock
-      // surfaces as an error rather than a panic.  We log and exit
-      // the thread on any AudioError — the supervisor will see the
-      // exit and decide whether to escalate; spinning on a broken
-      // mixer would just spam logs.
-      let result = match mode {
+      match mode {
         Playback::Continuous => play_continuous_tick(
           &play_running,
           &play_preview,
@@ -801,15 +781,6 @@ pub fn spawn_play_thread(
           true,
           &play_counter,
         ),
-      };
-      if let Err(e) = result {
-        tracing::error!(
-          source = %source.name,
-          heartbeat = hb_idx,
-          error = %e,
-          "Play thread exiting on AudioError",
-        );
-        return;
       }
     }
   })
@@ -842,7 +813,7 @@ fn rebalance_play_threads(
     .iter()
     .flat_map(|source| {
       let s = Arc::clone(source);
-      let hb_count = s.heartbeats.read().unwrap_or_recover().len();
+      let hb_count = s.heartbeats.read().len();
       (0..hb_count).map(move |hb_idx| (Arc::clone(&s), hb_idx))
     })
     .collect();
@@ -922,20 +893,20 @@ pub fn spawn_heartbeat_threads(
 /// (e.g. a remote shape change shrunk the list past `hb_idx`).
 fn resolve_notes(source: &Source, hb_idx: usize) -> Vec<ResolvedNote> {
   let metric = {
-    let hbs = source.heartbeats.read().unwrap_or_recover();
+    let hbs = source.heartbeats.read();
     match hbs.get(hb_idx) {
       Some(hb) => hb.metric.value() as f64,
       None => return vec![],
     }
   };
   let note_configs = {
-    let configs = source.heartbeat_configs.read().unwrap_or_recover();
+    let configs = source.heartbeat_configs.read();
     match configs.get(hb_idx) {
       Some(cfg) => cfg.notes.clone(),
       None => return vec![],
     }
   };
-  let lib = source.library.read().unwrap_or_recover();
+  let lib = source.library.read();
   note_configs
     .iter()
     .filter_map(|nc| {
@@ -965,7 +936,7 @@ fn clone_effective_volume(
   source: &Source,
   hb_idx: usize,
 ) -> fundsp::shared::Shared {
-  match source.heartbeats.read().unwrap_or_recover().get(hb_idx) {
+  match source.heartbeats.read().get(hb_idx) {
     Some(hb) => hb.effective_volume.clone(),
     None => fundsp::prelude32::shared(1.0),
   }
@@ -983,18 +954,18 @@ fn play_continuous_tick(
   play_mix: &MixerHandle,
   hb_idx: usize,
   counter: &prometheus::IntCounter,
-) -> Result<(), sonify_health_lib::audio::AudioError> {
+) {
   // Wait for at least one valid note.
   let initial_notes = loop {
     if !running.load(Ordering::Relaxed) {
-      return Ok(());
+      return;
     }
-    let configs = source.heartbeat_configs.read().unwrap_or_recover();
+    let configs = source.heartbeat_configs.read();
     let Some(cfg) = configs.get(hb_idx) else {
-      return Ok(());
+      return;
     };
     if cfg.playback != Playback::Continuous {
-      return Ok(());
+      return;
     }
     drop(configs);
     let notes = resolve_notes(source, hb_idx);
@@ -1004,14 +975,9 @@ fn play_continuous_tick(
     thread::sleep(Duration::from_secs(1));
   };
 
-  let crossfade_ms = match source
-    .heartbeat_configs
-    .read()
-    .unwrap_or_recover()
-    .get(hb_idx)
-  {
+  let crossfade_ms = match source.heartbeat_configs.read().get(hb_idx) {
     Some(cfg) => cfg.crossfade_ms,
-    None => return Ok(()),
+    None => return,
   };
   let smoothing = crossfade_ms / 1000.0;
 
@@ -1021,7 +987,7 @@ fn play_continuous_tick(
   let (graph, mut all_controls, mut all_structural) =
     continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
   let mut note_count = pairs.len();
-  let sid = play_mix.add(graph)?;
+  let sid = play_mix.add(graph);
   counter.inc();
   let mut last_rebuild = Instant::now();
 
@@ -1032,12 +998,7 @@ fn play_continuous_tick(
       break;
     }
 
-    let crossfade_ms = match source
-      .heartbeat_configs
-      .read()
-      .unwrap_or_recover()
-      .get(hb_idx)
-    {
+    let crossfade_ms = match source.heartbeat_configs.read().get(hb_idx) {
       Some(cfg) if cfg.playback == Playback::Continuous => cfg.crossfade_ms,
       Some(_) => break,
       None => break,
@@ -1059,7 +1020,7 @@ fn play_continuous_tick(
         continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-      play_mix.replace(sid, graph, cf)?;
+      play_mix.replace(sid, graph, cf);
       all_controls = new_controls;
       all_structural = new_structural;
       note_count = pairs.len();
@@ -1086,7 +1047,7 @@ fn play_continuous_tick(
         continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-      play_mix.replace(sid, graph, cf)?;
+      play_mix.replace(sid, graph, cf);
       all_controls = new_controls;
       all_structural = new_structural;
       last_rebuild = Instant::now();
@@ -1106,15 +1067,14 @@ fn play_continuous_tick(
         continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-      play_mix.replace(sid, graph, cf)?;
+      play_mix.replace(sid, graph, cf);
       all_controls = new_controls;
       all_structural = new_structural;
       last_rebuild = Instant::now();
     }
   }
 
-  play_mix.remove(sid)?;
-  Ok(())
+  play_mix.remove(sid);
 }
 
 /// Loop playback: keep a persistent mixer slot and crossfade each
@@ -1130,29 +1090,24 @@ fn play_loop(
   play_mix: &MixerHandle,
   hb_idx: usize,
   counter: &prometheus::IntCounter,
-) -> Result<(), sonify_health_lib::audio::AudioError> {
+) {
   let notes = resolve_notes(source, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
-    return Ok(());
+    return;
   }
 
   let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
-  let sid = play_mix.add(graph)?;
+  let sid = play_mix.add(graph);
   counter.inc();
 
   sleep_checking(running, content_dur);
 
   while running.load(Ordering::Relaxed) {
-    let crossfade_ms = match source
-      .heartbeat_configs
-      .read()
-      .unwrap_or_recover()
-      .get(hb_idx)
-    {
+    let crossfade_ms = match source.heartbeat_configs.read().get(hb_idx) {
       Some(cfg) if cfg.playback == Playback::Loop => cfg.crossfade_ms,
       _ => break,
     };
@@ -1165,14 +1120,13 @@ fn play_loop(
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
     let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
     let cf = ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
-    play_mix.replace(sid, graph, cf)?;
+    play_mix.replace(sid, graph, cf);
     counter.inc();
 
     sleep_checking(running, content_dur);
   }
 
-  play_mix.remove(sid)?;
-  Ok(())
+  play_mix.remove(sid);
 }
 
 /// One-shot playback: build and play a single heartbeat, then
@@ -1186,20 +1140,16 @@ fn play_oneshot_once(
   hb_idx: usize,
   wait_for_clock: bool,
   counter: &prometheus::IntCounter,
-) -> Result<(), sonify_health_lib::audio::AudioError> {
-  let (cycle_secs, cycle_offset) = match source
-    .heartbeat_configs
-    .read()
-    .unwrap_or_recover()
-    .get(hb_idx)
-  {
-    Some(cfg) => (cfg.cycle_secs, cfg.cycle_offset_secs),
-    None => return Ok(()),
-  };
+) {
+  let (cycle_secs, cycle_offset) =
+    match source.heartbeat_configs.read().get(hb_idx) {
+      Some(cfg) => (cfg.cycle_secs, cfg.cycle_offset_secs),
+      None => return,
+    };
   let notes = resolve_notes(source, hb_idx);
   if notes.is_empty() {
     thread::sleep(Duration::from_secs(1));
-    return Ok(());
+    return;
   }
 
   let eff_vol = clone_effective_volume(source, hb_idx);
@@ -1207,13 +1157,13 @@ fn play_oneshot_once(
   let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
   let dur = heartbeat::heartbeat_notes_duration(&notes);
 
-  let sid = play_mix.add(graph)?;
+  let sid = play_mix.add(graph);
   sleep_checking(running, dur);
-  play_mix.remove(sid)?;
+  play_mix.remove(sid);
   counter.inc();
 
   if !running.load(Ordering::Relaxed) {
-    return Ok(());
+    return;
   }
 
   if wait_for_clock {
@@ -1222,7 +1172,6 @@ fn play_oneshot_once(
   } else {
     thread::sleep(Duration::from_millis(50));
   }
-  Ok(())
 }
 
 /// Sleep for `dur` in ~100 ms increments, checking `running` flag.

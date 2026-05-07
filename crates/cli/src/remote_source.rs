@@ -17,12 +17,12 @@
 //! configured live.
 
 use crate::config::{OverrideInfo, SliderRanges};
-use crate::lock_util::RecoverPoison;
 use crate::preview_state::{
   ConnectionStatus, HeartbeatState, PreviewState, Source, SourceKind,
 };
 use fundsp::prelude32::shared;
 use futures::{SinkExt, StreamExt};
+use parking_lot::RwLock;
 use serde::Deserialize;
 use sonify_health_lib::{
   HeartbeatConfig, NoteConfig, Patch, Playback, ResultMode, TierConfig,
@@ -30,7 +30,7 @@ use sonify_health_lib::{
 };
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
@@ -139,8 +139,8 @@ impl WireHeartbeat {
 /// the same length so any `Shared` references handed out earlier
 /// stay live; otherwise the list is rebuilt from scratch.
 pub fn apply_state_snapshot(source: &Source, snapshot: WireStateSnapshot) {
-  *source.library.write().unwrap_or_recover() = snapshot.library;
-  *source.overrides.write().unwrap_or_recover() = snapshot.overrides;
+  *source.library.write() = snapshot.library;
+  *source.overrides.write() = snapshot.overrides;
   // SliderRanges is plain data (no RwLock) so we cannot replace it
   // via interior mutability; the field is owned by the Source.
   // For step 4 the mirror's slider_ranges stays at its initialized
@@ -156,9 +156,9 @@ pub fn apply_state_snapshot(source: &Source, snapshot: WireStateSnapshot) {
     .map(WireHeartbeat::into_parts)
     .unzip();
 
-  *source.heartbeat_configs.write().unwrap_or_recover() = configs;
+  *source.heartbeat_configs.write() = configs;
 
-  let mut hbs = source.heartbeats.write().unwrap_or_recover();
+  let mut hbs = source.heartbeats.write();
   if hbs.len() == metrics.len() {
     // Same shape: write the new metric values into the existing
     // Shared instances so any handles already cloned to render
@@ -181,7 +181,7 @@ pub fn apply_state_snapshot(source: &Source, snapshot: WireStateSnapshot) {
 /// Apply an incremental `metric_changed` update.  Silently ignored
 /// if `hb_idx` is out of range for the source's current mirror.
 pub fn apply_metric_changed(source: &Source, hb_idx: usize, value: f32) {
-  let hbs = source.heartbeats.read().unwrap_or_recover();
+  let hbs = source.heartbeats.read();
   if let Some(hb) = hbs.get(hb_idx) {
     hb.metric.set_value(value);
   }
@@ -193,7 +193,7 @@ pub fn apply_metric_changed(source: &Source, hb_idx: usize, value: f32) {
 
 fn set_status(source: &Source, status: ConnectionStatus) {
   if let SourceKind::Remote { status: s, .. } = &source.kind {
-    *s.write().unwrap_or_recover() = status;
+    *s.write() = status;
   }
 }
 
@@ -470,16 +470,16 @@ mod tests {
 
     apply_state_snapshot(&source, snap);
 
-    let configs = source.heartbeat_configs.read().unwrap();
+    let configs = source.heartbeat_configs.read();
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].name, "remote-hb");
     drop(configs);
 
-    let lib = source.library.read().unwrap();
+    let lib = source.library.read();
     assert!(lib.contains_key("sine"));
     drop(lib);
 
-    let hbs = source.heartbeats.read().unwrap();
+    let hbs = source.heartbeats.read();
     assert_eq!(hbs.len(), 1);
     assert!((hbs[0].metric.value() - 0.42).abs() < 1e-6);
   }
@@ -494,7 +494,7 @@ mod tests {
 
     apply_metric_changed(&source, 0, 0.91);
 
-    let hbs = source.heartbeats.read().unwrap();
+    let hbs = source.heartbeats.read();
     assert!((hbs[0].metric.value() - 0.91).abs() < 1e-6);
   }
 
@@ -518,7 +518,7 @@ mod tests {
     // Hold a clone of the existing Shared metric handle (this is
     // what the play thread would do).
     let metric_handle = {
-      let hbs = source.heartbeats.read().unwrap();
+      let hbs = source.heartbeats.read();
       hbs[0].metric.clone()
     };
 

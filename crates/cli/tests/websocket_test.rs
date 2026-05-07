@@ -155,7 +155,7 @@ async fn set_playback_round_trip() {
   assert_eq!(msg["value"], "loop");
 
   let local = preview.local();
-  let configs = local.heartbeat_configs.read().unwrap();
+  let configs = local.heartbeat_configs.read();
   assert_eq!(configs[0].playback, Playback::Loop);
 }
 

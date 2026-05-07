@@ -34,6 +34,16 @@ toml = "0.8"
 # Error handling
 thiserror = "2.0"
 
+# Concurrency primitives.  Used in place of std::sync::{Mutex,
+# RwLock} workspace-wide so we don't have to deal with lock
+# poisoning: parking_lot's locks return guards directly (no
+# `LockResult`) and do not propagate panics across critical
+# sections, which lets us model only the failure modes that
+# actually exist as `Result` rather than papering over a
+# theoretical-but-impossible "poisoned" branch with
+# `.unwrap()` / `.unwrap_or_recover()`.
+parking_lot = "0.12"
+
 # Testing
 tempfile = "3"
 trybuild = "1.0"

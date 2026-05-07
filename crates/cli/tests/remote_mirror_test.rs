@@ -142,23 +142,17 @@ async fn remote_mirror_populates_from_state_snapshot() {
   wait_for(
     Duration::from_secs(2),
     "remote heartbeat config to be mirrored",
-    || {
-      remote
-        .heartbeat_configs
-        .read()
-        .map(|c| !c.is_empty())
-        .unwrap_or(false)
-    },
+    || !remote.heartbeat_configs.read().is_empty(),
   )
   .await;
 
-  let configs = remote.heartbeat_configs.read().unwrap();
+  let configs = remote.heartbeat_configs.read();
   assert_eq!(configs.len(), 1);
   assert_eq!(configs[0].name, "remote-disk");
   assert_eq!(configs[0].command, "echo 0");
   drop(configs);
 
-  let lib = remote.library.read().unwrap();
+  let lib = remote.library.read();
   assert!(
     lib.contains_key("sine"),
     "mirrored library should include the remote's patches"
@@ -166,7 +160,7 @@ async fn remote_mirror_populates_from_state_snapshot() {
 
   // Connection status should have advanced past Connecting.
   if let SourceKind::Remote { status, .. } = &remote.kind {
-    assert!(matches!(*status.read().unwrap(), ConnectionStatus::Connected));
+    assert!(matches!(*status.read(), ConnectionStatus::Connected));
   } else {
     panic!("expected Remote kind");
   }
@@ -180,20 +174,14 @@ async fn remote_mirror_propagates_metric_updates() {
 
   // Wait for the initial state snapshot.
   wait_for(Duration::from_secs(2), "initial mirror to populate", || {
-    remote
-      .heartbeats
-      .read()
-      .map(|h| !h.is_empty())
-      .unwrap_or(false)
+    !remote.heartbeats.read().is_empty()
   })
   .await;
 
   // Drive a metric_changed broadcast on the remote instance, the
   // way the daemon's poll thread would.
   let remote_local = remote_instance.local();
-  remote_local.heartbeats.read().unwrap()[0]
-    .metric
-    .set_value(0.7);
+  remote_local.heartbeats.read()[0].metric.set_value(0.7);
   let _ = remote_instance.broadcast_tx.send(
     serde_json::json!({
       "type": "metric_changed",
@@ -206,7 +194,7 @@ async fn remote_mirror_propagates_metric_updates() {
   // The subscriber's mirror should pick that up incrementally
   // (without re-fetching the full snapshot).
   wait_for(Duration::from_secs(2), "metric to propagate to subscriber", || {
-    let hbs = remote.heartbeats.read().unwrap();
+    let hbs = remote.heartbeats.read();
     hbs
       .first()
       .map(|h| (h.metric.value() - 0.7).abs() < 1e-3)

@@ -1,8 +1,8 @@
 use crate::config::{OverrideInfo, RemoteSourceConfig, SliderRanges};
-use crate::lock_util::RecoverPoison;
 use crate::metrics::Metrics;
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
+use parking_lot::RwLock;
 use serde_json::json;
 use sonify_health_lib::{
   audio::MixerHandle, heartbeat, HeartbeatConfig, Patch, PatchLibrary,
@@ -10,10 +10,8 @@ use sonify_health_lib::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{
-  atomic::{AtomicBool, Ordering},
-  Arc, RwLock,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -251,7 +249,7 @@ impl PreviewState {
   /// enough to clone the Arcs; callers can iterate at leisure
   /// without blocking writers.
   pub fn sources_snapshot(&self) -> Vec<Arc<Source>> {
-    let remotes = self.remote_sources.read().unwrap_or_recover();
+    let remotes = self.remote_sources.read();
     let mut out = Vec::with_capacity(remotes.len() + 1);
     out.push(Arc::clone(&self.local));
     out.extend(remotes.iter().cloned());
@@ -269,7 +267,6 @@ impl PreviewState {
     self
       .remote_sources
       .read()
-      .unwrap_or_recover()
       .iter()
       .find(|s| s.name == name)
       .map(Arc::clone)
@@ -289,7 +286,7 @@ impl PreviewState {
   /// accounting for mute and master volume.  Volume is master *
   /// mute only; per-note volume is baked into the audio graph.
   pub fn update_effective_volume(&self, source: &Source, hb_idx: usize) {
-    let hbs = source.heartbeats.read().unwrap_or_recover();
+    let hbs = source.heartbeats.read();
     if let Some(hb) = hbs.get(hb_idx) {
       let mute_factor = if self.muted.load(Ordering::Relaxed) {
         0.0
@@ -311,7 +308,7 @@ impl PreviewState {
     };
     let vol = self.master_volume.value() * mute_factor;
     for source in self.sources_snapshot() {
-      let hbs = source.heartbeats.read().unwrap_or_recover();
+      let hbs = source.heartbeats.read();
       for hb in hbs.iter() {
         hb.effective_volume.set_value(vol);
       }
@@ -328,15 +325,13 @@ impl PreviewState {
       if !source.kind.is_local() {
         continue;
       }
-      *source.library.write().unwrap_or_recover() =
-        source.original_library.clone();
-      *source.overrides.write().unwrap_or_recover() =
-        source.original_overrides.clone();
-      *source.heartbeat_configs.write().unwrap_or_recover() =
+      *source.library.write() = source.original_library.clone();
+      *source.overrides.write() = source.original_overrides.clone();
+      *source.heartbeat_configs.write() =
         source.original_heartbeat_configs.clone();
-      let hbs = source.heartbeats.read().unwrap_or_recover();
+      let hbs = source.heartbeats.read();
       for hb in hbs.iter() {
-        *hb.override_value.write().unwrap_or_recover() = None;
+        *hb.override_value.write() = None;
       }
     }
     self.master_volume.set_value(1.0);
@@ -345,7 +340,7 @@ impl PreviewState {
 
   /// Store the mixer handle so trigger_immediate_play can use it.
   pub fn set_mixer_handle(&self, handle: MixerHandle) {
-    *self.mixer_handle.write().unwrap_or_recover() = Some(handle);
+    *self.mixer_handle.write() = Some(handle);
   }
 
   /// Play the local heartbeat at `hb_idx` immediately as a one-shot
@@ -353,7 +348,7 @@ impl PreviewState {
   /// slot after the sound finishes.  The wire protocol implicitly
   /// addresses the local source today; see [`local`](Self::local).
   pub fn trigger_immediate_play(&self, hb_idx: usize) {
-    let handle = match self.mixer_handle.read().unwrap_or_recover().clone() {
+    let handle = match self.mixer_handle.read().clone() {
       Some(h) => h,
       None => return,
     };
@@ -366,7 +361,7 @@ impl PreviewState {
     let local = self.local();
     self.update_effective_volume(&local, hb_idx);
     let eff_vol = {
-      let hbs = local.heartbeats.read().unwrap_or_recover();
+      let hbs = local.heartbeats.read();
       match hbs.get(hb_idx) {
         Some(hb) => hb.effective_volume.clone(),
         None => return,
@@ -375,18 +370,10 @@ impl PreviewState {
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
-    let sid = match handle.add(graph) {
-      Ok(s) => s,
-      Err(e) => {
-        tracing::error!(error = %e, hb_idx, "play_heartbeat_immediate: skipping");
-        return;
-      }
-    };
+    let sid = handle.add(graph);
     thread::spawn(move || {
       thread::sleep(dur);
-      if let Err(e) = handle.remove(sid) {
-        tracing::error!(error = %e, sid, "fire-and-forget remove failed");
-      }
+      handle.remove(sid);
     });
   }
 
@@ -394,19 +381,12 @@ impl PreviewState {
   /// one-shot sound.  Spawns a fire-and-forget thread that removes
   /// the mixer slot after the sound finishes.
   pub fn play_patch_immediate(&self, name: &str) {
-    let handle = match self.mixer_handle.read().unwrap_or_recover().clone() {
+    let handle = match self.mixer_handle.read().clone() {
       Some(h) => h,
       None => return,
     };
 
-    let patch = match self
-      .local()
-      .library
-      .read()
-      .unwrap_or_recover()
-      .get(name)
-      .cloned()
-    {
+    let patch = match self.local().library.read().get(name).cloned() {
       Some(p) => p,
       None => return,
     };
@@ -419,18 +399,10 @@ impl PreviewState {
     let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
-    let sid = match handle.add(graph) {
-      Ok(s) => s,
-      Err(e) => {
-        tracing::error!(error = %e, patch = name, "play_patch_immediate: skipping");
-        return;
-      }
-    };
+    let sid = handle.add(graph);
     thread::spawn(move || {
       thread::sleep(dur);
-      if let Err(e) = handle.remove(sid) {
-        tracing::error!(error = %e, sid, "fire-and-forget remove failed");
-      }
+      handle.remove(sid);
     });
   }
 
@@ -502,7 +474,7 @@ impl PreviewState {
     if name == LOCAL_SOURCE_NAME {
       return Err(AddSourceError::DuplicateName { name });
     }
-    let mut remotes = self.remote_sources.write().unwrap_or_recover();
+    let mut remotes = self.remote_sources.write();
     if remotes.iter().any(|s| s.name == name) {
       return Err(AddSourceError::DuplicateName { name });
     }
@@ -540,7 +512,7 @@ impl PreviewState {
     if name == LOCAL_SOURCE_NAME {
       return false;
     }
-    let mut remotes = self.remote_sources.write().unwrap_or_recover();
+    let mut remotes = self.remote_sources.write();
     let Some(idx) = remotes.iter().position(|s| s.name == name) else {
       return false;
     };
@@ -555,12 +527,12 @@ impl PreviewState {
   /// the heartbeat index inside the Local Source.
   pub fn add_heartbeat(&self, cfg: HeartbeatConfig) -> usize {
     let local = self.local();
-    let mut configs = local.heartbeat_configs.write().unwrap_or_recover();
+    let mut configs = local.heartbeat_configs.write();
     configs.push(cfg);
     let hb_idx = configs.len() - 1;
     drop(configs);
 
-    let mut hbs = local.heartbeats.write().unwrap_or_recover();
+    let mut hbs = local.heartbeats.write();
     hbs.push(HeartbeatState {
       metric: shared(0.0),
       override_value: RwLock::new(None),
@@ -577,17 +549,17 @@ impl PreviewState {
   fn resolve_local_notes(&self, hb_idx: usize) -> Vec<ResolvedNote> {
     let local = self.local();
     let metric = {
-      let hbs = local.heartbeats.read().unwrap_or_recover();
+      let hbs = local.heartbeats.read();
       match hbs.get(hb_idx) {
         Some(hb) => hb.metric.value() as f64,
         None => return vec![],
       }
     };
     let note_configs = {
-      let cfg = &local.heartbeat_configs.read().unwrap_or_recover()[hb_idx];
+      let cfg = &local.heartbeat_configs.read()[hb_idx];
       cfg.notes.clone()
     };
-    let lib = local.library.read().unwrap_or_recover();
+    let lib = local.library.read();
     note_configs
       .iter()
       .filter_map(|nc| {
@@ -662,7 +634,7 @@ impl PreviewState {
 /// ranges, override map, name, kind) are emitted for every Source;
 /// kind-specific fields layer on after.
 fn source_state_json(source: &Source) -> serde_json::Value {
-  let lib = source.library.read().unwrap_or_recover();
+  let lib = source.library.read();
   let lib_json: serde_json::Map<String, serde_json::Value> = lib
     .iter()
     .map(|(name, patch)| {
@@ -670,14 +642,14 @@ fn source_state_json(source: &Source) -> serde_json::Value {
     })
     .collect();
 
-  let hb_configs = source.heartbeat_configs.read().unwrap_or_recover();
-  let hbs = source.heartbeats.read().unwrap_or_recover();
+  let hb_configs = source.heartbeat_configs.read();
+  let hbs = source.heartbeats.read();
   let heartbeats_json: Vec<_> = hb_configs
     .iter()
     .enumerate()
     .map(|(i, cfg)| {
       let hb = &hbs[i];
-      let overridden = hb.override_value.read().unwrap_or_recover().is_some();
+      let overridden = hb.override_value.read().is_some();
       let notes_json: Vec<_> = cfg
         .notes
         .iter()
@@ -743,7 +715,7 @@ fn source_state_json(source: &Source) -> serde_json::Value {
     } => {
       obj.insert("kind".to_string(), json!("remote"));
       obj.insert("url".to_string(), json!(url));
-      let status_guard = status.read().unwrap_or_recover();
+      let status_guard = status.read();
       obj.insert("connection_status".to_string(), json!(status_guard.as_str()));
       // Emit `connection_error` only when the status is an error
       // case; absent for connecting/connected/clean-disconnect so
@@ -764,7 +736,7 @@ fn source_state_json(source: &Source) -> serde_json::Value {
 /// Serialize a Source's override map to a JSON value matching the
 /// shape that `OverrideInfo`'s derived `Serialize` would produce.
 fn source_overrides_json(source: &Source) -> serde_json::Value {
-  let ovr = source.overrides.read().unwrap_or_recover();
+  let ovr = source.overrides.read();
   let map: serde_json::Map<String, serde_json::Value> = ovr
     .iter()
     .map(|(name, info)| {
@@ -852,8 +824,8 @@ mod tests {
     let remote = preview.source_by_name("prod-db-1").expect("source exists");
     assert_eq!(remote.name, "prod-db-1");
     assert!(remote.kind.is_remote());
-    assert!(remote.heartbeat_configs.read().unwrap().is_empty());
-    assert!(remote.library.read().unwrap().is_empty());
+    assert!(remote.heartbeat_configs.read().is_empty());
+    assert!(remote.library.read().is_empty());
     match &remote.kind {
       SourceKind::Remote {
         url,
@@ -864,10 +836,7 @@ mod tests {
         assert_eq!(url, "ws://db1.example/ws");
         assert!(!playback_enabled.load(Ordering::Relaxed));
         assert!(alive.load(Ordering::Relaxed));
-        assert!(matches!(
-          *status.read().unwrap(),
-          ConnectionStatus::Connecting
-        ));
+        assert!(matches!(*status.read(), ConnectionStatus::Connecting));
       }
       SourceKind::Local => panic!("expected Remote kind"),
     }
@@ -969,7 +938,7 @@ mod tests {
     // Simulate a connector that handed back a failure reason.
     let source = preview.source_by_name("edge-1").unwrap();
     if let SourceKind::Remote { status, .. } = &source.kind {
-      *status.write().unwrap() = ConnectionStatus::Disconnected {
+      *status.write() = ConnectionStatus::Disconnected {
         error: Some("URL error: TLS support not compiled in".to_string()),
       };
     } else {
@@ -1023,13 +992,12 @@ mod tests {
     remote
       .library
       .write()
-      .unwrap()
       .insert("from-remote".to_string(), Patch::default());
 
     preview.revert();
 
     // The remote's mirrored library survives revert; revert is a
     // local-config-only concept.
-    assert!(remote.library.read().unwrap().contains_key("from-remote"));
+    assert!(remote.library.read().contains_key("from-remote"));
   }
 }

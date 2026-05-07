@@ -1,8 +1,9 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use fundsp::audiounit::BigBlockAdapter;
 use fundsp::prelude32::*;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -54,17 +55,6 @@ pub enum AudioError {
 
   #[error("Failed to start audio playback: {0}")]
   PlaybackStartFailed(#[source] cpal::PlayStreamError),
-
-  /// A thread panicked while holding the mixer's slots lock,
-  /// poisoning it.  All subsequent slot-list operations
-  /// (`add`, `remove`, `replace`, `clear`) return this variant
-  /// rather than panicking, so a library consumer can decide
-  /// whether to recreate the mixer, abort, or surface the error
-  /// to its own caller.  The protected slot state may be in an
-  /// inconsistent intermediate form, so reuse without recreation
-  /// is not recommended.
-  #[error("Audio mixer slot lock was poisoned by a panicking thread")]
-  MixerSlotsLockPoisoned,
 }
 
 /// Resolve the cpal device and stream config for the given device
@@ -345,7 +335,7 @@ fn mixer_callback(
     // If the main thread holds the lock (graph add/remove),
     // output silence for this buffer rather than blocking the
     // audio thread.
-    let Ok(mut slots) = inner.slots.try_lock() else {
+    let Some(mut slots) = inner.slots.try_lock() else {
       inner.lock_failures.fetch_add(1, Ordering::Relaxed);
       return;
     };
@@ -576,15 +566,7 @@ impl AudioMixer {
   }
 
   /// Add a graph to the mixer and return its slot ID.
-  ///
-  /// Returns `Err(MixerSlotsLockPoisoned)` if a previous holder of
-  /// the slot lock panicked.  The library can't speak to whether
-  /// the slot Vec is in a usable state after that — recreating the
-  /// `AudioMixer` is the safe response.
-  pub fn add(
-    &self,
-    mut graph: Box<dyn AudioUnit>,
-  ) -> Result<usize, AudioError> {
+  pub fn add(&self, mut graph: Box<dyn AudioUnit>) -> usize {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
     let slot = MixerSlot {
@@ -595,11 +577,7 @@ impl AudioMixer {
       pending_removal: false,
     };
 
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
+    let mut slots = self.inner.slots.lock();
 
     // Reuse the first empty position.
     let empty = slots.iter().position(Option::is_none);
@@ -623,20 +601,18 @@ impl AudioMixer {
       peak_callback_us = self.inner.peak_callback_us.load(Ordering::Relaxed),
       "Mixer: slot added"
     );
-    Ok(slot_id)
+    slot_id
   }
 
   /// Remove the graph at the given slot, fading it out over
   /// `REMOVE_FADEOUT_FRAMES` to avoid clicks from residual filter
   /// energy (e.g. Moog ladder DC at certain frequencies).
-  ///
-  /// See [`AudioMixer::add`] for the poisoned-lock contract.
-  pub fn remove(&self, id: usize) -> Result<(), AudioError> {
+  pub fn remove(&self, id: usize) {
     // Replace with silence and crossfade the old graph out.  The
     // fadeout suppresses clicks from residual filter energy; see
     // `REMOVE_FADEOUT_FRAMES` and commit 52805b7.
     let silence: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
-    self.replace(id, silence, REMOVE_FADEOUT_FRAMES)?;
+    self.replace(id, silence, REMOVE_FADEOUT_FRAMES);
 
     // Flag the slot so the audio callback nulls it out after the
     // fadeout drains.  This MUST happen after `replace()` because
@@ -646,11 +622,7 @@ impl AudioMixer {
     // would append instead of reusing the position and the slot
     // count would grow unbounded over time — see the doc on
     // `MixerSlot::pending_removal`.
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
+    let mut slots = self.inner.slots.lock();
     if let Some(Some(slot)) = slots.get_mut(id) {
       slot.pending_removal = true;
     }
@@ -663,29 +635,22 @@ impl AudioMixer {
       peak_callback_us = self.inner.peak_callback_us.load(Ordering::Relaxed),
       "Mixer: slot removed (fadeout)"
     );
-    Ok(())
   }
 
   /// Replace the graph at the given slot in-place, crossfading
   /// from the old graph to the new one over `crossfade_frames`.
-  ///
-  /// See [`AudioMixer::add`] for the poisoned-lock contract.
   pub fn replace(
     &self,
     id: usize,
     mut graph: Box<dyn AudioUnit>,
     crossfade_frames: usize,
-  ) -> Result<(), AudioError> {
+  ) {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
     let new_adapter = BigBlockAdapter::new(graph);
     let frames = Ord::max(crossfade_frames, 1);
 
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
+    let mut slots = self.inner.slots.lock();
     if id < slots.len() {
       if let Some(old_slot) = slots[id].take() {
         // `pending_removal` is intentionally reset to false here:
@@ -725,20 +690,11 @@ impl AudioMixer {
         pending_removal: false,
       });
     }
-    Ok(())
   }
 
   /// Remove all graphs from the mixer.
-  ///
-  /// See [`AudioMixer::add`] for the poisoned-lock contract.
-  pub fn clear(&self) -> Result<(), AudioError> {
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
-    slots.clear();
-    Ok(())
+  pub fn clear(&self) {
+    self.inner.slots.lock().clear();
   }
 
   /// Obtain a lightweight, thread-safe handle for adding and
@@ -880,10 +836,7 @@ impl MixerHandle {
   /// Add a graph to the mixer and return its slot ID.
   ///
   /// See [`AudioMixer::add`] for the poisoned-lock contract.
-  pub fn add(
-    &self,
-    mut graph: Box<dyn AudioUnit>,
-  ) -> Result<usize, AudioError> {
+  pub fn add(&self, mut graph: Box<dyn AudioUnit>) -> usize {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
     let slot = MixerSlot {
@@ -894,11 +847,7 @@ impl MixerHandle {
       pending_removal: false,
     };
 
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
+    let mut slots = self.inner.slots.lock();
 
     let empty = slots.iter().position(Option::is_none);
     let slot_id = match empty {
@@ -914,56 +863,43 @@ impl MixerHandle {
 
     let active = slots.iter().filter(|s| s.is_some()).count();
     tracing::info!(slot_id, active, "MixerHandle: slot added");
-    Ok(slot_id)
+    slot_id
   }
 
   /// Remove the graph at the given slot, fading it out over
   /// `REMOVE_FADEOUT_FRAMES` to avoid clicks from residual filter
   /// energy (e.g. Moog ladder DC at certain frequencies).
-  ///
-  /// See [`AudioMixer::add`] for the poisoned-lock contract.
-  pub fn remove(&self, id: usize) -> Result<(), AudioError> {
+  pub fn remove(&self, id: usize) {
     let silence: Box<dyn AudioUnit> = Box::new(dc(0.0) | dc(0.0));
-    self.replace(id, silence, REMOVE_FADEOUT_FRAMES)?;
+    self.replace(id, silence, REMOVE_FADEOUT_FRAMES);
 
     // Flag the slot for cleanup by the audio callback once the
     // fadeout drains.  See `AudioMixer::remove` and
     // `MixerSlot::pending_removal` for the full rationale; in
     // short, `replace()` reconstructs the slot with the flag clear,
     // so the flag must be set here after the replacement.
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
+    let mut slots = self.inner.slots.lock();
     if let Some(Some(slot)) = slots.get_mut(id) {
       slot.pending_removal = true;
     }
     let active = slots.iter().filter(|s| s.is_some()).count();
     tracing::info!(id, active, "MixerHandle: slot removed (fadeout)");
-    Ok(())
   }
 
   /// Replace the graph at the given slot, crossfading from the old
   /// graph to the new one over `crossfade_frames`.
-  ///
-  /// See [`AudioMixer::add`] for the poisoned-lock contract.
   pub fn replace(
     &self,
     id: usize,
     mut graph: Box<dyn AudioUnit>,
     crossfade_frames: usize,
-  ) -> Result<(), AudioError> {
+  ) {
     graph.set_sample_rate(self.sample_rate);
     graph.allocate();
     let new_adapter = BigBlockAdapter::new(graph);
     let frames = Ord::max(crossfade_frames, 1);
 
-    let mut slots = self
-      .inner
-      .slots
-      .lock()
-      .map_err(|_| AudioError::MixerSlotsLockPoisoned)?;
+    let mut slots = self.inner.slots.lock();
     if id < slots.len() {
       if let Some(old_slot) = slots[id].take() {
         // `pending_removal` is intentionally reset to false here;
@@ -1001,7 +937,6 @@ impl MixerHandle {
         pending_removal: false,
       });
     }
-    Ok(())
   }
 
   pub fn sample_rate(&self) -> f64 {
@@ -1264,7 +1199,7 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
-      let mut slots = inner.slots.lock().unwrap();
+      let mut slots = inner.slots.lock();
       slots.push(Some(MixerSlot {
         adapter: BigBlockAdapter::new(graph),
         left: Vec::with_capacity(frames),
@@ -1303,7 +1238,7 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
-      let mut slots = inner.slots.lock().unwrap();
+      let mut slots = inner.slots.lock();
       slots.push(Some(MixerSlot {
         adapter: BigBlockAdapter::new(graph),
         left: Vec::with_capacity(frames),
@@ -1373,7 +1308,7 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
-      let mut slots = inner.slots.lock().unwrap();
+      let mut slots = inner.slots.lock();
       slots.push(Some(MixerSlot {
         adapter: BigBlockAdapter::new(graph),
         left: Vec::with_capacity(frames),
@@ -1422,7 +1357,7 @@ mod tests {
     graph.set_sample_rate(44100.0);
     graph.allocate();
     {
-      let mut slots = inner.slots.lock().unwrap();
+      let mut slots = inner.slots.lock();
       slots.push(Some(MixerSlot {
         adapter: BigBlockAdapter::new(graph),
         left: Vec::with_capacity(frames),
@@ -1558,7 +1493,7 @@ mod tests {
     prev_graph.set_sample_rate(44100.0);
     prev_graph.allocate();
     {
-      let mut slots = inner.slots.lock().unwrap();
+      let mut slots = inner.slots.lock();
       slots.push(Some(MixerSlot {
         adapter: BigBlockAdapter::new(new_graph),
         left: Vec::with_capacity(frames),
@@ -1578,7 +1513,7 @@ mod tests {
     let mut data = vec![0.0f32; frames * channels];
     cb(&mut data, &dummy_callback_info());
 
-    let slots = inner.slots.lock().unwrap();
+    let slots = inner.slots.lock();
     assert!(
       slots[0].is_none(),
       "slot 0 should be None after the pending_removal fadeout \
@@ -1606,7 +1541,7 @@ mod tests {
     prev_graph.set_sample_rate(44100.0);
     prev_graph.allocate();
     {
-      let mut slots = inner.slots.lock().unwrap();
+      let mut slots = inner.slots.lock();
       slots.push(Some(MixerSlot {
         adapter: BigBlockAdapter::new(new_graph),
         left: Vec::with_capacity(frames),
@@ -1626,7 +1561,7 @@ mod tests {
     let mut data = vec![0.0f32; frames * channels];
     cb(&mut data, &dummy_callback_info());
 
-    let slots = inner.slots.lock().unwrap();
+    let slots = inner.slots.lock();
     assert!(
       slots[0].is_some(),
       "slot 0 must survive while its fadeout is still draining"
@@ -1657,10 +1592,8 @@ mod tests {
       }
     };
 
-    let first = mixer
-      .add(Box::new(sine_hz(440.0) * 0.5 >> pan(0.0)))
-      .expect("first add succeeds");
-    mixer.remove(first).expect("first remove succeeds");
+    let first = mixer.add(Box::new(sine_hz(440.0) * 0.5 >> pan(0.0)));
+    mixer.remove(first);
 
     // The fadeout lasts REMOVE_FADEOUT_FRAMES frames; at the
     // default sample rate that's well under 100 ms.  Sleep
@@ -1668,9 +1601,7 @@ mod tests {
     // prev.remaining_frames == 0 and cleared the slot.
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    let second = mixer
-      .add(Box::new(sine_hz(660.0) * 0.5 >> pan(0.0)))
-      .expect("second add succeeds");
+    let second = mixer.add(Box::new(sine_hz(660.0) * 0.5 >> pan(0.0)));
     assert_eq!(
       first, second,
       "add() should reuse the freed slot position after remove() drains"

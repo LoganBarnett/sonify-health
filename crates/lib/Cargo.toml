@@ -16,6 +16,7 @@ tap = { workspace = true }
 clap = { workspace = true }
 fundsp = { workspace = true }
 cpal = { workspace = true }
+parking_lot = { workspace = true }
 sonify-health-voice-derive = { workspace = true }
 
 [dev-dependencies]
