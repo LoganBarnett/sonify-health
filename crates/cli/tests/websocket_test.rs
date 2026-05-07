@@ -1,13 +1,7 @@
-// Tests-only exemption from the workspace's no-unwrap policy.
-// See workspace `[lints.clippy]` in the root Cargo.toml.
-#![allow(
-  clippy::unwrap_used,
-  clippy::expect_used,
-  clippy::panic,
-  clippy::unreachable,
-  clippy::todo,
-  clippy::unimplemented
-)]
+// Helpers in this file sit outside `#[test]` functions, so
+// clippy.toml's `allow-{unwrap,expect,panic}-in-tests` does not
+// reach them.  Opt the whole file in explicitly.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use futures::{SinkExt, StreamExt};
 use serde_json::json;

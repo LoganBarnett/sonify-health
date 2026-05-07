@@ -1,16 +1,3 @@
-// See workspace `[lints.clippy]` — tests-only exemption.
-#![cfg_attr(
-  test,
-  allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable,
-    clippy::todo,
-    clippy::unimplemented,
-  )
-)]
-
 //! sonify-health-server — entry point.
 //!
 //! Phase-1 scaffold.  This binary is a placeholder until the

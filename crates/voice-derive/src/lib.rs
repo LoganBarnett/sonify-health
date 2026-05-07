@@ -1,16 +1,3 @@
-// See workspace `[lints.clippy]` — tests-only exemption.
-#![cfg_attr(
-  test,
-  allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unreachable,
-    clippy::todo,
-    clippy::unimplemented,
-  )
-)]
-
 //! Derive macro for patch parameter metadata and accessors.
 //!
 //! `#[derive(PatchGenerate)]` on a struct with `#[patch_param(...)]`

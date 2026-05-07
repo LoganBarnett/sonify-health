@@ -7,21 +7,22 @@ members = [
     "crates/voice-derive",
 ]
 
-# Lints enforced workspace-wide.  The unwrap / expect / panic family
-# is denied to mechanically enforce the project's no-unwrap policy
-# (see ~/.claude/CLAUDE.md "No unwrap or expect in non-test code").
-# Each crate opts in via `[lints] workspace = true`.  Tests stay
-# exempt via `#![cfg_attr(test, allow(...))]` at each crate root,
-# so `#[cfg(test)] mod tests {}` blocks and `tests/*.rs` integration
-# tests can keep using `.unwrap()` / `.expect()` / `panic!()` —
-# panicking *is* the test-failure signal there.
+# Lints enforced workspace-wide.  The unwrap / expect / panic
+# family is denied to mechanically enforce the project's
+# no-unwrap policy (see ~/.claude/CLAUDE.md "No unwrap or expect
+# in non-test code").  Each crate opts in via
+# `[lints] workspace = true`.  The matching `clippy.toml` sets
+# `allow-{unwrap,expect,panic}-in-tests = true`, which scopes the
+# exemption to `#[cfg(test)]` modules and `tests/*.rs` integration
+# tests automatically — no per-file `#![allow]` headers needed.
+#
+# Matches rust-template's lint set so a sync (template HEAD
+# 74e7e84b at the time of this commit) doesn't drift on the
+# clippy block alone.  See `docs/compliance.org` in the template.
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
-unreachable = "deny"
-todo = "deny"
-unimplemented = "deny"
 
 [workspace.package]
 version = "0.1.0"
@@ -31,6 +32,13 @@ license = "AGPL-3.0-or-later"
 repository = "https://gitea.proton/logan/sonify-health"
 
 [workspace.dependencies]
+# Foundation infrastructure crate (config-merge derive, logging,
+# server runner, health, metrics, OpenAPI, OIDC).  Tracked at
+# rust-template HEAD; the template_sync_hashes list in
+# rust-template.json records each sync point so a
+# `cargo update` here corresponds to a known template commit.
+rust-template-foundation = { git = "https://github.com/LoganBarnett/rust-template.git" }
+
 # Logging and tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
