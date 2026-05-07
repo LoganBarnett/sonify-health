@@ -8,19 +8,14 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio_listener::ListenerAddress;
 
-/// Tracks which patches are overrides (derived from a base patch with
-/// a sparse delta) so the UI can display inherited vs overridden
-/// parameters and exports can emit the compact form.
-///
-/// `Serialize`/`Deserialize` are derived to match the on-the-wire
-/// shape that `state_snapshot` already emits — `{"base": "...",
-/// "delta": {...}}` — so a remote-source connector can deserialize
-/// it directly without a separate wire-side mirror struct.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OverrideInfo {
-  pub base: String,
-  pub delta: HashMap<String, f64>,
-}
+// Shared leaf types live in the lib so the cli and server can
+// agree on them without one binary depending on the other.
+// Re-exported here so existing call sites inside cli (and other
+// crates that reach into cli's config) keep compiling unchanged
+// during the workspace split.
+pub use sonify_health_lib::config::{
+  ConfigError, OverrideInfo, SliderRange, SliderRanges,
+};
 
 /// Static configuration for a single Remote Source — the entry the
 /// user writes in their config file or passes on the CLI to declare
@@ -46,78 +41,6 @@ pub struct RemoteSourceConfig {
   pub playback_enabled: bool,
 }
 
-#[derive(Debug, Error)]
-pub enum ConfigError {
-  #[error(
-    "Failed to read configuration file at {path:?}: \
-     {source}"
-  )]
-  FileRead {
-    path: PathBuf,
-    #[source]
-    source: std::io::Error,
-  },
-
-  #[error(
-    "Failed to parse configuration file at {path:?}: \
-     {source}"
-  )]
-  Parse {
-    path: PathBuf,
-    #[source]
-    source: toml::de::Error,
-  },
-
-  #[error("Configuration validation failed: {0}")]
-  Validation(String),
-
-  #[error("Failed to read OIDC client secret from {path:?}: {source}")]
-  OidcSecretFileRead {
-    path: PathBuf,
-    #[source]
-    source: std::io::Error,
-  },
-
-  #[error(
-    "Failed to read patch library file at {path:?}: \
-     {source}"
-  )]
-  PatchLibraryRead {
-    path: PathBuf,
-    #[source]
-    source: std::io::Error,
-  },
-
-  #[error(
-    "Failed to parse patch library file at {path:?}: \
-     {source}"
-  )]
-  PatchLibraryParse {
-    path: PathBuf,
-    #[source]
-    source: toml::de::Error,
-  },
-
-  #[error(
-    "Override patch {name:?} references unknown base \
-     patch {base:?}"
-  )]
-  OverrideBaseMissing { name: String, base: String },
-
-  #[error(
-    "Override patch {name:?} references another override \
-     {base:?} (chained overrides are not supported)"
-  )]
-  OverrideChained { name: String, base: String },
-
-  #[error("Failed to parse patch {name:?}: {source}")]
-  PatchParse {
-    name: String,
-    #[source]
-    source: toml::de::Error,
-  },
-}
-
 /// Fully resolved OIDC configuration.
 #[derive(Debug, Clone)]
 pub struct OidcConfig {
@@ -125,79 +48,6 @@ pub struct OidcConfig {
   pub issuer: String,
   pub client_id: String,
   pub client_secret: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SliderRange {
-  pub min: f64,
-  pub max: f64,
-  pub step: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SliderRanges {
-  pub master_volume: SliderRange,
-  pub cycle_offset: SliderRange,
-  pub override_metric: SliderRange,
-  pub note_volume: SliderRange,
-  pub note_offset: SliderRange,
-  pub segment_intensity: SliderRange,
-  pub discrete_threshold: SliderRange,
-  pub step_position: SliderRange,
-  pub crossfade_ms: SliderRange,
-}
-
-impl Default for SliderRanges {
-  fn default() -> Self {
-    Self {
-      master_volume: SliderRange {
-        min: 0.0,
-        max: 1.0,
-        step: 0.01,
-      },
-      cycle_offset: SliderRange {
-        min: 0.0,
-        max: 60.0,
-        step: 0.1,
-      },
-      override_metric: SliderRange {
-        min: 0.0,
-        max: 1.0,
-        step: 0.01,
-      },
-      note_volume: SliderRange {
-        min: 0.0,
-        max: 1.0,
-        step: 0.01,
-      },
-      note_offset: SliderRange {
-        min: 0.0,
-        max: 60.0,
-        step: 0.1,
-      },
-      segment_intensity: SliderRange {
-        min: 0.1,
-        max: 10.0,
-        step: 0.1,
-      },
-      discrete_threshold: SliderRange {
-        min: 0.0,
-        max: 1.0,
-        step: 0.01,
-      },
-      step_position: SliderRange {
-        min: 0.0,
-        max: 1.0,
-        step: 0.01,
-      },
-      crossfade_ms: SliderRange {
-        min: 0.0,
-        max: 500.0,
-        step: 1.0,
-      },
-    }
-  }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -240,7 +90,7 @@ impl ConfigFileRaw {
 
     toml::from_str(&contents).map_err(|source| ConfigError::Parse {
       path: path.to_path_buf(),
-      source,
+      source: Box::new(source),
     })
   }
 }
@@ -346,7 +196,7 @@ impl Config {
         let patch: Patch =
           table.try_into().map_err(|source| ConfigError::PatchParse {
             name: name.clone(),
-            source,
+            source: Box::new(source),
           })?;
         library.insert(name, patch);
       }
@@ -368,7 +218,7 @@ impl Config {
         toml::from_str(&contents).map_err(|source| {
           ConfigError::PatchLibraryParse {
             path: path.clone(),
-            source,
+            source: Box::new(source),
           }
         })?;
       for (name, patch) in extra {
@@ -388,7 +238,7 @@ impl Config {
       let parsed: PatchOverrides =
         table.try_into().map_err(|source| ConfigError::PatchParse {
           name: name.clone(),
-          source,
+          source: Box::new(source),
         })?;
       let delta: HashMap<String, f64> = parsed
         .to_fields()

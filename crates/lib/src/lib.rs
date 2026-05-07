@@ -18,6 +18,7 @@
 )]
 
 pub mod audio;
+pub mod config;
 pub mod continuous;
 pub mod heartbeat;
 pub mod heartbeat_config;
