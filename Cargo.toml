@@ -50,6 +50,12 @@ toml = "0.8"
 # Error handling
 thiserror = "2.0"
 
+# URL parsing.  Used by the Remote Source connector to normalize
+# operator-supplied URLs (e.g. ensuring the path ends in `/ws`).
+# Already a transitive dependency via reqwest; declaring it
+# directly so the call sites are explicit and grep-able.
+url = "2"
+
 # Concurrency primitives.  Used in place of std::sync::{Mutex,
 # RwLock} workspace-wide so we don't have to deal with lock
 # poisoning: parking_lot's locks return guards directly (no

@@ -3081,6 +3081,7 @@ dependencies = [
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

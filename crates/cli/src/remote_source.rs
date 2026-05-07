@@ -32,14 +32,44 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
-/// Initial backoff delay after a failed connection attempt.
-const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+/// Initial backoff delay after a *recoverable* connection
+/// failure.  Recoverable here means transient network conditions —
+/// TCP refused mid-rotation, DNS hiccup, server restart.
+const RECOVERABLE_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Cap on backoff between connection attempts.
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// Cap on exponential backoff for recoverable failures.
+const RECOVERABLE_MAX_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Fixed retry interval for *unrecoverable* failures — non-101
+/// HTTP responses (200 OK, 303 See Other from auth gates, 404,
+/// 5xx), TLS verification failures, malformed URLs.  Retrying
+/// fast won't help; the operator needs to fix something
+/// (URL/auth/cert).  We still retry rather than giving up
+/// entirely so a config change on the *remote* side picks up
+/// without restarting the daemon, but at five-minute granularity
+/// we don't spam logs while broken.
+const UNRECOVERABLE_BACKOFF: Duration = Duration::from_secs(300);
+
+/// Classify a `tungstenite::Error` from `connect_async` as
+/// recoverable (transient, keep retrying fast) or unrecoverable
+/// (config/server-side issue, retry slowly with operator
+/// visibility).  Errors that aren't variants of `tungstenite::Error`
+/// (other crate-level wrapping) are conservatively treated as
+/// recoverable so we don't slow-retry on something we don't
+/// recognise.
+fn is_unrecoverable(error: &tungstenite::Error) -> bool {
+  matches!(
+    error,
+    tungstenite::Error::Http(_)
+      | tungstenite::Error::HttpFormat(_)
+      | tungstenite::Error::Url(_)
+      | tungstenite::Error::Tls(_)
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Wire-format structs
@@ -225,7 +255,11 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_name: String) {
     }
   };
 
-  let mut backoff = INITIAL_BACKOFF;
+  // Backoff for the *recoverable* path (transient network).  The
+  // unrecoverable path uses a fixed `UNRECOVERABLE_BACKOFF`
+  // assigned in-place when classification fires, so the
+  // exponential growth here only governs transient retries.
+  let mut backoff = RECOVERABLE_INITIAL_BACKOFF;
 
   while preview.running.load(Ordering::Relaxed) && source.kind.is_alive() {
     set_status(&source, ConnectionStatus::Connecting);
@@ -233,7 +267,7 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_name: String) {
 
     match connect_async(&url).await {
       Ok((ws, _resp)) => {
-        backoff = INITIAL_BACKOFF;
+        backoff = RECOVERABLE_INITIAL_BACKOFF;
         set_status(&source, ConnectionStatus::Connected);
         info!(source = %source_name, "Remote source connected");
 
@@ -254,12 +288,30 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_name: String) {
       }
       Err(e) => {
         let msg = format!("{e}");
-        warn!(
-          source = %source_name,
-          error = %msg,
-          backoff_secs = backoff.as_secs(),
-          "Remote source connection failed"
-        );
+        if is_unrecoverable(&e) {
+          // Config / server-side problem.  Fast retries won't
+          // help — the operator needs to fix the URL, the auth
+          // gate, the cert, or the route.  Log loudly and slow
+          // the retry cadence to once every five minutes.
+          error!(
+            source = %source_name,
+            error = %msg,
+            backoff_secs = UNRECOVERABLE_BACKOFF.as_secs(),
+            "Remote source connection failed (unrecoverable)"
+          );
+          backoff = UNRECOVERABLE_BACKOFF;
+        } else {
+          // Transient network condition.  Keep the existing
+          // 1s → 60s exponential schedule so we reconnect
+          // quickly when whatever network blip caused this
+          // resolves.
+          warn!(
+            source = %source_name,
+            error = %msg,
+            backoff_secs = backoff.as_secs(),
+            "Remote source connection failed"
+          );
+        }
         set_status(
           &source,
           ConnectionStatus::Disconnected { error: Some(msg) },
@@ -272,7 +324,13 @@ pub async fn run_connector(preview: Arc<PreviewState>, source_name: String) {
     }
 
     tokio::time::sleep(backoff).await;
-    backoff = (backoff * 2).min(MAX_BACKOFF);
+    // Only the recoverable path grows exponentially; the
+    // unrecoverable branch already pinned `backoff` to
+    // `UNRECOVERABLE_BACKOFF` above and stays there until the
+    // next successful connect resets it.
+    if backoff < UNRECOVERABLE_BACKOFF {
+      backoff = (backoff * 2).min(RECOVERABLE_MAX_BACKOFF);
+    }
   }
 
   info!(source = %source_name, "Remote source connector stopping");

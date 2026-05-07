@@ -43,6 +43,7 @@ tower-sessions = { workspace = true }
 tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
 parking_lot = { workspace = true }
+url = { workspace = true }
 # rustls 0.23 requires a CryptoProvider to be selected before the
 # first TLS handshake.  tokio-tungstenite's
 # rustls-tls-native-roots feature pulls rustls in but does not

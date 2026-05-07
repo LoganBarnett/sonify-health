@@ -21,6 +21,48 @@ use tokio::sync::broadcast;
 pub enum AddSourceError {
   #[error("source name {name:?} is already in use")]
   DuplicateName { name: String },
+
+  #[error("Remote Source URL {url:?} is malformed: {source}")]
+  InvalidUrl {
+    url: String,
+    #[source]
+    source: url::ParseError,
+  },
+}
+
+/// Append `/ws` to `url`'s path if it isn't already there.  The
+/// remote sonify-health instance mounts its WebSocket endpoint at
+/// `/ws` (`crates/cli/src/web_base.rs`), and operators frequently
+/// type just the host (`wss://host`) when adding a Remote Source —
+/// the resulting `wss://host/` request hits the index HTML, gets a
+/// `200 OK`, and the WebSocket client correctly rejects it as
+/// "that wasn't a 101 Switching Protocols" (the most common
+/// failure mode we see in the wild).
+///
+/// Idempotent: a URL already ending in `/ws` (e.g. set up under a
+/// reverse proxy like `wss://host/sonify/ws`) is returned
+/// unchanged.  Returns `Err(InvalidUrl)` if the input doesn't
+/// parse — bad scheme, missing host, etc. — so the operator gets
+/// a typed error at config-load or `add_remote_source` time
+/// rather than a confusing connection error later.
+fn normalize_remote_url(input: &str) -> Result<String, AddSourceError> {
+  let mut parsed =
+    url::Url::parse(input).map_err(|source| AddSourceError::InvalidUrl {
+      url: input.to_string(),
+      source,
+    })?;
+  let path = parsed.path();
+  if !path.ends_with("/ws") {
+    let new_path = if path.is_empty() || path == "/" {
+      "/ws".to_string()
+    } else if path.ends_with('/') {
+      format!("{path}ws")
+    } else {
+      format!("{path}/ws")
+    };
+    parsed.set_path(&new_path);
+  }
+  Ok(parsed.to_string())
 }
 
 /// Hardcoded name of the Local Source.  Source names are required
@@ -474,6 +516,7 @@ impl PreviewState {
     if name == LOCAL_SOURCE_NAME {
       return Err(AddSourceError::DuplicateName { name });
     }
+    let url = normalize_remote_url(&url)?;
     let mut remotes = self.remote_sources.write();
     if remotes.iter().any(|s| s.name == name) {
       return Err(AddSourceError::DuplicateName { name });
@@ -837,6 +880,71 @@ mod tests {
         assert!(!playback_enabled.load(Ordering::Relaxed));
         assert!(alive.load(Ordering::Relaxed));
         assert!(matches!(*status.read(), ConnectionStatus::Connecting));
+      }
+      SourceKind::Local => panic!("expected Remote kind"),
+    }
+  }
+
+  /// `normalize_remote_url` ensures the path ends with `/ws`,
+  /// idempotently and without rewriting an existing prefix.
+  /// Idempotence and the trailing-slash case are covered together
+  /// because both reduce to "the right path is already there or
+  /// trivially derivable."
+  #[test]
+  fn normalize_remote_url_ensures_ws_suffix() {
+    // Bare host: append /ws.
+    assert_eq!(normalize_remote_url("wss://host").unwrap(), "wss://host/ws");
+    // Trailing slash on root: replace with /ws (no double slash).
+    assert_eq!(normalize_remote_url("wss://host/").unwrap(), "wss://host/ws");
+    // Already correct: no change.
+    assert_eq!(normalize_remote_url("wss://host/ws").unwrap(), "wss://host/ws");
+    // Sub-prefix (proxy mounting under /sonify/): append /ws to it.
+    assert_eq!(
+      normalize_remote_url("wss://host/sonify").unwrap(),
+      "wss://host/sonify/ws"
+    );
+    assert_eq!(
+      normalize_remote_url("wss://host/sonify/").unwrap(),
+      "wss://host/sonify/ws"
+    );
+    // Sub-prefix already terminating in /ws: unchanged.
+    assert_eq!(
+      normalize_remote_url("wss://host/sonify/ws").unwrap(),
+      "wss://host/sonify/ws"
+    );
+    // ws:// (non-TLS) handled the same way.
+    assert_eq!(
+      normalize_remote_url("ws://host:3000").unwrap(),
+      "ws://host:3000/ws"
+    );
+  }
+
+  #[test]
+  fn normalize_remote_url_rejects_malformed() {
+    assert!(matches!(
+      normalize_remote_url("not a url at all"),
+      Err(AddSourceError::InvalidUrl { .. })
+    ));
+    // Missing scheme is also rejected by url::Url::parse.
+    assert!(matches!(
+      normalize_remote_url("host/ws"),
+      Err(AddSourceError::InvalidUrl { .. })
+    ));
+  }
+
+  /// `add_remote_source` runs the URL through normalization, so a
+  /// caller passing a bare host gets the canonical `/ws` form
+  /// stored on the Source.
+  #[test]
+  fn add_remote_source_normalizes_url() {
+    let preview = make_preview(false);
+    preview
+      .add_remote_source("edge".to_string(), "wss://edge.example".to_string())
+      .unwrap();
+    let source = preview.source_by_name("edge").unwrap();
+    match &source.kind {
+      SourceKind::Remote { url, .. } => {
+        assert_eq!(url, "wss://edge.example/ws");
       }
       SourceKind::Local => panic!("expected Remote kind"),
     }
