@@ -1,0 +1,28 @@
+[package]
+name = "sonify-health-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "sonify_health_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sonify-health-server"
+path = "src/main.rs"
+
+# Phase 1 scaffold: only enough deps to compile the placeholder
+# main.  Server-specific deps (axum, openidconnect, prometheus,
+# tower-sessions, etc.) will move from the cli crate in the next
+# phase along with the modules that use them.
+[dependencies]
+sonify-health-lib = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

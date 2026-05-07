@@ -3103,6 +3103,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sonify-health-server"
+version = "0.1.0"
+dependencies = [
+ "sonify-health-lib",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "sonify-health-voice-derive"
 version = "0.1.0"
 dependencies = [
