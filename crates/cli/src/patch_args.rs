@@ -3,7 +3,7 @@ use sonify_health_lib::{Patch, PatchLibrary, PatchOverrides};
 /// CLI patch overrides shared by the `preview` and `print`
 /// subcommands.
 #[derive(Debug, clap::Args)]
-pub(crate) struct CliPatchOverrides {
+pub struct CliPatchOverrides {
   /// Name of a library patch to use as the base.
   #[arg(long, default_value = "sine", help_heading = "Patch")]
   pub patch_name: String,
@@ -182,7 +182,7 @@ impl CliPatchOverrides {
 
   /// Resolve the named patch from the library and apply CLI
   /// overrides.
-  pub(crate) fn resolve_patch(&self, library: &PatchLibrary) -> Patch {
+  pub fn resolve_patch(&self, library: &PatchLibrary) -> Patch {
     library
       .get(&self.patch_name)
       .cloned()

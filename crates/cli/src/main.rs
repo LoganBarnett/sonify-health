@@ -1,10 +1,9 @@
 mod logging;
-mod patch_args;
 mod print;
 mod systemd;
 
 use sonify_health_cli::{
-  auth, config, daemon, metrics, preview_state, web_base,
+  auth, config, daemon, metrics, patch_args, preview_state, web_base,
 };
 
 use axum::{middleware, routing::get, Router};
