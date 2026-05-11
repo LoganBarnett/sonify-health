@@ -390,9 +390,8 @@ impl PreviewState {
   /// slot after the sound finishes.  The wire protocol implicitly
   /// addresses the local source today; see [`local`](Self::local).
   pub fn trigger_immediate_play(&self, hb_idx: usize) {
-    let handle = match self.mixer_handle.read().clone() {
-      Some(h) => h,
-      None => return,
+    let Some(handle) = self.mixer_handle.read().clone() else {
+      return;
     };
 
     let notes = self.resolve_local_notes(hb_idx);
@@ -423,14 +422,12 @@ impl PreviewState {
   /// one-shot sound.  Spawns a fire-and-forget thread that removes
   /// the mixer slot after the sound finishes.
   pub fn play_patch_immediate(&self, name: &str) {
-    let handle = match self.mixer_handle.read().clone() {
-      Some(h) => h,
-      None => return,
+    let Some(handle) = self.mixer_handle.read().clone() else {
+      return;
     };
 
-    let patch = match self.local().library.read().get(name).cloned() {
-      Some(p) => p,
-      None => return,
+    let Some(patch) = self.local().library.read().get(name).cloned() else {
+      return;
     };
 
     let notes = [ResolvedNote {
@@ -457,8 +454,9 @@ impl PreviewState {
     source_name: &str,
     enabled: bool,
   ) -> bool {
-    match self.source_by_name(source_name) {
-      Some(source) => match &source.kind {
+    self
+      .source_by_name(source_name)
+      .is_some_and(|source| match &source.kind {
         SourceKind::Remote {
           playback_enabled, ..
         } => {
@@ -466,9 +464,7 @@ impl PreviewState {
           true
         }
         SourceKind::Local => false,
-      },
-      None => false,
-    }
+      })
   }
 
   /// Project the current Remote Sources back to their config-side
@@ -744,10 +740,10 @@ fn source_state_json(source: &Source) -> serde_json::Value {
       obj.insert("config_writable".to_string(), json!(source.config_writable));
       obj.insert(
         "config_path".to_string(),
-        match &source.config_path {
-          Some(p) => json!(p.display().to_string()),
-          None => serde_json::Value::Null,
-        },
+        source
+          .config_path
+          .as_ref()
+          .map_or(serde_json::Value::Null, |p| json!(p.display().to_string())),
       );
     }
     SourceKind::Remote {
@@ -807,8 +803,7 @@ pub fn metric_label(
   }
   tiers
     .last()
-    .map(|t| t.label.clone())
-    .unwrap_or_else(|| format!("{metric:.3}"))
+    .map_or_else(|| format!("{metric:.3}"), |t| t.label.clone())
 }
 
 #[cfg(test)]

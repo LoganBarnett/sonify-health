@@ -68,9 +68,8 @@ pub async fn login_handler(
   State(state): State<AppState>,
   session: Session,
 ) -> Response {
-  let client = match &state.oidc_client {
-    Some(c) => c,
-    None => return oidc_disabled_response(),
+  let Some(client) = &state.oidc_client else {
+    return oidc_disabled_response();
   };
 
   let (auth_url, csrf_token, nonce) = client
@@ -107,23 +106,22 @@ pub async fn callback_handler(
   session: Session,
   Query(params): Query<CallbackQuery>,
 ) -> Response {
-  let client = match &state.oidc_client {
-    Some(c) => c,
-    None => return oidc_disabled_response(),
+  let Some(client) = &state.oidc_client else {
+    return oidc_disabled_response();
   };
 
   // 1. Verify CSRF state.
-  let stored_state: String = match session.get(KEY_OIDC_STATE).await {
-    Ok(Some(s)) => s,
-    _ => {
+  let stored_state: String =
+    if let Ok(Some(s)) = session.get(KEY_OIDC_STATE).await {
+      s
+    } else {
       warn!("OIDC callback: missing state in session");
       return (
         StatusCode::BAD_REQUEST,
         "Invalid session — please try signing in again.",
       )
         .into_response();
-    }
-  };
+    };
 
   if params.state != stored_state {
     warn!("OIDC callback: state mismatch");
@@ -134,17 +132,17 @@ pub async fn callback_handler(
       .into_response();
   }
 
-  let nonce_secret: String = match session.get(KEY_OIDC_NONCE).await {
-    Ok(Some(n)) => n,
-    _ => {
+  let nonce_secret: String =
+    if let Ok(Some(n)) = session.get(KEY_OIDC_NONCE).await {
+      n
+    } else {
       warn!("OIDC callback: missing nonce in session");
       return (
         StatusCode::BAD_REQUEST,
         "Invalid session — please try signing in again.",
       )
         .into_response();
-    }
-  };
+    };
 
   // 2. Exchange authorization code for tokens.
   let token_response = match client
@@ -164,16 +162,13 @@ pub async fn callback_handler(
   };
 
   // 3. Verify ID token and extract claims.
-  let id_token = match token_response.id_token() {
-    Some(t) => t,
-    None => {
-      warn!("OIDC token response contained no ID token");
-      return (
-        StatusCode::BAD_GATEWAY,
-        "Authentication failed — no ID token returned.",
-      )
-        .into_response();
-    }
+  let Some(id_token) = token_response.id_token() else {
+    warn!("OIDC token response contained no ID token");
+    return (
+      StatusCode::BAD_GATEWAY,
+      "Authentication failed — no ID token returned.",
+    )
+      .into_response();
   };
 
   let nonce = Nonce::new(nonce_secret);
@@ -219,24 +214,22 @@ pub async fn callback_handler(
     }
   };
 
-  let email = match userinfo.email().or_else(|| claims.email()) {
-    Some(e) => e.to_string(),
-    None => {
-      warn!("No email in userinfo or ID token");
-      return (
-        StatusCode::BAD_GATEWAY,
-        "Authentication failed — no email found.",
-      )
-        .into_response();
-    }
+  let email = if let Some(e) = userinfo.email().or_else(|| claims.email()) {
+    e.to_string()
+  } else {
+    warn!("No email in userinfo or ID token");
+    return (
+      StatusCode::BAD_GATEWAY,
+      "Authentication failed — no email found.",
+    )
+      .into_response();
   };
 
   let name = userinfo
     .name()
     .or_else(|| claims.name())
     .and_then(|n| n.get(None))
-    .map(|n| n.as_str().to_owned())
-    .unwrap_or_else(|| email.clone());
+    .map_or_else(|| email.clone(), |n| n.as_str().to_owned());
 
   let user = AuthUser { name, email };
   info!(user.email, "User authenticated via OIDC");

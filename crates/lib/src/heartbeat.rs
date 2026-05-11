@@ -198,10 +198,8 @@ fn note_graph(
   let cutoff = dc((freq * 13.0 * brightness).min(MAX_CUTOFF));
   let q_val = dc(0.5 * resonance * 0.2);
 
-  let ext = match external_volume {
-    Some(s) => s.clone(),
-    None => fundsp::prelude32::shared(1.0),
-  };
+  let ext = external_volume
+    .map_or_else(|| fundsp::prelude32::shared(1.0), |s| s.clone());
   let ext_vol = var(&ext) >> follow(0.1);
 
   let echo_delay = patch.echo_delay as f32;
@@ -246,10 +244,8 @@ pub fn heartbeat_graph_with_notes(
     // Empty notes — return silence with the same external-volume
     // wiring the populated case uses, so a downstream consumer
     // that compares the two graphs sees the same I/O shape.
-    let ext = match external_volume {
-      Some(s) => s.clone(),
-      None => fundsp::prelude32::shared(1.0),
-    };
+    let ext = external_volume
+      .map_or_else(|| fundsp::prelude32::shared(1.0), |s| s.clone());
     return Box::new((dc(0.0) * var(&ext)) | (dc(0.0) * var(&ext)));
   };
   Box::new(iter.fold(first, |acc, n| acc + n))

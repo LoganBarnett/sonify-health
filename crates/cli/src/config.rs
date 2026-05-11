@@ -138,15 +138,14 @@ impl Config {
     headless: Option<bool>,
     remote_source_args: &[String],
   ) -> Result<Self, ConfigError> {
-    let (file, resolved_config_path) = match config_path {
-      Some(p) => (ConfigFileRaw::from_file(p)?, Some(p.to_path_buf())),
-      None => {
-        let default = PathBuf::from("config.toml");
-        if default.exists() {
-          (ConfigFileRaw::from_file(&default)?, Some(default))
-        } else {
-          (ConfigFileRaw::default(), None)
-        }
+    let (file, resolved_config_path) = if let Some(p) = config_path {
+      (ConfigFileRaw::from_file(p)?, Some(p.to_path_buf()))
+    } else {
+      let default = PathBuf::from("config.toml");
+      if default.exists() {
+        (ConfigFileRaw::from_file(&default)?, Some(default))
+      } else {
+        (ConfigFileRaw::default(), None)
       }
     };
 
@@ -588,7 +587,7 @@ fn nix_value(val: &serde_json::Value, indent: usize) -> String {
     serde_json::Value::Null => "null".to_string(),
     serde_json::Value::Bool(b) => b.to_string(),
     serde_json::Value::Number(n) => {
-      n.as_f64().map(nix_float).unwrap_or_else(|| n.to_string())
+      n.as_f64().map_or_else(|| n.to_string(), nix_float)
     }
     serde_json::Value::String(s) => {
       format!("\"{}\"", nix_escape(s))
@@ -1135,7 +1134,7 @@ url = "ws://file/ws"
       std::fs::read_dir(&examples_dir).expect("examples directory should exist")
     {
       let path = entry.unwrap().path();
-      if path.extension().map(|e| e == "toml").unwrap_or(false) {
+      if path.extension().is_some_and(|e| e == "toml") {
         let contents = std::fs::read_to_string(&path).unwrap();
         let _raw: ConfigFileRaw = toml::from_str(&contents)
           .unwrap_or_else(|e| panic!("{}: {e}", path.display()));

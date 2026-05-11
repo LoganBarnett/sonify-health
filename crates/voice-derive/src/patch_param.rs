@@ -26,9 +26,8 @@ impl PatchField {
       .iter()
       .find(|a| a.path().is_ident("patch_param"));
 
-    let attr = match attr {
-      Some(a) => a,
-      None => return Ok(None),
+    let Some(attr) = attr else {
+      return Ok(None);
     };
 
     // Validate that the field type is f64.

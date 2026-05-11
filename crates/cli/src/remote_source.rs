@@ -234,15 +234,12 @@ fn set_status(source: &Source, status: ConnectionStatus) {
 /// the Source is removed at runtime (signaled via
 /// `kind.is_alive() == false`).
 pub async fn run_connector(preview: Arc<PreviewState>, source_name: String) {
-  let source = match preview.source_by_name(&source_name) {
-    Some(s) => s,
-    None => {
-      error!(
-        source = %source_name,
-        "run_connector called for a Source that no longer exists"
-      );
-      return;
-    }
+  let Some(source) = preview.source_by_name(&source_name) else {
+    error!(
+      source = %source_name,
+      "run_connector called for a Source that no longer exists"
+    );
+    return;
   };
   let url = match &source.kind {
     SourceKind::Remote { url, .. } => url.clone(),

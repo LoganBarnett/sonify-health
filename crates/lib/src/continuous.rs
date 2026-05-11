@@ -232,10 +232,7 @@ pub fn continuous_graph(
   let amp_smooth = var(&controls.amplitude) >> follow(smooth);
 
   // External volume (master × mute).
-  let ext = match external_volume {
-    Some(s) => s.clone(),
-    None => shared(1.0),
-  };
+  let ext = external_volume.map_or_else(|| shared(1.0), |s| s.clone());
   let ext_vol = var(&ext) >> follow(0.1);
 
   // Bitcrush via map() closure reading Shared.
@@ -299,10 +296,7 @@ pub fn continuous_graph_with_notes(
     // wiring so the consumer's I/O shape is identical to the
     // populated case.  The control/structural Vecs come back
     // empty because nothing was iterated.
-    let ext = match external_volume {
-      Some(s) => s.clone(),
-      None => shared(1.0),
-    };
+    let ext = external_volume.map_or_else(|| shared(1.0), |s| s.clone());
     return (
       Box::new((dc(0.0) * var(&ext)) | (dc(0.0) * var(&ext))),
       Vec::new(),

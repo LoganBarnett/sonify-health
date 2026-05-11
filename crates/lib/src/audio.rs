@@ -66,10 +66,6 @@ fn resolve_device(
   let device = match device_name {
     Some(name) => {
       let lower = name.to_lowercase();
-      let devices: Vec<_> = host
-        .output_devices()
-        .map_err(AudioError::DeviceEnumeration)?
-        .collect();
       // cpal 0.17 deprecated `DeviceTrait::name()` and split it
       // into two replacements: `description()` (human-readable
       // label, manufacturer, etc.) and `id()` (stable identifier
@@ -90,46 +86,40 @@ fn resolve_device(
       let desc_name = |d: &cpal::Device| -> Option<String> {
         d.description().ok().map(|desc| desc.name().to_string())
       };
-      let matched = devices.into_iter().find(|d| {
-        let id_match = id_string(d)
-          .map(|s| s.to_lowercase().contains(&lower))
-          .unwrap_or(false);
-        let name_match = desc_name(d)
-          .map(|s| s.to_lowercase().contains(&lower))
-          .unwrap_or(false);
-        id_match || name_match
-      });
-      match matched {
-        Some(d) => {
-          tracing::info!(
-            requested = name,
-            selected_id = id_string(&d).unwrap_or_default(),
-            selected_name = desc_name(&d).unwrap_or_default(),
-            "Audio device selected"
-          );
-          d
-        }
-        None => {
-          // Surface both id and name in the diagnostic so the
-          // operator sees what they could have written for
-          // either matching mode.  Lines look like:
-          //   "plughw:CARD=0 (HDA Intel PCH, ALC897 Analog)"
-          let available: Vec<String> = host
-            .output_devices()
-            .map_err(AudioError::DeviceEnumeration)?
-            .map(|d| {
-              let id = id_string(&d).unwrap_or_else(|| "?".to_string());
-              let n = desc_name(&d).unwrap_or_else(|| "?".to_string());
-              format!("{id} ({n})")
-            })
-            .collect();
-          tracing::warn!(
-            requested = name,
-            ?available,
-            "Audio device not found"
-          );
-          return Err(AudioError::DeviceNotFound(name.to_string()));
-        }
+      let matched = host
+        .output_devices()
+        .map_err(AudioError::DeviceEnumeration)?
+        .find(|d| {
+          let id_match =
+            id_string(d).is_some_and(|s| s.to_lowercase().contains(&lower));
+          let name_match =
+            desc_name(d).is_some_and(|s| s.to_lowercase().contains(&lower));
+          id_match || name_match
+        });
+      if let Some(d) = matched {
+        tracing::info!(
+          requested = name,
+          selected_id = id_string(&d).unwrap_or_default(),
+          selected_name = desc_name(&d).unwrap_or_default(),
+          "Audio device selected"
+        );
+        d
+      } else {
+        // Surface both id and name in the diagnostic so the
+        // operator sees what they could have written for
+        // either matching mode.  Lines look like:
+        //   "plughw:CARD=0 (HDA Intel PCH, ALC897 Analog)"
+        let available: Vec<String> = host
+          .output_devices()
+          .map_err(AudioError::DeviceEnumeration)?
+          .map(|d| {
+            let id = id_string(&d).unwrap_or_else(|| "?".to_string());
+            let n = desc_name(&d).unwrap_or_else(|| "?".to_string());
+            format!("{id} ({n})")
+          })
+          .collect();
+        tracing::warn!(requested = name, ?available, "Audio device not found");
+        return Err(AudioError::DeviceNotFound(name.to_string()));
       }
     }
     None => host
@@ -581,15 +571,12 @@ impl AudioMixer {
 
     // Reuse the first empty position.
     let empty = slots.iter().position(Option::is_none);
-    let slot_id = match empty {
-      Some(i) => {
-        slots[i] = Some(slot);
-        i
-      }
-      None => {
-        slots.push(Some(slot));
-        slots.len() - 1
-      }
+    let slot_id = if let Some(i) = empty {
+      slots[i] = Some(slot);
+      i
+    } else {
+      slots.push(Some(slot));
+      slots.len() - 1
     };
 
     let active = slots.iter().filter(|s| s.is_some()).count();
@@ -850,15 +837,12 @@ impl MixerHandle {
     let mut slots = self.inner.slots.lock();
 
     let empty = slots.iter().position(Option::is_none);
-    let slot_id = match empty {
-      Some(i) => {
-        slots[i] = Some(slot);
-        i
-      }
-      None => {
-        slots.push(Some(slot));
-        slots.len() - 1
-      }
+    let slot_id = if let Some(i) = empty {
+      slots[i] = Some(slot);
+      i
+    } else {
+      slots.push(Some(slot));
+      slots.len() - 1
     };
 
     let active = slots.iter().filter(|s| s.is_some()).count();
@@ -1091,12 +1075,9 @@ mod tests {
   /// available (CI).
   #[test]
   fn mixer_handle_health_accessors() {
-    let mixer = match AudioMixer::new(None) {
-      Ok(m) => m,
-      Err(_) => {
-        eprintln!("No audio device available, skipping test");
-        return;
-      }
+    let Ok(mixer) = AudioMixer::new(None) else {
+      eprintln!("No audio device available, skipping test");
+      return;
     };
 
     assert_eq!(mixer.lock_failures(), 0);
@@ -1404,12 +1385,9 @@ mod tests {
   /// the new amplitude fields.  Skipped if no audio device.
   #[test]
   fn mixer_amplitude_accessors() {
-    let mixer = match AudioMixer::new(None) {
-      Ok(m) => m,
-      Err(_) => {
-        eprintln!("No audio device available, skipping test");
-        return;
-      }
+    let Ok(mixer) = AudioMixer::new(None) else {
+      eprintln!("No audio device available, skipping test");
+      return;
     };
 
     // Initial values.
@@ -1584,12 +1562,9 @@ mod tests {
   /// the slot Vec bounded.  Skipped if no audio device available.
   #[test]
   fn add_reuses_slot_after_remove_fadeout_drains() {
-    let mixer = match AudioMixer::new(None) {
-      Ok(m) => m,
-      Err(_) => {
-        eprintln!("No audio device available, skipping test");
-        return;
-      }
+    let Ok(mixer) = AudioMixer::new(None) else {
+      eprintln!("No audio device available, skipping test");
+      return;
     };
 
     let first = mixer.add(Box::new((sine_hz(440.0) * 0.5) >> pan(0.0)));

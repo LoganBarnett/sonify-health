@@ -119,6 +119,12 @@ impl SupervisedThread {
 // ---------------------------------------------------------------------------
 
 /// Extract a human-readable message from a panic payload.
+//
+// `option_if_let_else` would suggest collapsing the &str/String/Other
+// chain into a nested `map_or_else`, which obscures the linear "try
+// these types in order" logic.  The if/else-if/else chain reads
+// straight down; keep it.
+#[allow(clippy::option_if_let_else)]
 pub fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
   if let Some(s) = payload.downcast_ref::<&str>() {
     (*s).to_string()
@@ -369,10 +375,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
       //    in headless mode (no mixer to recover).
       if let Some(mixer) = mixer.as_mut() {
         if mixer.stream_failed() {
-          let should_try = match next_recovery_at {
-            Some(t) => Instant::now() >= t,
-            None => true,
-          };
+          let should_try = next_recovery_at.is_none_or(|t| Instant::now() >= t);
           if should_try {
             recovery_attempts += 1;
             preview
@@ -595,6 +598,11 @@ pub fn spawn_poll_thread(
         val
       };
 
+      // option_if_let_else would fold this 60-line override/probe
+      // branch into a single map_or_else call, which destroys the
+      // linear "either we have an override OR we run the probe"
+      // structure.  Keep the if/else.
+      #[allow(clippy::option_if_let_else)]
       let resolved = if let Some(metric) = overridden {
         let clamped = metric.clamp(0.0, 1.0);
         {
@@ -835,11 +843,7 @@ fn rebalance_play_threads(
       st.role == ThreadRole::Play
         && st.source_name == source.name
         && st.hb_idx == *hb_idx
-        && st
-          .handle
-          .as_ref()
-          .map(|h| !h.is_finished())
-          .unwrap_or(false)
+        && st.handle.as_ref().is_some_and(|h| !h.is_finished())
     });
     if live {
       continue;
@@ -936,10 +940,10 @@ fn clone_effective_volume(
   source: &Source,
   hb_idx: usize,
 ) -> fundsp::shared::Shared {
-  match source.heartbeats.read().get(hb_idx) {
-    Some(hb) => hb.effective_volume.clone(),
-    None => fundsp::prelude32::shared(1.0),
-  }
+  source.heartbeats.read().get(hb_idx).map_or_else(
+    || fundsp::prelude32::shared(1.0),
+    |hb| hb.effective_volume.clone(),
+  )
 }
 
 /// Continuous morph playback: build a multi-note graph with

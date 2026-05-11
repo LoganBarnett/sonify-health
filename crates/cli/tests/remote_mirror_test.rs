@@ -202,8 +202,7 @@ async fn remote_mirror_propagates_metric_updates() {
     let hbs = remote.heartbeats.read();
     hbs
       .first()
-      .map(|h| (h.metric.value() - 0.7).abs() < 1e-3)
-      .unwrap_or(false)
+      .is_some_and(|h| (h.metric.value() - 0.7).abs() < 1e-3)
   })
   .await;
 }
