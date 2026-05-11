@@ -2532,12 +2532,14 @@ name = "rust-template-foundation"
 version = "0.1.0"
 source = "git+https://github.com/LoganBarnett/rust-template.git#6e74eac29e92342a37a874c0018de688c107494c"
 dependencies = [
+ "clap",
  "home",
  "rust-template-foundation-derive",
  "serde",
  "thiserror 2.0.18",
  "toml 0.8.23",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3094,6 +3096,7 @@ dependencies = [
  "parking_lot",
  "prometheus",
  "reqwest",
+ "rust-template-foundation",
  "rustls 0.23.40",
  "schemars 0.9.0",
  "sd-notify",

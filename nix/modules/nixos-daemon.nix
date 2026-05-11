@@ -623,9 +623,9 @@ in {
       environment =
         {}
         // lib.optionalAttrs cfg.oidc.enable {
-          BASE_URL = cfg.oidc.baseUrl;
-          OIDC_ISSUER = cfg.oidc.issuer;
-          OIDC_CLIENT_ID = cfg.oidc.clientId;
+          sonify_health_base_url = cfg.oidc.baseUrl;
+          sonify_health_oidc_issuer = cfg.oidc.issuer;
+          sonify_health_oidc_client_id = cfg.oidc.clientId;
         };
 
       serviceConfig = {

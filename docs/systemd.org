@@ -37,6 +37,9 @@ unit-scoped credential directory before the process starts.
 2. In ~crates/cli/src/config.rs~, follow the existing pattern:
    try the explicit option first, fall back to
    ~credential_secret_path~, then error.
-3. On Darwin, pass the file path via ~OIDC_CLIENT_SECRET_FILE~ (or
-   the equivalent new variable) in ~nix/modules/darwin-daemon.nix~ —
-   launchd has no ~LoadCredential~ equivalent.
+3. On Darwin, pass the file path via
+   ~sonify_health_oidc_client_secret_file~ (or the equivalent new
+   variable) in ~nix/modules/darwin-daemon.nix~ — launchd has no
+   ~LoadCredential~ equivalent.  Env-var names follow the
+   POSIX-conformant ~<app>_<flag>~ lowercase convention emitted by
+   ~MergeConfig~; see foundation's ~USAGE.org~ for the rule.

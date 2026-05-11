@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 sonify-health-lib = { workspace = true }
+rust-template-foundation = { workspace = true, features = ["cli"] }
 clap = { workspace = true }
 fundsp = { workspace = true }
 tracing = { workspace = true }

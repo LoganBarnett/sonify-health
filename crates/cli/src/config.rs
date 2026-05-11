@@ -1,21 +1,26 @@
+use crate::command::Command;
+use rust_template_foundation::logging::{LogFormat, LogLevel};
+use rust_template_foundation::MergeConfig;
 use serde::{Deserialize, Serialize};
+use sonify_health_lib::config::ConfigError as LibConfigError;
 use sonify_health_lib::{
-  builtin_library, HeartbeatConfig, LogFormat, LogLevel, Patch, PatchLibrary,
-  PatchOverrides,
+  builtin_library, HeartbeatConfig, Patch, PatchLibrary, PatchOverrides,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 use tokio_listener::ListenerAddress;
 
 // Shared leaf types live in the lib so the cli and server can
 // agree on them without one binary depending on the other.
-// Re-exported here so existing call sites inside cli (and other
-// crates that reach into cli's config) keep compiling unchanged
-// during the workspace split.
-pub use sonify_health_lib::config::{
-  ConfigError, OverrideInfo, SliderRange, SliderRanges,
-};
+// Re-exported here for the websocket / preview_state / remote_source
+// modules that read these types out of `crate::config`.  The lib's
+// `ConfigError` is intentionally *not* re-exported under this name
+// because the `MergeConfig` derive on `Config` (below) emits its own
+// `ConfigError` type in this same module; the lib's rich error type
+// is reachable as `sonify_health_lib::config::ConfigError` (aliased
+// `LibConfigError` inside this module).
+pub use sonify_health_lib::config::{OverrideInfo, SliderRange, SliderRanges};
 
 /// Static configuration for a single Remote Source — the entry the
 /// user writes in their config file or passes on the CLI to declare
@@ -41,7 +46,10 @@ pub struct RemoteSourceConfig {
   pub playback_enabled: bool,
 }
 
-/// Fully resolved OIDC configuration.
+/// Fully resolved OIDC configuration.  `base_url` is captured here
+/// (rather than on `Config` directly) because the OIDC code in the
+/// daemon path consumes the full struct and we don't gain anything
+/// by splitting the four fields across two scopes.
 #[derive(Debug, Clone)]
 pub struct OidcConfig {
   pub base_url: String,
@@ -52,218 +60,215 @@ pub struct OidcConfig {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ConfigFileRaw {
-  log_level: Option<String>,
-  log_format: Option<String>,
-  listen: Option<String>,
-  audio_device: Option<String>,
-  headless: Option<bool>,
-  frontend_path: Option<PathBuf>,
-  #[serde(default)]
-  patches: HashMap<String, toml::Value>,
-  #[serde(default)]
-  heartbeats: Vec<HeartbeatConfig>,
-  #[serde(default)]
-  slider_ranges: SliderRanges,
-  oidc: Option<OidcSectionRaw>,
-  #[serde(default)]
-  sources: Vec<RemoteSourceConfig>,
+pub struct OidcSectionRaw {
+  pub base_url: Option<String>,
+  pub issuer: Option<String>,
+  pub client_id: Option<String>,
+  pub client_secret_file: Option<PathBuf>,
 }
 
+/// CLI-only arguments that are inputs to skip-field resolvers
+/// (`resolve_library`, `resolve_remote_sources`, `resolve_oidc`)
+/// rather than direct fields on `Config`.  Flattened into the
+/// macro-generated `CliRaw` via `extra_cli`.
+#[derive(Debug, clap::Args)]
+pub struct SonifyCliFields {
+  /// Path to a TOML file of patch definitions.  May be repeated;
+  /// last-in wins for overlapping patch names.  The main config
+  /// file always wins over CLI-supplied patch libraries.
+  #[arg(long)]
+  pub patch_library: Vec<PathBuf>,
+
+  /// Declare a Remote Source as `name=url`.  May be repeated.
+  /// Sources from the config file's `[[sources]]` array and these
+  /// CLI flags are merged; names must be unique across the merged
+  /// set, and `localhost` is reserved for the Local Source.
+  #[arg(long, value_name = "NAME=URL")]
+  pub source: Vec<String>,
+
+  /// Base URL of this service (e.g. https://sonify.example.com),
+  /// used to construct the OIDC redirect URI.
+  #[arg(long, env = "sonify_health_base_url")]
+  pub base_url: Option<String>,
+
+  /// OIDC issuer URL for provider discovery.
+  #[arg(long, env = "sonify_health_oidc_issuer")]
+  pub oidc_issuer: Option<String>,
+
+  /// OIDC client ID.
+  #[arg(long, env = "sonify_health_oidc_client_id")]
+  pub oidc_client_id: Option<String>,
+
+  /// Path to a file containing the OIDC client secret.
+  #[arg(long, env = "sonify_health_oidc_client_secret_file")]
+  pub oidc_client_secret_file: Option<PathBuf>,
+}
+
+/// Config-file-only fields that don't appear on `Config` as
+/// merged scalars (because they're collections or composite shapes
+/// that have no useful CLI form, or are inputs to a skip-field
+/// resolver).  Flattened into the macro-generated `ConfigFileRaw`
+/// via `extra_file`.
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct OidcSectionRaw {
-  base_url: Option<String>,
-  issuer: Option<String>,
-  client_id: Option<String>,
-  client_secret_file: Option<PathBuf>,
-}
+pub struct SonifyFileFields {
+  /// User-defined patches.  `toml::Value` because each entry may
+  /// be either a full `Patch` table or an override
+  /// (`overrides = "base"` + delta fields), resolved in
+  /// `resolve_library` / `resolve_overrides`.
+  #[serde(default)]
+  pub patches: HashMap<String, toml::Value>,
 
-impl ConfigFileRaw {
-  fn from_file(path: &Path) -> Result<Self, ConfigError> {
-    let contents = std::fs::read_to_string(path).map_err(|source| {
-      ConfigError::FileRead {
-        path: path.to_path_buf(),
-        source,
-      }
-    })?;
-
-    toml::from_str(&contents).map_err(|source| ConfigError::Parse {
-      path: path.to_path_buf(),
-      source: Box::new(source),
-    })
-  }
-}
-
-#[derive(Debug)]
-pub struct Config {
-  pub log_level: LogLevel,
-  pub log_format: LogFormat,
-  pub listen_address: ListenerAddress,
-  pub audio_device: Option<String>,
-  /// When true, the daemon never opens an audio device and never
-  /// spawns play threads.  Pollers, the WebSocket server, the
-  /// frontend, and metrics keep working — the instance is a pure
-  /// state producer, intended for speakerless servers.
-  pub headless: bool,
-  pub frontend_path: PathBuf,
-  pub library: PatchLibrary,
-  pub overrides: HashMap<String, OverrideInfo>,
+  #[serde(default)]
   pub heartbeats: Vec<HeartbeatConfig>,
+
+  #[serde(default)]
   pub slider_ranges: SliderRanges,
+
+  pub oidc: Option<OidcSectionRaw>,
+
+  #[serde(default)]
+  pub sources: Vec<RemoteSourceConfig>,
+}
+
+#[derive(Debug, Clone, MergeConfig)]
+#[merge_config(
+  app_name = "sonify-health",
+  extra_cli = "SonifyCliFields",
+  extra_file = "SonifyFileFields",
+  extra_error = "sonify_health_lib::config::ConfigError"
+)]
+pub struct Config {
+  #[merge_config(common)]
+  pub log_level: LogLevel,
+  #[merge_config(common)]
+  pub log_format: LogFormat,
+
+  /// Address to listen on: host:port for TCP, /path/to.sock for
+  /// Unix socket, or sd-listen to inherit from systemd.
+  #[merge_config(
+    name = "listen",
+    env,
+    default = "\"127.0.0.1:3000\".to_string()",
+    parse
+  )]
+  pub listen_address: ListenerAddress,
+
+  /// Path to compiled frontend static assets.
+  #[merge_config(env, default = "PathBuf::from(\"frontend/public\")")]
+  pub frontend_path: PathBuf,
+
+  /// Audio device substring for output device selection.  Match is
+  /// case-insensitive against both cpal's device ID and description.
+  #[merge_config(env, default = "None")]
+  pub audio_device: Option<String>,
+
+  /// Run without opening an audio device.  Pollers, WebSocket
+  /// state, frontend, and metrics keep working; intended for
+  /// speakerless servers whose state will be rendered by another
+  /// instance subscribed to this one.
+  #[merge_config(env, default = "false")]
+  pub headless: bool,
+
+  #[merge_config(skip)]
+  pub library: PatchLibrary,
+
+  #[merge_config(skip)]
+  pub overrides: HashMap<String, OverrideInfo>,
+
+  #[merge_config(skip)]
+  pub heartbeats: Vec<HeartbeatConfig>,
+
+  #[merge_config(skip)]
+  pub slider_ranges: SliderRanges,
+
+  #[merge_config(skip)]
   pub oidc: Option<OidcConfig>,
+
+  #[merge_config(skip)]
   pub config_path: Option<PathBuf>,
-  /// Remote source declarations.  CLI `--source` flags are merged
-  /// with the file's `[[sources]]` array (CLI entries appended
-  /// after file entries); name uniqueness is enforced across the
-  /// merged set.
+
+  #[merge_config(skip)]
   pub remote_sources: Vec<RemoteSourceConfig>,
+
+  #[merge_config(subcommand)]
+  pub command: Command,
 }
 
 impl Config {
-  /// Build a validated configuration by merging CLI
-  /// arguments with an optional config file.
-  #[allow(clippy::too_many_arguments)]
-  pub fn from_args(
-    log_level: Option<&str>,
-    log_format: Option<&str>,
-    listen: Option<&str>,
-    frontend_path: Option<&Path>,
-    config_path: Option<&Path>,
-    patch_libraries: &[PathBuf],
-    base_url: Option<&str>,
-    oidc_issuer: Option<&str>,
-    oidc_client_id: Option<&str>,
-    oidc_client_secret_file: Option<&Path>,
-    headless: Option<bool>,
-    remote_source_args: &[String],
-  ) -> Result<Self, ConfigError> {
-    let (file, resolved_config_path) = if let Some(p) = config_path {
-      (ConfigFileRaw::from_file(p)?, Some(p.to_path_buf()))
-    } else {
-      let default = PathBuf::from("config.toml");
-      if default.exists() {
-        (ConfigFileRaw::from_file(&default)?, Some(default))
-      } else {
-        (ConfigFileRaw::default(), None)
-      }
-    };
+  fn resolve_library(
+    cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<PatchLibrary, LibConfigError> {
+    build_library_and_overrides(cli, file).map(|(lib, _)| lib)
+  }
 
-    let log_level = log_level
-      .or(file.log_level.as_deref())
-      .unwrap_or("info")
-      .parse::<LogLevel>()
-      .map_err(|e| ConfigError::Validation(e.to_string()))?;
+  fn resolve_overrides(
+    cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<HashMap<String, OverrideInfo>, LibConfigError> {
+    build_library_and_overrides(cli, file).map(|(_, ovr)| ovr)
+  }
 
-    let log_format = log_format
-      .or(file.log_format.as_deref())
-      .unwrap_or("text")
-      .parse::<LogFormat>()
-      .map_err(|e| ConfigError::Validation(e.to_string()))?;
-
-    let listen_address = listen
-      .or(file.listen.as_deref())
-      .unwrap_or("127.0.0.1:3000")
-      .parse::<ListenerAddress>()
-      .map_err(|e| ConfigError::Validation(e.to_string()))?;
-
-    let frontend_path = frontend_path
-      .map(PathBuf::from)
-      .or(file.frontend_path)
-      .unwrap_or_else(|| PathBuf::from("frontend/public"));
-
-    // Build patch library: builtins, then config patches, then extra
-    // file patches (each layer wins on collision).  Two-pass: first
-    // standalone patches, then override patches that reference them.
-    let mut library = builtin_library();
-    let mut override_entries: Vec<(String, String, toml::Value)> = Vec::new();
-
-    for (name, mut table) in file.patches {
-      if let Some(base_val) =
-        table.as_table_mut().and_then(|t| t.remove("overrides"))
-      {
-        let base = base_val
-          .as_str()
-          .ok_or_else(|| {
-            ConfigError::Validation(format!(
-              "patch {name:?}: 'overrides' must be a string"
-            ))
-          })?
-          .to_string();
-        override_entries.push((name, base, table));
-      } else {
-        let patch: Patch =
-          table.try_into().map_err(|source| ConfigError::PatchParse {
-            name: name.clone(),
-            source: Box::new(source),
-          })?;
-        library.insert(name, patch);
-      }
+  fn resolve_heartbeats(
+    _cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<Vec<HeartbeatConfig>, LibConfigError> {
+    let mut heartbeats = file.extra.heartbeats.clone();
+    for hb in &mut heartbeats {
+      hb.resolve_legacy_continuous();
     }
+    Ok(heartbeats)
+  }
 
-    // Patch library files (CLI flag, repeatable).  Last-in wins
-    // for overlapping names; the main config file's patches (above)
-    // have already been inserted and will be overwritten by library
-    // files.  Config-file patches are re-inserted in the override
-    // pass below, so the main config always wins.
-    for path in patch_libraries {
-      let contents = std::fs::read_to_string(path).map_err(|source| {
-        ConfigError::PatchLibraryRead {
-          path: path.clone(),
-          source,
-        }
-      })?;
-      let extra: HashMap<String, Patch> =
-        toml::from_str(&contents).map_err(|source| {
-          ConfigError::PatchLibraryParse {
-            path: path.clone(),
-            source: Box::new(source),
-          }
-        })?;
-      for (name, patch) in extra {
-        library.insert(name, patch);
-      }
-    }
+  fn resolve_slider_ranges(
+    _cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<SliderRanges, LibConfigError> {
+    Ok(file.extra.slider_ranges.clone())
+  }
 
-    // Second pass: resolve override patches.
-    let mut overrides = HashMap::new();
-    for (name, base, table) in override_entries {
-      if !library.contains_key(&base) {
-        return Err(ConfigError::OverrideBaseMissing { name, base });
-      }
-      if overrides.contains_key(&base) {
-        return Err(ConfigError::OverrideChained { name, base });
-      }
-      let parsed: PatchOverrides =
-        table.try_into().map_err(|source| ConfigError::PatchParse {
-          name: name.clone(),
-          source: Box::new(source),
-        })?;
-      let delta: HashMap<String, f64> = parsed
-        .to_fields()
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-      let resolved = library[&base].clone().with_overrides(&parsed);
-      library.insert(name.clone(), resolved);
-      overrides.insert(name, OverrideInfo { base, delta });
-    }
+  fn resolve_config_path(
+    cli: &CliRaw,
+    _file: &ConfigFileRaw,
+  ) -> Result<Option<PathBuf>, LibConfigError> {
+    Ok(rust_template_foundation::config::find_config_file(
+      "sonify-health",
+      cli.config.as_deref(),
+    ))
+  }
 
-    // OIDC.
-    let oidc_file = file.oidc.unwrap_or_default();
-    let oidc_base = base_url.map(String::from).or(oidc_file.base_url);
-    let oidc_iss = oidc_issuer.map(String::from).or(oidc_file.issuer);
-    let oidc_cid = oidc_client_id.map(String::from).or(oidc_file.client_id);
-    let oidc_sf = oidc_client_secret_file
-      .map(PathBuf::from)
-      .or(oidc_file.client_secret_file);
+  fn resolve_oidc(
+    cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<Option<OidcConfig>, LibConfigError> {
+    let file_oidc = file.extra.oidc.as_ref();
+    let base = cli
+      .extra
+      .base_url
+      .clone()
+      .or_else(|| file_oidc.and_then(|o| o.base_url.clone()));
+    let issuer = cli
+      .extra
+      .oidc_issuer
+      .clone()
+      .or_else(|| file_oidc.and_then(|o| o.issuer.clone()));
+    let client_id = cli
+      .extra
+      .oidc_client_id
+      .clone()
+      .or_else(|| file_oidc.and_then(|o| o.client_id.clone()));
+    let secret_file = cli
+      .extra
+      .oidc_client_secret_file
+      .clone()
+      .or_else(|| file_oidc.and_then(|o| o.client_secret_file.clone()));
 
-    let oidc = match (&oidc_base, &oidc_iss, &oidc_cid) {
-      (None, None, None) if oidc_sf.is_none() => None,
-      (Some(base), Some(iss), Some(cid)) => {
+    match (&base, &issuer, &client_id) {
+      (None, None, None) if secret_file.is_none() => Ok(None),
+      (Some(base_url), Some(iss), Some(cid)) => {
         let secret_file =
-          oidc_sf.or_else(credential_secret_path).ok_or_else(|| {
-            ConfigError::Validation(
+          secret_file.or_else(credential_secret_path).ok_or_else(|| {
+            LibConfigError::Validation(
               "oidc_client_secret_file is required when oidc_issuer and \
                oidc_client_id are set (set it explicitly or run under \
                systemd with LoadCredential)"
@@ -271,29 +276,30 @@ impl Config {
             )
           })?;
 
-        let secret = std::fs::read_to_string(&secret_file)
+        let client_secret = std::fs::read_to_string(&secret_file)
           .map(|s| s.trim().to_string())
-          .map_err(|source| ConfigError::OidcSecretFileRead {
+          .map_err(|source| LibConfigError::OidcSecretFileRead {
             path: secret_file,
             source,
           })?;
-        Some(OidcConfig {
-          base_url: base.clone(),
+
+        Ok(Some(OidcConfig {
+          base_url: base_url.clone(),
           issuer: iss.clone(),
           client_id: cid.clone(),
-          client_secret: secret,
-        })
+          client_secret,
+        }))
       }
       _ => {
         let mut present = Vec::new();
         let mut missing = Vec::new();
         for (name, val) in [
-          ("base_url", oidc_base.is_some()),
-          ("oidc_issuer", oidc_iss.is_some()),
-          ("oidc_client_id", oidc_cid.is_some()),
+          ("base_url", base.is_some()),
+          ("oidc_issuer", issuer.is_some()),
+          ("oidc_client_id", client_id.is_some()),
           (
             "oidc_client_secret_file",
-            oidc_sf.is_some() || credential_secret_path().is_some(),
+            secret_file.is_some() || credential_secret_path().is_some(),
           ),
         ] {
           if val {
@@ -302,32 +308,32 @@ impl Config {
             missing.push(name);
           }
         }
-        return Err(ConfigError::Validation(format!(
+        Err(LibConfigError::Validation(format!(
           "partial OIDC configuration: set all four fields or none. \
            present: [{}], missing: [{}]",
           present.join(", "),
           missing.join(", ")
-        )));
+        )))
       }
-    };
-
-    let mut heartbeats = file.heartbeats;
-    for hb in &mut heartbeats {
-      hb.resolve_legacy_continuous();
     }
+  }
 
-    // Remote sources: file's [[sources]] first, then any CLI
-    // --source flags appended.  Each CLI flag is `name=url`,
-    // splitting on the first `=` so URLs containing `=` survive.
-    let mut remote_sources = file.sources;
-    for raw in remote_source_args {
+  fn resolve_remote_sources(
+    cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<Vec<RemoteSourceConfig>, LibConfigError> {
+    // File entries first, CLI `--source name=url` appended.  The
+    // wire syntax is `name=url`, splitting on the first `=` so URLs
+    // containing `=` (e.g. token query params) survive intact.
+    let mut remote_sources = file.extra.sources.clone();
+    for raw in &cli.extra.source {
       let (name, url) = raw.split_once('=').ok_or_else(|| {
-        ConfigError::Validation(format!(
+        LibConfigError::Validation(format!(
           "--source argument {raw:?} must be of the form name=url"
         ))
       })?;
       if name.is_empty() || url.is_empty() {
-        return Err(ConfigError::Validation(format!(
+        return Err(LibConfigError::Validation(format!(
           "--source argument {raw:?} has empty name or url"
         )));
       }
@@ -337,49 +343,126 @@ impl Config {
         playback_enabled: false,
       });
     }
-    // Mirrors preview_state::LOCAL_SOURCE_NAME — kept inline to
-    // avoid a cross-module constant reference for a value that
-    // will never change.
+    // Inline rather than referencing preview_state::LOCAL_SOURCE_NAME
+    // — duplicating a never-changing string saves a cross-module
+    // dependency and keeps `config.rs` from pulling in runtime types.
     const RESERVED_LOCAL_NAME: &str = "localhost";
     let mut seen = std::collections::HashSet::new();
     for s in &remote_sources {
       if s.name == RESERVED_LOCAL_NAME {
-        return Err(ConfigError::Validation(format!(
+        return Err(LibConfigError::Validation(format!(
           "remote source name {:?} is reserved for the Local Source",
           s.name
         )));
       }
       if !seen.insert(s.name.as_str()) {
-        return Err(ConfigError::Validation(format!(
+        return Err(LibConfigError::Validation(format!(
           "remote source name {:?} is declared more than once",
           s.name
         )));
       }
     }
-
-    Ok(Config {
-      log_level,
-      log_format,
-      listen_address,
-      audio_device: file.audio_device,
-      headless: headless.or(file.headless).unwrap_or(false),
-      frontend_path,
-      library,
-      overrides,
-      heartbeats,
-      slider_ranges: file.slider_ranges,
-      oidc,
-      config_path: resolved_config_path,
-      remote_sources,
-    })
+    Ok(remote_sources)
   }
 }
 
+/// Build the patch library and override map from the merged config
+/// inputs.  Called twice during `from_cli_and_file` (once for the
+/// library resolver, once for the overrides resolver) — the walk is
+/// pure compute over already-deserialized data, so the duplication is
+/// cheap and avoids inventing a shared state cell to memoize across
+/// two macro-driven resolver calls.
+fn build_library_and_overrides(
+  cli: &CliRaw,
+  file: &ConfigFileRaw,
+) -> Result<(PatchLibrary, HashMap<String, OverrideInfo>), LibConfigError> {
+  let mut library = builtin_library();
+  let mut override_entries: Vec<(String, String, toml::Value)> = Vec::new();
+
+  // First pass: separate standalone patches from override patches.
+  for (name, mut table) in file.extra.patches.clone() {
+    if let Some(base_val) =
+      table.as_table_mut().and_then(|t| t.remove("overrides"))
+    {
+      let base = base_val
+        .as_str()
+        .ok_or_else(|| {
+          LibConfigError::Validation(format!(
+            "patch {name:?}: 'overrides' must be a string"
+          ))
+        })?
+        .to_string();
+      override_entries.push((name, base, table));
+    } else {
+      let patch: Patch =
+        table
+          .try_into()
+          .map_err(|source| LibConfigError::PatchParse {
+            name: name.clone(),
+            source: Box::new(source),
+          })?;
+      library.insert(name, patch);
+    }
+  }
+
+  // Patch library files (CLI `--patch-library`, repeatable).
+  // Last-in wins for overlapping names.  Config-file patches are
+  // re-inserted in the override pass below, so the main config
+  // always wins over CLI-supplied libraries.
+  for path in &cli.extra.patch_library {
+    let contents = std::fs::read_to_string(path).map_err(|source| {
+      LibConfigError::PatchLibraryRead {
+        path: path.clone(),
+        source,
+      }
+    })?;
+    let extra: HashMap<String, Patch> =
+      toml::from_str(&contents).map_err(|source| {
+        LibConfigError::PatchLibraryParse {
+          path: path.clone(),
+          source: Box::new(source),
+        }
+      })?;
+    for (name, patch) in extra {
+      library.insert(name, patch);
+    }
+  }
+
+  // Second pass: resolve override patches against the now-populated
+  // library.
+  let mut overrides = HashMap::new();
+  for (name, base, table) in override_entries {
+    if !library.contains_key(&base) {
+      return Err(LibConfigError::OverrideBaseMissing { name, base });
+    }
+    if overrides.contains_key(&base) {
+      return Err(LibConfigError::OverrideChained { name, base });
+    }
+    let parsed: PatchOverrides =
+      table
+        .try_into()
+        .map_err(|source| LibConfigError::PatchParse {
+          name: name.clone(),
+          source: Box::new(source),
+        })?;
+    let delta: HashMap<String, f64> = parsed
+      .to_fields()
+      .into_iter()
+      .map(|(k, v)| (k.to_string(), v))
+      .collect();
+    let resolved = library[&base].clone().with_overrides(&parsed);
+    library.insert(name.clone(), resolved);
+    overrides.insert(name, OverrideInfo { base, delta });
+  }
+
+  Ok((library, overrides))
+}
+
 /// Serialize the current runtime state to a TOML config string that
-/// can be loaded back via `Config::from_args`.  Override patches emit
-/// the compact `overrides = "base"` form with only delta fields;
-/// standalone patches serialize as full `Patch` tables.  Builtin
-/// patches are omitted.
+/// can be loaded back via `Config::from_cli_and_file`.  Override
+/// patches emit the compact `overrides = "base"` form with only delta
+/// fields; standalone patches serialize as full `Patch` tables.
+/// Builtin patches are omitted.
 pub fn build_save_toml(
   library: &PatchLibrary,
   overrides: &HashMap<String, OverrideInfo>,
@@ -397,7 +480,6 @@ pub fn build_save_toml(
       continue;
     }
     if let Some(info) = overrides.get(name) {
-      // Override patch: emit compact form.
       let mut tbl = toml::Table::new();
       tbl.insert(
         "overrides".to_string(),
@@ -408,7 +490,6 @@ pub fn build_save_toml(
       }
       patches_table.insert(name.clone(), toml::Value::Table(tbl));
     } else {
-      // Standalone patch: full serialization.
       let val = toml::Value::try_from(patch)
         .map_err(|e| ConfigSaveError::PatchSerialize(name.clone(), e))?;
       patches_table.insert(name.clone(), val);
@@ -658,15 +739,74 @@ fn credential_secret_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+  #![allow(clippy::unwrap_used)]
   use super::*;
+  use clap::Parser;
   use sonify_health_lib::heartbeat_config::Playback;
   use sonify_health_lib::probe::ResultMode;
-  use sonify_health_lib::transition::{DiscreteState, Transition};
-  use sonify_health_lib::NoteConfig;
+
+  /// Build a `Config` by writing the given TOML to a tempfile and
+  /// invoking the macro-generated `from_cli_and_file` with
+  /// `--config <path>`.  Subcommand defaults to `daemon` because
+  /// the `Command` field is required and the choice is irrelevant
+  /// for these tests.
+  fn config_from_toml(toml_str: &str) -> Result<Config, ConfigError> {
+    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    std::fs::write(tmp.path(), toml_str).unwrap();
+    let cli = CliRaw::try_parse_from([
+      "sonify-health",
+      "--config",
+      tmp.path().to_str().unwrap(),
+      "daemon",
+    ])
+    .unwrap();
+    Config::from_cli_and_file(cli)
+  }
+
+  /// Build a `Config` with no config file and no extra CLI args
+  /// beyond the bare subcommand.
+  fn empty_config() -> Result<Config, ConfigError> {
+    let cli = CliRaw::try_parse_from(["sonify-health", "daemon"]).unwrap();
+    Config::from_cli_and_file(cli)
+  }
+
+  /// Build a `Config` from the given TOML plus a list of
+  /// `--source name=url` CLI flags.
+  fn config_from_toml_and_sources(
+    toml_str: &str,
+    sources: &[&str],
+  ) -> Result<Config, ConfigError> {
+    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+    std::fs::write(tmp.path(), toml_str).unwrap();
+    let mut argv = vec![
+      "sonify-health".to_string(),
+      "--config".to_string(),
+      tmp.path().to_str().unwrap().to_string(),
+    ];
+    for s in sources {
+      argv.push("--source".to_string());
+      argv.push((*s).to_string());
+    }
+    argv.push("daemon".to_string());
+    let cli = CliRaw::try_parse_from(argv).unwrap();
+    Config::from_cli_and_file(cli)
+  }
+
+  /// Build a `Config` from CLI args only (no config file).
+  fn config_from_sources(sources: &[&str]) -> Result<Config, ConfigError> {
+    let mut argv = vec!["sonify-health".to_string()];
+    for s in sources {
+      argv.push("--source".to_string());
+      argv.push((*s).to_string());
+    }
+    argv.push("daemon".to_string());
+    let cli = CliRaw::try_parse_from(argv).unwrap();
+    Config::from_cli_and_file(cli)
+  }
 
   #[test]
   fn heartbeats_section_parses() {
-    let toml = r#"
+    let toml_str = r#"
       [[heartbeats]]
       name = "gateway"
       command = "ping -c 1 8.8.8.8"
@@ -701,16 +841,16 @@ mod tests {
       patches = ["warm", "sharp"]
     "#;
 
-    let raw: ConfigFileRaw = toml::from_str(toml).unwrap();
-    assert_eq!(raw.heartbeats.len(), 2);
-    assert_eq!(raw.heartbeats[0].name, "gateway");
-    assert_eq!(raw.heartbeats[0].result_mode, ResultMode::ExitCode);
-    assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
-    assert_eq!(raw.heartbeats[0].notes.len(), 1);
-    assert_eq!(raw.heartbeats[1].name, "cpu");
-    assert_eq!(raw.heartbeats[1].result_mode, ResultMode::Stdout);
-    assert_eq!(raw.heartbeats[1].playback, Playback::Continuous);
-    assert!((raw.heartbeats[1].notes[0].volume - 0.2).abs() < f64::EPSILON);
+    let config = config_from_toml(toml_str).unwrap();
+    assert_eq!(config.heartbeats.len(), 2);
+    assert_eq!(config.heartbeats[0].name, "gateway");
+    assert_eq!(config.heartbeats[0].result_mode, ResultMode::ExitCode);
+    assert_eq!(config.heartbeats[0].playback, Playback::Clock);
+    assert_eq!(config.heartbeats[0].notes.len(), 1);
+    assert_eq!(config.heartbeats[1].name, "cpu");
+    assert_eq!(config.heartbeats[1].result_mode, ResultMode::Stdout);
+    assert_eq!(config.heartbeats[1].playback, Playback::Continuous);
+    assert!((config.heartbeats[1].notes[0].volume - 0.2).abs() < f64::EPSILON);
   }
 
   #[test]
@@ -733,10 +873,8 @@ mod tests {
       patch = "sine"
     "#;
 
-    let mut raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
-    assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
-    raw.heartbeats[0].resolve_legacy_continuous();
-    assert_eq!(raw.heartbeats[0].playback, Playback::Continuous);
+    let config = config_from_toml(toml_str).unwrap();
+    assert_eq!(config.heartbeats[0].playback, Playback::Continuous);
   }
 
   #[test]
@@ -758,8 +896,8 @@ mod tests {
       patch = "sine"
     "#;
 
-    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
-    assert_eq!(raw.heartbeats[0].playback, Playback::Clock);
+    let config = config_from_toml(toml_str).unwrap();
+    assert_eq!(config.heartbeats[0].playback, Playback::Clock);
   }
 
   #[test]
@@ -772,9 +910,8 @@ mod tests {
       sine_ratio = 0.0
     "#;
 
-    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
-    assert_eq!(raw.patches.len(), 1);
-    let p: Patch = raw.patches["my-tone"].clone().try_into().unwrap();
+    let config = config_from_toml(toml_str).unwrap();
+    let p = &config.library["my-tone"];
     assert_eq!(p.freq, 523.0);
     assert_eq!(p.duration, 0.4);
     assert_eq!(p.saw_ratio, 1.0);
@@ -795,28 +932,7 @@ mod tests {
       freq = 880.0
     "#;
 
-    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
-    assert_eq!(raw.patches.len(), 2);
-
-    // Verify via full config parsing that the override resolves.
-    let cfg_path = std::env::temp_dir().join("sonify_test_override.toml");
-    std::fs::write(&cfg_path, toml_str).unwrap();
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(cfg_path.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
-    std::fs::remove_file(&cfg_path).ok();
+    let config = config_from_toml(toml_str).unwrap();
     let hi = &config.library["hi-tone"];
     assert_eq!(hi.freq, 880.0);
     // Inherited from base.
@@ -828,11 +944,7 @@ mod tests {
 
   #[test]
   fn round_trip_remote_sources() {
-    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-    let cfg_path = tmp.path().to_path_buf();
-    std::fs::write(
-      &cfg_path,
-      r#"
+    let toml_str = r#"
 [[sources]]
 name = "prod-db-1"
 url = "wss://db1.example/ws"
@@ -841,25 +953,8 @@ url = "wss://db1.example/ws"
 name = "edge-node-2"
 url = "ws://edge2.example/ws"
 playback_enabled = true
-"#,
-    )
-    .unwrap();
-    let original = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(cfg_path.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
-    std::fs::remove_file(&cfg_path).ok();
+"#;
+    let original = config_from_toml(toml_str).unwrap();
 
     let saved = build_save_toml(
       &original.library,
@@ -869,37 +964,13 @@ playback_enabled = true
       &original.remote_sources,
     )
     .unwrap();
-
-    let tmp2 = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-    let cfg2 = tmp2.path().to_path_buf();
-    std::fs::write(&cfg2, saved).unwrap();
-    let reloaded = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(cfg2.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
-    std::fs::remove_file(&cfg2).ok();
-
+    let reloaded = config_from_toml(&saved).unwrap();
     assert_eq!(original.remote_sources, reloaded.remote_sources);
   }
 
   #[test]
   fn config_file_sources_section_parses() {
-    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-    let cfg_path = tmp.path().to_path_buf();
-    std::fs::write(
-      &cfg_path,
-      r#"
+    let toml_str = r#"
 [[sources]]
 name = "prod-db-1"
 url = "wss://db1.example/ws"
@@ -908,25 +979,8 @@ url = "wss://db1.example/ws"
 name = "edge-node-2"
 url = "ws://edge2.example/ws"
 playback_enabled = true
-"#,
-    )
-    .unwrap();
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(cfg_path.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
-    std::fs::remove_file(&cfg_path).ok();
+"#;
+    let config = config_from_toml(toml_str).unwrap();
     assert_eq!(config.remote_sources.len(), 2);
     assert_eq!(config.remote_sources[0].name, "prod-db-1");
     assert!(!config.remote_sources[0].playback_enabled);
@@ -936,54 +990,21 @@ playback_enabled = true
 
   #[test]
   fn cli_and_file_sources_are_merged_and_validated_together() {
-    let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-    let cfg_path = tmp.path().to_path_buf();
-    std::fs::write(
-      &cfg_path,
-      r#"
+    let toml_str = r#"
 [[sources]]
 name = "from-file"
 url = "ws://file/ws"
-"#,
-    )
-    .unwrap();
-    let err = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(cfg_path.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &["from-file=ws://cli/ws".to_string()],
-    )
-    .unwrap_err();
-    std::fs::remove_file(&cfg_path).ok();
+"#;
+    let err =
+      config_from_toml_and_sources(toml_str, &["from-file=ws://cli/ws"])
+        .unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("more than once"), "{msg}");
   }
 
   #[test]
   fn cli_source_flag_appends_remote_source() {
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &["prod-db-1=ws://db1/ws".to_string()],
-    )
-    .unwrap();
+    let config = config_from_sources(&["prod-db-1=ws://db1/ws"]).unwrap();
     assert_eq!(config.remote_sources.len(), 1);
     let s = &config.remote_sources[0];
     assert_eq!(s.name, "prod-db-1");
@@ -993,63 +1014,23 @@ url = "ws://file/ws"
 
   #[test]
   fn cli_source_flag_rejects_missing_equals() {
-    let err = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &["malformed".to_string()],
-    )
-    .unwrap_err();
+    let err = config_from_sources(&["malformed"]).unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("name=url"), "{msg}");
   }
 
   #[test]
   fn remote_source_named_localhost_is_rejected() {
-    let err = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &["localhost=ws://elsewhere/ws".to_string()],
-    )
-    .unwrap_err();
+    let err =
+      config_from_sources(&["localhost=ws://elsewhere/ws"]).unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("reserved"), "{msg}");
   }
 
   #[test]
   fn remote_source_duplicate_name_is_rejected() {
-    let err = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &["dup=ws://a/ws".to_string(), "dup=ws://b/ws".to_string()],
-    )
-    .unwrap_err();
+    let err =
+      config_from_sources(&["dup=ws://a/ws", "dup=ws://b/ws"]).unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("more than once"), "{msg}");
   }
@@ -1058,21 +1039,7 @@ url = "ws://file/ws"
   fn cli_source_url_with_equals_survives_split() {
     // splitn(2, '=') keeps the rest of the URL intact even when it
     // contains '=' (e.g. a query parameter).
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &["q=ws://host/ws?token=abc".to_string()],
-    )
-    .unwrap();
+    let config = config_from_sources(&["q=ws://host/ws?token=abc"]).unwrap();
     assert_eq!(config.remote_sources.len(), 1);
     assert_eq!(config.remote_sources[0].name, "q");
     assert_eq!(config.remote_sources[0].url, "ws://host/ws?token=abc");
@@ -1080,41 +1047,13 @@ url = "ws://file/ws"
 
   #[test]
   fn missing_heartbeats_defaults() {
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
+    let config = empty_config().unwrap();
     assert!(config.heartbeats.is_empty());
   }
 
   #[test]
   fn library_includes_builtins() {
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
+    let config = empty_config().unwrap();
     assert!(config.library.contains_key("sine"));
     assert!(config.library.contains_key("alarm"));
   }
@@ -1142,231 +1081,10 @@ url = "ws://file/ws"
     }
   }
 
-  #[test]
-  fn save_round_trip() {
-    // Build a config with a standalone patch, an override, a
-    // heartbeat, and non-default slider ranges.
-    let toml_str = r#"
-      [patches.my-base]
-      freq = 440.0
-      duration = 0.5
-
-      [patches.my-override]
-      overrides = "my-base"
-      freq = 880.0
-
-      [slider_ranges.master_volume]
-      min = 0.0
-      max = 2.0
-      step = 0.05
-
-      [[heartbeats]]
-      name = "test-hb"
-      command = "echo 0"
-      result_mode = "exit-code"
-      playback = "continuous"
-
-      [[heartbeats.notes]]
-      volume = 0.4
-
-      [heartbeats.notes.transition]
-      type = "discrete"
-
-      [[heartbeats.notes.transition.states]]
-      threshold = 0.5
-      patch = "my-base"
-
-      [[heartbeats.notes.transition.states]]
-      threshold = 1.01
-      patch = "my-override"
-    "#;
-
-    let tmp = std::env::temp_dir().join("sonify_save_rt.toml");
-    std::fs::write(&tmp, toml_str).unwrap();
-
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(tmp.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
-
-    // Mutate: change a param on the override delta and on a
-    // standalone patch.
-    let mut library = config.library.clone();
-    let mut overrides = config.overrides.clone();
-    library.get_mut("my-base").unwrap().duration = 0.8;
-    library.get_mut("my-override").unwrap().duration = 0.8;
-    overrides
-      .get_mut("my-override")
-      .unwrap()
-      .delta
-      .insert("amplitude".to_string(), 0.9);
-    library.get_mut("my-override").unwrap().amplitude = 0.9;
-
-    // Serialize and reload.
-    let saved = build_save_toml(
-      &library,
-      &overrides,
-      &config.heartbeats,
-      &config.slider_ranges,
-      &config.remote_sources,
-    )
-    .unwrap();
-
-    let tmp2 = std::env::temp_dir().join("sonify_save_rt2.toml");
-    std::fs::write(&tmp2, &saved).unwrap();
-
-    let reloaded = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(tmp2.as_path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
-
-    // Verify patches.
-    assert_eq!(reloaded.library["my-base"].freq, 440.0);
-    assert_eq!(reloaded.library["my-base"].duration, 0.8);
-    assert_eq!(reloaded.library["my-override"].freq, 880.0);
-    assert_eq!(reloaded.library["my-override"].amplitude, 0.9);
-    // Inherited duration from mutated base.
-    assert_eq!(reloaded.library["my-override"].duration, 0.8);
-
-    // Verify override delta.
-    assert!(reloaded.overrides.contains_key("my-override"));
-    assert_eq!(reloaded.overrides["my-override"].base, "my-base");
-    assert!(reloaded.overrides["my-override"].delta.contains_key("freq"));
-    assert!(reloaded.overrides["my-override"]
-      .delta
-      .contains_key("amplitude"));
-
-    // Verify heartbeat.
-    assert_eq!(reloaded.heartbeats.len(), 1);
-    assert_eq!(reloaded.heartbeats[0].name, "test-hb");
-    assert_eq!(reloaded.heartbeats[0].playback, Playback::Continuous);
-
-    // Verify slider ranges.
-    assert_eq!(reloaded.slider_ranges.master_volume.max, 2.0);
-    assert_eq!(reloaded.slider_ranges.master_volume.step, 0.05);
-
-    std::fs::remove_file(&tmp).ok();
-    std::fs::remove_file(&tmp2).ok();
-  }
-
-  #[test]
-  fn config_writable_flag() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let tmp = std::env::temp_dir().join("sonify_writable_test.toml");
-    std::fs::write(&tmp, "").unwrap();
-
-    // Make read-only.
-    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
-    perms.set_mode(0o444);
-    std::fs::set_permissions(&tmp, perms).unwrap();
-
-    let readonly_flag =
-      std::fs::metadata(&tmp).is_ok_and(|m| !m.permissions().readonly());
-    assert!(!readonly_flag, "Should be non-writable");
-
-    // Make writable again.
-    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
-    perms.set_mode(0o644);
-    std::fs::set_permissions(&tmp, perms).unwrap();
-
-    let writable_flag =
-      std::fs::metadata(&tmp).is_ok_and(|m| !m.permissions().readonly());
-    assert!(writable_flag, "Should be writable");
-
-    std::fs::remove_file(&tmp).ok();
-  }
-
-  #[test]
-  fn crossfade_ms_parses_from_toml() {
-    let toml_str = r#"
-      [[heartbeats]]
-      name = "hb"
-      command = "echo 0"
-      result_mode = "stdout"
-      crossfade_ms = 200.0
-
-      [[heartbeats.notes]]
-      volume = 0.3
-
-      [heartbeats.notes.transition]
-      type = "discrete"
-
-      [[heartbeats.notes.transition.states]]
-      threshold = 1.01
-      patch = "sine"
-    "#;
-
-    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
-    assert!((raw.heartbeats[0].crossfade_ms - 200.0).abs() < f64::EPSILON);
-  }
-
-  #[test]
-  fn crossfade_ms_defaults() {
-    let toml_str = r#"
-      [[heartbeats]]
-      name = "hb"
-      command = "echo 0"
-      result_mode = "stdout"
-
-      [[heartbeats.notes]]
-      volume = 0.3
-
-      [heartbeats.notes.transition]
-      type = "discrete"
-
-      [[heartbeats.notes.transition.states]]
-      threshold = 1.01
-      patch = "sine"
-    "#;
-
-    let raw: ConfigFileRaw = toml::from_str(toml_str).unwrap();
-    assert!((raw.heartbeats[0].crossfade_ms - 6.0).abs() < f64::EPSILON);
-  }
-
   /// Load a TOML config, serialize via build_save_toml, reload, and
   /// assert that every serializable field survives the round-trip.
   fn assert_config_round_trip(toml_str: &str) {
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(tmp.path(), toml_str).unwrap();
-
-    let original = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(tmp.path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
+    let original = config_from_toml(toml_str).unwrap();
 
     let saved = build_save_toml(
       &original.library,
@@ -1377,24 +1095,7 @@ url = "ws://file/ws"
     )
     .unwrap();
 
-    let tmp2 = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(tmp2.path(), &saved).unwrap();
-
-    let reloaded = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(tmp2.path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
+    let reloaded = config_from_toml(&saved).unwrap();
 
     // Compare user-defined patches (exclude builtins that weren't
     // in the original config and thus aren't exported).
@@ -1592,98 +1293,77 @@ url = "ws://file/ws"
   }
 
   #[test]
-  fn round_trip_with_mutations() {
+  fn crossfade_ms_parses_from_toml() {
     let toml_str = r#"
-      [patches.my-patch]
-      freq = 440.0
-      duration = 0.5
-
       [[heartbeats]]
-      name = "test"
+      name = "hb"
       command = "echo 0"
-      result_mode = "exit-code"
+      result_mode = "stdout"
+      crossfade_ms = 200.0
 
       [[heartbeats.notes]]
-      volume = 0.4
+      volume = 0.3
 
       [heartbeats.notes.transition]
       type = "discrete"
 
       [[heartbeats.notes.transition.states]]
       threshold = 1.01
-      patch = "my-patch"
+      patch = "sine"
     "#;
 
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(tmp.path(), toml_str).unwrap();
+    let config = config_from_toml(toml_str).unwrap();
+    assert!((config.heartbeats[0].crossfade_ms - 200.0).abs() < f64::EPSILON);
+  }
 
-    let config = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(tmp.path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
+  #[test]
+  fn crossfade_ms_defaults() {
+    let toml_str = r#"
+      [[heartbeats]]
+      name = "hb"
+      command = "echo 0"
+      result_mode = "stdout"
 
-    // Mutate: change patch params, note volume, add a note.
-    let mut library = config.library.clone();
-    library.get_mut("my-patch").unwrap().freq = 550.0;
-    library.get_mut("my-patch").unwrap().detune = 10.0;
+      [[heartbeats.notes]]
+      volume = 0.3
 
-    let mut heartbeats = config.heartbeats.clone();
-    heartbeats[0].notes[0].volume = 0.8;
-    heartbeats[0].notes.push(NoteConfig {
-      transition: Transition::Discrete {
-        states: vec![DiscreteState {
-          threshold: 1.01,
-          patch: "sine".to_string(),
-        }],
-      },
-      volume: 0.2,
-      offset: 0.3,
-    });
+      [heartbeats.notes.transition]
+      type = "discrete"
 
-    let saved = build_save_toml(
-      &library,
-      &config.overrides,
-      &heartbeats,
-      &config.slider_ranges,
-      &config.remote_sources,
-    )
-    .unwrap();
+      [[heartbeats.notes.transition.states]]
+      threshold = 1.01
+      patch = "sine"
+    "#;
 
-    let tmp2 = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(tmp2.path(), &saved).unwrap();
+    let config = config_from_toml(toml_str).unwrap();
+    assert!((config.heartbeats[0].crossfade_ms - 6.0).abs() < f64::EPSILON);
+  }
 
-    let reloaded = Config::from_args(
-      None,
-      None,
-      None,
-      None,
-      Some(tmp2.path()),
-      &[],
-      None,
-      None,
-      None,
-      None,
-      None,
-      &[],
-    )
-    .unwrap();
+  #[test]
+  fn config_writable_flag() {
+    use std::os::unix::fs::PermissionsExt;
 
-    assert_eq!(reloaded.library["my-patch"].freq, 550.0);
-    assert_eq!(reloaded.library["my-patch"].detune, 10.0);
-    assert_eq!(reloaded.heartbeats[0].notes.len(), 2);
-    assert_eq!(reloaded.heartbeats[0].notes[0].volume, 0.8);
-    assert_eq!(reloaded.heartbeats[0].notes[1].volume, 0.2);
-    assert_eq!(reloaded.heartbeats[0].notes[1].offset, 0.3);
+    let tmp = std::env::temp_dir().join("sonify_writable_test.toml");
+    std::fs::write(&tmp, "").unwrap();
+
+    // Make read-only.
+    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
+    perms.set_mode(0o444);
+    std::fs::set_permissions(&tmp, perms).unwrap();
+
+    let readonly_flag =
+      std::fs::metadata(&tmp).is_ok_and(|m| !m.permissions().readonly());
+    assert!(!readonly_flag, "Should be non-writable");
+
+    // Make writable again.
+    let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
+    perms.set_mode(0o644);
+    std::fs::set_permissions(&tmp, perms).unwrap();
+
+    let writable_flag =
+      std::fs::metadata(&tmp).is_ok_and(|m| !m.permissions().readonly());
+    assert!(writable_flag, "Should be writable");
+
+    std::fs::remove_file(&tmp).ok();
   }
 }

@@ -2,7 +2,7 @@ use sonify_health_lib::{Patch, PatchLibrary, PatchOverrides};
 
 /// CLI patch overrides shared by the `preview` and `print`
 /// subcommands.
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 pub struct CliPatchOverrides {
   /// Name of a library patch to use as the base.
   #[arg(long, default_value = "sine", help_heading = "Patch")]

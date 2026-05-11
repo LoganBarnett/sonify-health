@@ -3,11 +3,12 @@ mod print;
 mod systemd;
 
 use sonify_health_cli::{
-  auth, config, daemon, metrics, patch_args, preview_state, web_base,
+  auth, command, config, daemon, metrics, patch_args, preview_state, web_base,
 };
 
 use axum::{middleware, routing::get, Router};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
+use command::{Command, PrintFormat};
 use config::{Config, ConfigError};
 use daemon::DaemonError;
 use logging::init_logging;
@@ -26,6 +27,10 @@ use tower_http::trace::TraceLayer;
 use tower_sessions::{cookie::SameSite, MemoryStore, SessionManagerLayer};
 use tracing::{debug, info};
 use web_base::AppState;
+
+/// CLI args parser — alias for the macro-generated `CliRaw`.  The
+/// `Config::from_cli_and_file` entry point consumes one of these.
+type Cli = <Config as rust_template_foundation::CliApp>::CliArgs;
 
 #[derive(Debug, Error)]
 enum ApplicationError {
@@ -95,104 +100,6 @@ impl From<ConfigError> for ApplicationError {
   }
 }
 
-#[derive(Parser)]
-#[command(
-  name = "sonify-health",
-  author,
-  version,
-  about = "Infrastructure sonification daemon and CLI"
-)]
-struct Cli {
-  #[arg(long, env = "LOG_LEVEL")]
-  log_level: Option<String>,
-
-  #[arg(long, env = "LOG_FORMAT")]
-  log_format: Option<String>,
-
-  #[arg(long, env = "LISTEN")]
-  listen: Option<String>,
-
-  #[arg(long, env = "FRONTEND_PATH")]
-  frontend_path: Option<std::path::PathBuf>,
-
-  #[arg(short, long, env = "CONFIG_FILE")]
-  config: Option<std::path::PathBuf>,
-
-  /// Path to a TOML file of patch definitions.  May be repeated;
-  /// last-in wins for overlapping patch names.  The main config
-  /// file always wins over CLI-supplied patch libraries.
-  #[arg(long)]
-  patch_library: Vec<std::path::PathBuf>,
-
-  /// Base URL of this service (e.g. https://sonify.example.com),
-  /// used to construct the OIDC redirect URI.
-  #[arg(long, env = "BASE_URL")]
-  base_url: Option<String>,
-
-  /// OIDC issuer URL for provider discovery.
-  #[arg(long, env = "OIDC_ISSUER")]
-  oidc_issuer: Option<String>,
-
-  /// OIDC client ID.
-  #[arg(long, env = "OIDC_CLIENT_ID")]
-  oidc_client_id: Option<String>,
-
-  /// Path to a file containing the OIDC client secret.
-  #[arg(long, env = "OIDC_CLIENT_SECRET_FILE")]
-  oidc_client_secret_file: Option<std::path::PathBuf>,
-
-  /// Run without opening an audio device.  Polls heartbeats and
-  /// serves state over the WebSocket as usual, but spawns no play
-  /// threads.  Intended for speakerless servers whose state will
-  /// be rendered by another instance subscribed to this one.
-  #[arg(long, env = "HEADLESS")]
-  headless: bool,
-
-  /// Declare a Remote Source as `name=url`.  May be repeated.
-  /// Sources from the config file's `[[sources]]` array and these
-  /// CLI flags are merged; names must be unique across the merged
-  /// set, and `localhost` is reserved for the Local Source.
-  #[arg(long, value_name = "NAME=URL")]
-  source: Vec<String>,
-
-  #[command(subcommand)]
-  command: Command,
-}
-
-#[derive(Clone, Debug, ValueEnum)]
-enum PrintFormat {
-  Toml,
-  Nix,
-  Cli,
-}
-
-#[derive(Subcommand)]
-enum Command {
-  /// Preview a named patch from the library.
-  Preview {
-    /// Play continuously until interrupted (Ctrl-C).
-    #[arg(long)]
-    continuous: bool,
-
-    #[command(flatten)]
-    patch: CliPatchOverrides,
-  },
-
-  /// Print the patch library in a paste-ready format (TOML, Nix, or
-  /// CLI flags).
-  Print {
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = PrintFormat::Toml)]
-    format: PrintFormat,
-
-    #[command(flatten)]
-    patch: CliPatchOverrides,
-  },
-
-  /// Run as a long-lived daemon producing heartbeat audio.
-  Daemon,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), ApplicationError> {
   // rustls 0.23 requires a process-level CryptoProvider to be
@@ -214,24 +121,7 @@ async fn main() -> Result<(), ApplicationError> {
   }
 
   let cli = Cli::parse();
-  // Only forward the CLI flag when explicitly set; clap's `bool`
-  // can't distinguish "absent" from "false", so we use `Some(true)`
-  // when present and let the config file or default decide otherwise.
-  let cli_headless = if cli.headless { Some(true) } else { None };
-  let config = Config::from_args(
-    cli.log_level.as_deref(),
-    cli.log_format.as_deref(),
-    cli.listen.as_deref(),
-    cli.frontend_path.as_deref(),
-    cli.config.as_deref(),
-    &cli.patch_library,
-    cli.base_url.as_deref(),
-    cli.oidc_issuer.as_deref(),
-    cli.oidc_client_id.as_deref(),
-    cli.oidc_client_secret_file.as_deref(),
-    cli_headless,
-    &cli.source,
-  )?;
+  let config = Config::from_cli_and_file(cli)?;
 
   init_logging(config.log_level, config.log_format);
 
@@ -245,12 +135,12 @@ async fn main() -> Result<(), ApplicationError> {
     "Resolved configuration"
   );
 
-  match cli.command {
+  match &config.command {
     Command::Preview { continuous, patch } => {
-      run_preview(&config, &patch, continuous)
+      run_preview(&config, patch, *continuous)
     }
     Command::Print { format, patch } => {
-      run_print(&config, &patch, format);
+      run_print(&config, patch, format.clone());
       Ok(())
     }
     Command::Daemon => run_daemon(&config).await,
@@ -377,7 +267,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     preview
       .add_remote_source(rs.name.clone(), rs.url.clone())
       .map_err(|e| {
-        ApplicationError::from(config::ConfigError::Validation(format!("{e}")))
+        ApplicationError::from(ConfigError::Validation(format!("{e}")))
       })?;
     if let Some(source) = preview.source_by_name(&rs.name) {
       if let preview_state::SourceKind::Remote {
