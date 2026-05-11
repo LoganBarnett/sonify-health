@@ -77,7 +77,7 @@ fn is_unrecoverable(error: &tungstenite::Error) -> bool {
 
 /// The subset of a remote `state` snapshot the mirror cares about.
 /// Fields the mirror does not consume (patch_params, muted,
-/// master_volume, config_writable, config_path, headless) are
+/// master_volume, config_writable, config_path_resolved, headless) are
 /// silently ignored — there is no `deny_unknown_fields` here so the
 /// remote can grow new fields without breaking older subscribers.
 #[derive(Debug, Deserialize)]

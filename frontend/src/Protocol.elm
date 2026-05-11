@@ -194,7 +194,7 @@ type ServerMsg
         , sliderRanges : SliderRanges
         , overrides : Dict String OverrideInfo
         , configWritable : Bool
-        , configPath : Maybe String
+        , configPathResolved : Maybe String
         , headless : Bool
         , sources : List SourceInfo
         }
@@ -346,7 +346,7 @@ stateDecoder =
                     , sliderRanges = sr
                     , overrides = ovr
                     , configWritable = cw
-                    , configPath = cp
+                    , configPathResolved = cp
                     , headless = hl
                     , sources = srcs
                     }
@@ -366,7 +366,7 @@ stateDecoder =
                         , D.succeed False
                         ]
                     )
-                    (D.maybe (D.field "config_path" D.string))
+                    (D.maybe (D.field "config_path_resolved" D.string))
                     (D.oneOf
                         [ D.field "headless" D.bool
                         , D.succeed False

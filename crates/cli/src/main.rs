@@ -244,7 +244,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
   let running = Arc::new(AtomicBool::new(true));
   let metrics = metrics::Metrics::new()?;
 
-  let config_writable = config.config_path.as_ref().is_some_and(|p| {
+  let config_writable = config.config_path_resolved.as_ref().is_some_and(|p| {
     std::fs::metadata(p).is_ok_and(|m| !m.permissions().readonly())
   });
 
@@ -256,7 +256,7 @@ async fn run_daemon(config: &Config) -> Result<(), ApplicationError> {
     Arc::clone(&running),
     metrics.clone(),
     config.slider_ranges.clone(),
-    config.config_path.clone(),
+    config.config_path_resolved.clone(),
     config_writable,
     config.headless,
   ));

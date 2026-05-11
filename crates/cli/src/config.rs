@@ -184,8 +184,12 @@ pub struct Config {
   #[merge_config(skip)]
   pub oidc: Option<OidcConfig>,
 
+  /// Path the config was actually loaded from (either the explicit
+  /// `--config` argument or the XDG fallback).  Distinct from the
+  /// input `--config` flag; this is the *resolved output* that the
+  /// save-back UI flow writes to.
   #[merge_config(skip)]
-  pub config_path: Option<PathBuf>,
+  pub config_path_resolved: Option<PathBuf>,
 
   #[merge_config(skip)]
   pub remote_sources: Vec<RemoteSourceConfig>,
@@ -227,7 +231,7 @@ impl Config {
     Ok(file.extra.slider_ranges.clone())
   }
 
-  fn resolve_config_path(
+  fn resolve_config_path_resolved(
     cli: &CliRaw,
     _file: &ConfigFileRaw,
   ) -> Result<Option<PathBuf>, LibConfigError> {

@@ -187,7 +187,7 @@ pub struct Source {
   original_heartbeat_configs: Vec<HeartbeatConfig>,
   pub heartbeats: RwLock<Vec<HeartbeatState>>,
   pub slider_ranges: SliderRanges,
-  pub config_path: Option<PathBuf>,
+  pub config_path_resolved: Option<PathBuf>,
   pub config_writable: bool,
 }
 
@@ -240,7 +240,7 @@ impl PreviewState {
     running: Arc<AtomicBool>,
     metrics: Metrics,
     slider_ranges: SliderRanges,
-    config_path: Option<PathBuf>,
+    config_path_resolved: Option<PathBuf>,
     config_writable: bool,
     headless: bool,
   ) -> Self {
@@ -267,7 +267,7 @@ impl PreviewState {
       heartbeat_configs: RwLock::new(heartbeat_configs),
       heartbeats: RwLock::new(heartbeats),
       slider_ranges,
-      config_path,
+      config_path_resolved,
       config_writable,
     };
 
@@ -533,7 +533,7 @@ impl PreviewState {
       original_heartbeat_configs: Vec::new(),
       heartbeats: RwLock::new(Vec::new()),
       slider_ranges: SliderRanges::default(),
-      config_path: None,
+      config_path_resolved: None,
       config_writable: false,
     };
     remotes.push(Arc::new(source));
@@ -620,7 +620,8 @@ impl PreviewState {
   /// connection status / playback toggle.
   ///
   /// The legacy flat fields (`library`, `heartbeats`,
-  /// `slider_ranges`, `overrides`, `config_writable`, `config_path`)
+  /// `slider_ranges`, `overrides`, `config_writable`,
+  /// `config_path_resolved`)
   /// continue to mirror the Local Source's data so the existing
   /// frontend keeps working during the transition; the next step
   /// switches the frontend to consume `sources` and drops these.
@@ -655,7 +656,7 @@ impl PreviewState {
       "slider_ranges": local_json["slider_ranges"].clone(),
       "overrides": local_json["overrides"].clone(),
       "config_writable": local.config_writable,
-      "config_path": local.config_path.as_ref().map(|p| p.display().to_string()),
+      "config_path_resolved": local.config_path_resolved.as_ref().map(|p| p.display().to_string()),
       "headless": self.headless,
       "sources": sources_json,
     })
@@ -739,9 +740,9 @@ fn source_state_json(source: &Source) -> serde_json::Value {
       obj.insert("kind".to_string(), json!("local"));
       obj.insert("config_writable".to_string(), json!(source.config_writable));
       obj.insert(
-        "config_path".to_string(),
+        "config_path_resolved".to_string(),
         source
-          .config_path
+          .config_path_resolved
           .as_ref()
           .map_or(serde_json::Value::Null, |p| json!(p.display().to_string())),
       );

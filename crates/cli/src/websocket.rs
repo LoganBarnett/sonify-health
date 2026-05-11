@@ -792,18 +792,19 @@ fn handle_client_message(
     }
 
     "save_config" => {
-      let config_path = match (&local.config_path, local.config_writable) {
-        (Some(p), true) => p.clone(),
-        _ => {
-          return Some(
-            json!({
-              "type": "save_error",
-              "message": "No writable config file available.",
-            })
-            .to_string(),
-          );
-        }
-      };
+      let config_path =
+        match (&local.config_path_resolved, local.config_writable) {
+          (Some(p), true) => p.clone(),
+          _ => {
+            return Some(
+              json!({
+                "type": "save_error",
+                "message": "No writable config file available.",
+              })
+              .to_string(),
+            );
+          }
+        };
 
       let lib = local.library.read();
       let ovr = local.overrides.read();

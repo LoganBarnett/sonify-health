@@ -92,7 +92,7 @@ type alias Model =
     , renamingPatch : Maybe String
     , renameInput : String
     , configWritable : Bool
-    , configPath : Maybe String
+    , configPathResolved : Maybe String
     , headless : Bool
     , sources : List SourceInfo
     , addSourceForm : Maybe AddSourceForm
@@ -223,7 +223,7 @@ init _ url key =
       , renamingPatch = Nothing
       , renameInput = ""
       , configWritable = False
-      , configPath = Nothing
+      , configPathResolved = Nothing
       , headless = False
       , sources = []
       , addSourceForm = Nothing
@@ -1206,7 +1206,7 @@ handleServerMsg msg model =
                 , heartbeats = state.heartbeats
                 , sliderRanges = state.sliderRanges
                 , configWritable = state.configWritable
-                , configPath = state.configPath
+                , configPathResolved = state.configPathResolved
                 , headless = state.headless
                 , sources = state.sources
                 , selectedPatch =
@@ -2136,7 +2136,7 @@ viewToolbar model =
                 [ class "btn"
                 , Html.Attributes.disabled True
                 , title
-                    (case model.configPath of
+                    (case model.configPathResolved of
                         Just p ->
                             "Save disabled: " ++ p ++ " is not writable"
 
