@@ -3,15 +3,13 @@
 // reach them.  Opt the whole file in explicitly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_cli::{
-  config::SliderRanges,
-  metrics::Metrics,
-  preview_state::PreviewState,
-  web_base::{test_router, AppState},
-};
+use sonify_health_lib::config::SliderRanges;
 use sonify_health_lib::{builtin_library, Playback};
+use sonify_health_server::preview_state::PreviewState;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -32,22 +30,17 @@ async fn start_test_server() -> (SocketAddr, Arc<PreviewState>) {
     heartbeats,
     muted.clone(),
     running,
-    Metrics::new().expect("Metrics::new in test"),
+    common::test_metrics(),
     SliderRanges::default(),
     None,
     false,
     false,
   ));
 
-  let state = AppState::init(
-    muted,
-    Metrics::new().expect("Metrics::new in test"),
-    std::path::PathBuf::from("frontend/public"),
-    Arc::clone(&preview),
-    None,
-  );
+  let metrics = common::test_metrics();
+  let state = common::test_app_state(Arc::clone(&preview), muted, metrics);
 
-  let app = test_router(state);
+  let app = common::test_router(state);
   let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
 

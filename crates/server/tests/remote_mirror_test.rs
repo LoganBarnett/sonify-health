@@ -14,16 +14,16 @@
 //! starts, B's mirror should populate with A's library and
 //! heartbeat shape and pick up live metric updates.
 
-use sonify_health_cli::{
-  config::SliderRanges,
-  metrics::Metrics,
-  preview_state::{ConnectionStatus, PreviewState, SourceKind},
-  remote_source,
-  web_base::{test_router, AppState},
-};
+mod common;
+
+use sonify_health_lib::config::SliderRanges;
 use sonify_health_lib::{
   builtin_library, heartbeat_config::default_crossfade_ms, HeartbeatConfig,
   NoteConfig, Playback, ResultMode, Transition,
+};
+use sonify_health_server::{
+  preview_state::{ConnectionStatus, PreviewState, SourceKind},
+  remote_source,
 };
 use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -68,22 +68,17 @@ async fn start_remote_instance() -> (std::net::SocketAddr, Arc<PreviewState>) {
     vec![heartbeat],
     muted.clone(),
     running,
-    Metrics::new().expect("Metrics::new in test"),
+    common::test_metrics(),
     SliderRanges::default(),
     None,
     false,
     false,
   ));
 
-  let state = AppState::init(
-    muted,
-    Metrics::new().expect("Metrics::new in test"),
-    std::path::PathBuf::from("frontend/public"),
-    Arc::clone(&preview),
-    None,
-  );
+  let metrics = common::test_metrics();
+  let state = common::test_app_state(Arc::clone(&preview), muted, metrics);
 
-  let app = test_router(state);
+  let app = common::test_router(state);
   let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
   tokio::spawn(async move {
@@ -104,7 +99,7 @@ fn start_subscriber(remote_addr: std::net::SocketAddr) -> Arc<PreviewState> {
     vec![],
     Arc::new(AtomicBool::new(false)),
     Arc::new(AtomicBool::new(true)),
-    Metrics::new().expect("Metrics::new in test"),
+    common::test_metrics(),
     SliderRanges::default(),
     None,
     false,

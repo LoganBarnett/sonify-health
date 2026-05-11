@@ -635,15 +635,14 @@ in {
         WatchdogSec = lib.mkDefault "30s";
 
         ExecStart =
-          "${cfg.package}/bin/sonify-health"
+          "${cfg.package}/bin/sonify-health-server"
           + " --config ${configFile}"
           + (
             if cfg.socket != null
             then " --listen sd-listen"
             else " --listen ${cfg.host}:${toString cfg.port}"
           )
-          + " --frontend-path ${cfg.frontendPath}"
-          + " daemon";
+          + " --frontend-path ${cfg.frontendPath}";
 
         LoadCredential =
           lib.mkIf (cfg.oidc.clientSecretFile != null)

@@ -1,14 +1,10 @@
-//! Shared configuration leaf types.  Anything in this module is
-//! used by *both* the cli and server crates — the bigger
-//! `BaseConfig` / `ServerConfig` story (where the assembled
-//! configuration values live) gets layered on top of these in a
-//! later phase of the workspace split.
-//!
-//! Server-specific types like `RemoteSourceConfig`, `OidcConfig`,
-//! and `ConfigSaveError` deliberately stay in the server crate;
-//! moving them here would force the cli to drag deps it does not
-//! need.
+//! Shared configuration leaf types and the on-disk config-file
+//! shape.  Both the cli (preview/print) and server (daemon)
+//! binaries read the same `config.toml`; the shape lives here so
+//! it has exactly one definition that both binaries' `MergeConfig`
+//! derives plug in via `extra_file`.
 
+use crate::HeartbeatConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -188,4 +184,67 @@ impl Default for SliderRanges {
       },
     }
   }
+}
+
+/// Static configuration for a single Remote Source — the entry the
+/// operator writes in their config file or passes on the CLI to
+/// declare "subscribe to this other instance and mirror its
+/// state."  The runtime `Source` (in the server's `preview_state`)
+/// is constructed from this descriptor at startup; the connector
+/// then populates the runtime's library / heartbeats from the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteSourceConfig {
+  /// Display name and unique identifier for the source.  Cannot be
+  /// `"localhost"` (reserved for the Local Source) and must not
+  /// collide with another source's name.
+  pub name: String,
+
+  /// WebSocket URL — `ws://` or `wss://`.
+  pub url: String,
+
+  /// Whether the local renderer plays audio for this source.
+  /// Default false: the user opts in explicitly so adding a remote
+  /// to the config never starts playing audio without consent.
+  #[serde(default)]
+  pub playback_enabled: bool,
+}
+
+/// File-side representation of the optional `[oidc]` section.
+/// Both binaries deserialize the same TOML; the server uses these
+/// to assemble the fully-resolved OIDC client, the cli ignores
+/// them.
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OidcSectionRaw {
+  pub base_url: Option<String>,
+  pub issuer: Option<String>,
+  pub client_id: Option<String>,
+  pub client_secret_file: Option<PathBuf>,
+}
+
+/// The full on-disk shape of `config.toml`.  Each binary plugs this
+/// into its `#[merge_config(extra_file = "...")]` derive, so the
+/// file format has exactly one definition — both binaries
+/// deserialize identically and each surfaces only the subset its
+/// `Config` needs.
+#[derive(Debug, Deserialize, Default)]
+pub struct SonifyFileFields {
+  /// User-defined patches.  `toml::Value` because each entry may
+  /// be either a full `Patch` table or an override
+  /// (`overrides = "base"` + delta fields), resolved at config
+  /// build time.
+  #[serde(default)]
+  pub patches: HashMap<String, toml::Value>,
+
+  #[serde(default)]
+  pub heartbeats: Vec<HeartbeatConfig>,
+
+  #[serde(default)]
+  pub slider_ranges: SliderRanges,
+
+  pub oidc: Option<OidcSectionRaw>,
+
+  #[serde(default)]
+  pub sources: Vec<RemoteSourceConfig>,
 }

@@ -1,9 +1,11 @@
-use crate::config::{OverrideInfo, RemoteSourceConfig, SliderRanges};
 use crate::metrics::Metrics;
 use fundsp::prelude32::shared;
 use fundsp::shared::Shared;
 use parking_lot::RwLock;
 use serde_json::json;
+use sonify_health_lib::config::{
+  OverrideInfo, RemoteSourceConfig, SliderRanges,
+};
 use sonify_health_lib::{
   audio::MixerHandle, heartbeat, HeartbeatConfig, Patch, PatchLibrary,
   ResolvedNote,
@@ -820,7 +822,7 @@ mod tests {
       vec![],
       Arc::new(AtomicBool::new(false)),
       Arc::new(AtomicBool::new(true)),
-      Metrics::new().expect("Metrics::new in test"),
+      Metrics::new(&prometheus::Registry::new()).expect("Metrics::new in test"),
       SliderRanges::default(),
       None,
       false,

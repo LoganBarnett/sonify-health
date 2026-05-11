@@ -3,11 +3,13 @@
 // reach them.  Opt the whole file in explicitly.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use sonify_health_cli::{
-  config::SliderRanges, daemon::spawn_poll_thread, metrics::Metrics,
-  preview_state::PreviewState,
-};
+mod common;
+
+use sonify_health_lib::config::SliderRanges;
 use sonify_health_lib::{builtin_library, HeartbeatConfig};
+use sonify_health_server::{
+  daemon::spawn_poll_thread, preview_state::PreviewState,
+};
 use std::collections::HashMap;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -35,7 +37,7 @@ fn override_does_not_leak_to_other_heartbeats() {
     heartbeats,
     Arc::new(AtomicBool::new(false)),
     Arc::clone(&running),
-    Metrics::new().expect("Metrics::new in test"),
+    common::test_metrics(),
     SliderRanges::default(),
     None,
     false,

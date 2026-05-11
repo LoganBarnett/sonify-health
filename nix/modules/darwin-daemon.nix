@@ -55,11 +55,10 @@
     else "--listen ${cfg.host}:${toString cfg.port}";
 
   execLine =
-    "${cfg.package}/bin/sonify-health"
+    "${cfg.package}/bin/sonify-health-server"
     + " --config ${configFile}"
     + " ${listenArg}"
-    + " --frontend-path ${cfg.frontendPath}"
-    + " daemon";
+    + " --frontend-path ${cfg.frontendPath}";
 
   # The TOML config file carries heartbeat and patch settings.
   # Listen address is passed via --listen on the command line so the

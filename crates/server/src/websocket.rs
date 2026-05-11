@@ -1,6 +1,4 @@
-use crate::config::{
-  build_save_json, build_save_nix, build_save_toml, OverrideInfo,
-};
+use crate::config::{build_save_json, build_save_nix, build_save_toml};
 use crate::preview_state::PreviewState;
 use axum::{
   extract::{
@@ -11,6 +9,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
+use sonify_health_lib::config::OverrideInfo;
 use sonify_health_lib::heartbeat_config::{
   default_crossfade_ms, default_volume,
 };
@@ -1127,9 +1126,9 @@ fn parse_import(text: &str) -> Result<Vec<(String, Patch)>, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::SliderRanges;
   use crate::metrics::Metrics;
   use sonify_health_lib::builtin_library;
+  use sonify_health_lib::config::SliderRanges;
   use std::collections::HashMap;
   use std::sync::atomic::AtomicBool;
 
@@ -1140,7 +1139,7 @@ mod tests {
       vec![],
       Arc::new(AtomicBool::new(false)),
       Arc::new(AtomicBool::new(true)),
-      Metrics::new().expect("Metrics::new in test"),
+      Metrics::new(&prometheus::Registry::new()).expect("Metrics::new in test"),
       SliderRanges::default(),
       None,
       false,

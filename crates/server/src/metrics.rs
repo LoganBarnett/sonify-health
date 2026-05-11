@@ -1,7 +1,6 @@
 use prometheus::{
   core::Collector, Gauge, GaugeVec, IntCounterVec, IntGauge, Opts, Registry,
 };
-use std::sync::Arc;
 use thiserror::Error;
 
 /// Errors raised while constructing or registering Prometheus
@@ -26,12 +25,13 @@ pub enum MetricsInitError {
   },
 }
 
-/// Holds all Prometheus collectors for the daemon, registered
-/// against a single registry.  All prometheus types are
-/// `Arc`-wrapped internally, so this struct is cheap to clone.
+/// Holds every Prometheus collector for the daemon, registered
+/// against the foundation-owned registry so a single `/metrics`
+/// endpoint exposes both infra metrics (`http_requests_total`,
+/// etc.) and sonify's audio/probe metrics.  All prometheus types
+/// are `Arc`-wrapped internally, so this struct is cheap to clone.
 #[derive(Clone)]
 pub struct Metrics {
-  pub registry: Arc<Registry>,
   pub heartbeats_played: IntCounterVec,
   pub probes_completed: IntCounterVec,
   pub probe_value: GaugeVec,
@@ -78,17 +78,14 @@ fn register<C: Collector + Clone + 'static>(
 }
 
 impl Metrics {
-  /// Build a fresh registry and register every collector.
-  ///
-  /// Returns `Err(MetricsInitError)` if `prometheus` rejects a
-  /// collector — that only ever happens for invalid metric names
-  /// or duplicate registrations, both of which are programmer
-  /// errors, but a typed error keeps the failure visible to
-  /// `main`'s startup error path rather than aborting the process
-  /// from inside a constructor.
-  pub fn new() -> Result<Self, MetricsInitError> {
-    let registry = Registry::new();
-
+  /// Construct every audio/probe collector and register it on the
+  /// caller-supplied registry.  Returns `Err(MetricsInitError)` if
+  /// prometheus rejects a collector — that only happens for invalid
+  /// metric names or duplicate registrations, both of which are
+  /// programmer errors, but a typed error keeps the failure visible
+  /// to `main`'s startup error path rather than aborting the
+  /// process from inside a constructor.
+  pub fn new(registry: &Registry) -> Result<Self, MetricsInitError> {
     let heartbeats_played = construct(
       "sonify_health_heartbeats_played_total",
       IntCounterVec::new(
@@ -225,75 +222,74 @@ impl Metrics {
     )?;
 
     register(
-      &registry,
+      registry,
       "sonify_health_heartbeats_played_total",
       &heartbeats_played,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_probes_completed_total",
       &probes_completed,
     )?;
-    register(&registry, "sonify_health_probe_value", &probe_value)?;
-    register(&registry, "sonify_health_muted", &muted)?;
+    register(registry, "sonify_health_probe_value", &probe_value)?;
+    register(registry, "sonify_health_muted", &muted)?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_lock_failures_total",
       &audio_lock_failures,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_nan_frames_total",
       &audio_nan_frames,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_peak_callback_us",
       &audio_peak_callback_us,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_stream_errors_total",
       &audio_stream_errors,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_stream_failed",
       &audio_stream_failed,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_recovery_attempts_total",
       &audio_recovery_attempts,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_output_peak_amplitude",
       &audio_output_peak_amplitude,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_slot_peak_amplitude",
       &audio_slot_peak_amplitude,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_slot_rms_amplitude",
       &audio_slot_rms_amplitude,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_callback_buffer_frames_min",
       &audio_callback_buffer_frames_min,
     )?;
     register(
-      &registry,
+      registry,
       "sonify_health_audio_callback_buffer_frames_max",
       &audio_callback_buffer_frames_max,
     )?;
 
     Ok(Self {
-      registry: Arc::new(registry),
       heartbeats_played,
       probes_completed,
       probe_value,

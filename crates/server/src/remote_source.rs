@@ -16,7 +16,6 @@
 //! occasional full state round-trip when the remote is being
 //! configured live.
 
-use crate::config::{OverrideInfo, SliderRanges};
 use crate::preview_state::{
   ConnectionStatus, HeartbeatState, PreviewState, Source, SourceKind,
 };
@@ -24,6 +23,7 @@ use fundsp::prelude32::shared;
 use futures::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use serde::Deserialize;
+use sonify_health_lib::config::{OverrideInfo, SliderRanges};
 use sonify_health_lib::{
   HeartbeatConfig, NoteConfig, Patch, Playback, ResultMode, TierConfig,
   Transition,
@@ -463,7 +463,7 @@ mod tests {
       vec![],
       Arc::new(AtomicBool::new(false)),
       Arc::new(AtomicBool::new(true)),
-      Metrics::new().expect("Metrics::new in test"),
+      Metrics::new(&prometheus::Registry::new()).expect("Metrics::new in test"),
       SliderRanges::default(),
       None,
       false,
