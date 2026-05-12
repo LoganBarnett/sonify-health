@@ -75,15 +75,6 @@ fn main() -> ExitCode {
       run_print(&config, patch, format.clone());
       Ok(())
     }
-    Command::Daemon => {
-      eprintln!(
-        "`sonify-health daemon` has moved to the `sonify-health-server` \
-         binary.  Update systemd / launchd / shell invocations to call \
-         `sonify-health-server` directly with the same --config and env \
-         variables."
-      );
-      return ExitCode::FAILURE;
-    }
   };
 
   match result {

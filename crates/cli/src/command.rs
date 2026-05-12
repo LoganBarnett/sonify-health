@@ -37,7 +37,4 @@ pub enum Command {
     #[command(flatten)]
     patch: CliPatchOverrides,
   },
-
-  /// Run as a long-lived daemon producing heartbeat audio.
-  Daemon,
 }
