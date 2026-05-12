@@ -6,6 +6,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/25.11";
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
+    foundation.url = "github:LoganBarnett/rust-template";
+    foundation.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = {
@@ -13,204 +15,133 @@
     nixpkgs,
     rust-overlay,
     crane,
-  } @ inputs: let
-    forAllSystems = nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
-    overlays = [
-      (import rust-overlay)
-    ];
-    pkgsFor = system:
-      import nixpkgs {
-        inherit system;
-        overlays = overlays;
-      };
+    foundation,
+  }: let
+    # Audio + frontend dependencies that aren't part of foundation's
+    # default crane build: alsa headers for cpal on Linux, libiconv for
+    # Darwin, and pkg-config to find them.  Both binaries link the
+    # audio stack via the lib crate, so this applies to every package.
+    audioBuildInputs = system: pkgs:
+      pkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.alsa-lib]
+      ++ pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs.darwin; [
+        libiconv
+      ]);
 
-    # ============================================================================
-    # WORKSPACE CRATES CONFIGURATION
-    # ============================================================================
-    # Define all workspace crates here. This makes it easy to:
-    # - Generate packages
-    # - Generate apps
-    # - Generate overlays
-    # - Keep package lists consistent across the flake
-    #
-    # When customizing this template for your project:
-    # 1. Update the names below to match your project
-    # 2. Add/remove crates as needed
-    # 3. The package and app generation will automatically update
-    # ============================================================================
+    project = foundation.lib.mkRustProject {
+      inherit self nixpkgs rust-overlay crane;
+      name = "sonify-health";
+      crates = {
+        cli = {
+          name = "sonify-health-cli";
+          binary = "sonify-health";
+          description = "Infrastructure sonification CLI";
+        };
+        server = {
+          name = "sonify-health-server";
+          binary = "sonify-health-server";
+          description = "Infrastructure sonification daemon";
+        };
+      };
+      extraBuildInputs = [];
+      extraNativeBuildInputs = [];
+      extraDevPackages = system: pkgs:
+        [
+          pkgs.cargo-sweep
+          pkgs.jq
+          # Unified formatter and per-language helpers.
+          pkgs.treefmt
+          pkgs.alejandra
+          pkgs.prettier
+          # Elm frontend toolchain.
+          pkgs.elmPackages.elm
+          pkgs.elmPackages.elm-format
+          pkgs.elm2nix
+          # Task runner.
+          pkgs.just
+          # Native build inputs surfaced into the devShell so
+          # `cargo build` in the shell can link cpal.
+          pkgs.pkg-config
+        ]
+        ++ audioBuildInputs system pkgs;
+      shellHook = _pkgs: ''
+        echo "sonify-health development environment"
+        echo ""
+        echo "Available Cargo packages (use 'cargo build -p <name>'):"
+        cargo metadata --no-deps --format-version 1 2>/dev/null | \
+          jq -r '.packages[].name' | \
+          sort | \
+          sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
+
+        echo ""
+        echo "Elm frontend:"
+        echo "  Build:       cd frontend && elm make src/Main.elm --output public/elm.js"
+        echo "  Regenerate:  cd frontend && elm2nix convert 2>/dev/null > elm-srcs.nix && elm2nix snapshot"
+      '';
+    };
+
+    # mkRustProject's `extraBuildInputs` parameter takes a flat list
+    # (not a system-aware function), which can't carry cpal's
+    # platform-specific dependencies (alsa-lib on Linux,
+    # libiconv on Darwin).  Until foundation grows a system-aware
+    # variant, build a parallel packages set that wires the audio
+    # inputs through manually for the per-crate crane builds and
+    # merge it over mkRustProject's defaults.
     workspaceCrates = {
-      # CRATE:cli:begin
-      # CLI application
       cli = {
         name = "sonify-health-cli";
-        binary = "sonify-health";
-        description = "Infrastructure sonification CLI and daemon";
       };
-      # CRATE:cli:end
-
-      # Note: The 'lib' crate is not included here as it doesn't produce a
-      # binary.
+      server = {
+        name = "sonify-health-server";
+      };
     };
-
-    # Development shell packages.
-    devPackages = pkgs: let
-      rust = pkgs.rust-bin.stable.latest.default.override {
-        extensions = [
-          # For rust-analyzer and others.  See
-          # https://nixos.wiki/wiki/Rust#Shell.nix_example for some details.
-          "rust-src"
-          "rust-analyzer"
-          "rustfmt"
-        ];
+    overrideAudioInputs = system: let
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [(import rust-overlay)];
       };
-    in [
-      rust
-      pkgs.cargo-sweep
-      pkgs.pkg-config
-      pkgs.openssl
-      pkgs.jq
-      # Unified formatter
-      pkgs.treefmt
-      pkgs.alejandra
-      # Elm frontend
-      pkgs.elmPackages.elm
-      pkgs.elmPackages.elm-format
-      pkgs.elm2nix
-      # CSS formatting
-      pkgs.prettier
-      # Task runner
-      pkgs.just
-    ];
-  in {
-    devShells = forAllSystems (system: let
-      pkgs = pkgsFor system;
-    in {
-      default = pkgs.mkShell {
-        buildInputs = devPackages pkgs;
-        shellHook = ''
-          echo "sonify-health development environment"
-          echo ""
-          echo "Available Cargo packages (use 'cargo build -p <name>'):"
-          cargo metadata --no-deps --format-version 1 2>/dev/null | \
-            jq -r '.packages[].name' | \
-            sort | \
-            sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
-
-          echo ""
-          echo "Elm frontend:"
-          echo "  Build:       cd frontend && elm make src/Main.elm --output public/elm.js"
-          echo "  Regenerate:  cd frontend && elm2nix convert 2>/dev/null > elm-srcs.nix && elm2nix snapshot"
-
-          # Symlink cargo-husky hooks into .git/hooks/ using paths relative
-          # to .git/hooks/ so the repo stays valid after moves or copies.
-          _git_root=$(git rev-parse --show-toplevel 2>/dev/null)
-          if [ -n "$_git_root" ] && [ "$(pwd)" = "$_git_root" ] && [ -d ".cargo-husky/hooks" ]; then
-            for _hook in .cargo-husky/hooks/*; do
-              [ -x "$_hook" ] || continue
-              _name=$(basename "$_hook")
-              _dest="$_git_root/.git/hooks/$_name"
-              _target=$(${pkgs.coreutils}/bin/realpath --relative-to="$_git_root/.git/hooks" "$(pwd)/$_hook")
-              if [ ! -L "$_dest" ] || [ "$(readlink "$_dest")" != "$_target" ]; then
-                ln -sf "$_target" "$_dest"
-                echo "Installed git hook: $_name -> $_target"
-              fi
-            done
-          fi
-        '';
-      };
-    });
-
-    # ============================================================================
-    # PACKAGES
-    # ============================================================================
-    packages = forAllSystems (system: let
-      pkgs = pkgsFor system;
-      craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
-
-      # Common build arguments shared by all crates
+      craneLib =
+        (crane.mkLib pkgs).overrideToolchain
+        (p: p.rust-bin.stable.latest.default);
       commonArgs = {
-        src = craneLib.cleanCargoSource ./.;
-        # LLM: Do NOT add darwin.apple_sdk.frameworks here - they were removed
-        # in nixpkgs 25.11+. Use libiconv for Darwin builds instead.
-        buildInputs = with pkgs;
-          [
-            openssl
-          ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-            pkgs.alsa-lib
-          ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs.darwin; [
-            libiconv
-          ]);
-        nativeBuildInputs = with pkgs; [
-          pkg-config
-        ];
-        # Run only unit tests (--lib --bins), skip integration tests in tests/ directories
-        # Integration tests may require external services not available in Nix sandbox
-        # Full test suite can be run locally with 'cargo test --all'
+        src = craneLib.cleanCargoSource self;
+        buildInputs = audioBuildInputs system pkgs;
+        nativeBuildInputs = [pkgs.pkg-config];
         cargoTestExtraArgs = "--lib --bins";
       };
-
-      # Build individual crate packages from workspaceCrates.  When a
-      # per-crate file exists under nix/packages/, it is used instead of
-      # the generic crane build; this lets individual crates carry custom
-      # build options without cluttering the top-level flake.
-      cratePackages =
-        pkgs.lib.mapAttrs (
-          key: crate: let
-            pkgFile = ./. + "/nix/packages/${key}.nix";
-          in
-            if builtins.pathExists pkgFile
-            then import pkgFile {inherit craneLib commonArgs pkgs;}
-            else
-              craneLib.buildPackage (commonArgs
-                // {
-                  pname = crate.name;
-                  cargoExtraArgs = "-p ${crate.name}";
-                })
-        )
-        workspaceCrates;
+      buildCrate = key: crate: let
+        pkgFile = ./. + "/nix/packages/${key}.nix";
+      in
+        if builtins.pathExists pkgFile
+        then import pkgFile {inherit craneLib commonArgs pkgs;}
+        else
+          craneLib.buildPackage (commonArgs
+            // {
+              pname = crate.name;
+              cargoExtraArgs = "-p ${crate.name}";
+            });
     in
-      cratePackages
+      nixpkgs.lib.mapAttrs buildCrate workspaceCrates
       // {
-        # Build all workspace binaries together.
-        # Update pname to match your project name.
         default = craneLib.buildPackage (commonArgs // {pname = "sonify-health";});
-      });
+      };
 
-    # ============================================================================
-    # APPS
-    # ============================================================================
-    apps = forAllSystems (system: let
-      pkgs = pkgsFor system;
-    in
-      pkgs.lib.mapAttrs (key: crate: {
-        type = "app";
-        program = "${self.packages.${system}.${key}}/bin/${crate.binary}";
-      })
-      workspaceCrates);
+    systems = nixpkgs.lib.systems.flakeExposed;
+    audioPackages = nixpkgs.lib.genAttrs systems overrideAudioInputs;
+  in
+    project
+    // {
+      packages =
+        nixpkgs.lib.genAttrs systems (system:
+          project.packages.${system} // audioPackages.${system});
 
-    # ============================================================================
-    # MODULES
-    # ============================================================================
-    nixosModules = {
-      daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
-      default = self.nixosModules.daemon;
+      nixosModules = {
+        daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
+        default = self.nixosModules.daemon;
+      };
+
+      darwinModules = {
+        daemon = import ./nix/modules/darwin-daemon.nix {inherit self;};
+        default = self.darwinModules.daemon;
+      };
     };
-
-    darwinModules = {
-      daemon = import ./nix/modules/darwin-daemon.nix {inherit self;};
-      default = self.darwinModules.daemon;
-    };
-
-    # ============================================================================
-    # OVERLAYS
-    # ============================================================================
-    # Uncomment to expose your packages as an overlay
-    # ============================================================================
-    # overlays.default = final: prev:
-    #   pkgs.lib.mapAttrs' (key: crate:
-    #     pkgs.lib.nameValuePair crate.name self.packages.${final.stdenv.hostPlatform.system}.${key}
-    #   ) workspaceCrates;
-  };
 }

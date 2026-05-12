@@ -279,8 +279,8 @@ in {
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.cli;
-      defaultText = lib.literalExpression "self.packages.\${system}.cli";
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.server;
+      defaultText = lib.literalExpression "self.packages.\${system}.server";
       description = "Package providing the sonify-health binary.";
     };
 
