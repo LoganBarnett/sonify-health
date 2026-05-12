@@ -923,7 +923,7 @@ fn handle_client_message(
       let hb_idx = preview.add_heartbeat(cfg);
       let local = preview.local();
       let mixer_handle = preview.mixer_handle.read().clone();
-      crate::daemon::spawn_heartbeat_threads(
+      crate::audio_engine::spawn_heartbeat_threads(
         preview,
         &local,
         hb_idx,

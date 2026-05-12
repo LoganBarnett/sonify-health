@@ -23,7 +23,7 @@ use tracing::{debug, error, info, warn};
 const SUPERVISION_CHECK_INTERVAL: u32 = 10; // ~1 s
 
 /// Maximum panics per thread within `FAILURE_WINDOW` before the
-/// daemon gives up and shuts down.
+/// audio engine gives up and shuts down.
 const MAX_FAILURES_PER_THREAD: usize = 5;
 
 /// Rolling window for counting thread failures.
@@ -43,7 +43,7 @@ const CONTINUOUS_REBUILD_INTERVAL: Duration = Duration::from_secs(3600);
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]
-pub enum DaemonError {
+pub enum AudioEngineError {
   #[error("Audio playback failed: {0}")]
   Audio(#[from] AudioError),
 
@@ -136,25 +136,25 @@ pub fn extract_panic_message(payload: &Box<dyn Any + Send>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// DaemonContext + run_daemon
+// AudioEngineContext + run_audio_engine
 // ---------------------------------------------------------------------------
 
-/// Everything the daemon thread needs from main.
-pub struct DaemonContext<'a> {
+/// Everything the audio engine thread needs from main.
+pub struct AudioEngineContext<'a> {
   pub audio_device: Option<&'a str>,
-  /// When true, the daemon does not open an audio device and does
+  /// When true, the audio engine does not open an audio device and does
   /// not spawn play threads.  Poll threads, supervision, and the
   /// rest of the run-loop continue normally.
   pub headless: bool,
   pub preview: Arc<PreviewState>,
 }
 
-/// Run the daemon's main loop: spawn per-heartbeat poll/play threads,
+/// Run the audio engine's main loop: spawn per-heartbeat poll/play threads,
 /// supervise them, and respond to preview-UI actions.  Shuts down
 /// when `running` becomes false or a thread exhausts its failure
 /// budget.
-pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
-  let DaemonContext {
+pub fn run_audio_engine(ctx: AudioEngineContext<'_>) -> Result<(), AudioEngineError> {
+  let AudioEngineContext {
     audio_device,
     headless,
     preview,
@@ -319,14 +319,14 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
               (ThreadRole::Play, None) => {
                 // Should be unreachable: Play roles only enter
                 // `supervised` when a mixer handle exists, and
-                // the handle is set-once at daemon start.  Log
+                // the handle is set-once at audio-engine start.  Log
                 // structurally rather than panic so the bug — if
                 // it ever happens — surfaces in operator logs.
                 error!(
                   source = %st.source_name,
                   heartbeat = st.hb_idx,
                   "Cannot respawn play thread without mixer handle; \
-                   this is a daemon-startup invariant violation",
+                   this is an audio-engine-startup invariant violation",
                 );
                 continue;
               }
@@ -355,7 +355,7 @@ pub fn run_daemon(ctx: DaemonContext<'_>) -> Result<(), DaemonError> {
         if let Some(m) = mixer.as_mut() {
           m.clear();
         }
-        return Err(DaemonError::ThreadBudgetExhausted {
+        return Err(AudioEngineError::ThreadBudgetExhausted {
           source_name,
           heartbeat,
           role,
@@ -798,14 +798,14 @@ pub fn spawn_play_thread(
 /// pair that exists in the current `preview.sources`.  Called on
 /// each supervision tick so a Remote Source whose heartbeat list
 /// arrives or grows after startup picks up play threads without
-/// requiring a daemon restart.
+/// requiring an audio-engine restart.
 ///
 /// The check considers a pair "live" only when its `SupervisedThread`
 /// has a `handle: Some(h)` and `!h.is_finished()`.  Existing entries
 /// whose handle has been taken (clean exit) get a fresh thread;
 /// pairs that were never spawned get a new `SupervisedThread`.
 ///
-/// Skipped entirely when the daemon is headless — headless instances
+/// Skipped entirely when the audio engine is headless — headless instances
 /// never spawn play threads, by design.
 fn rebalance_play_threads(
   preview: &Arc<PreviewState>,
@@ -949,7 +949,7 @@ fn clone_effective_volume(
 /// Continuous morph playback: build a multi-note graph with
 /// `Shared` controls, then update those controls as the metric
 /// changes.  Rebuilds the graph when structural parameters or
-/// note count change.  Returns when the daemon is shutting down
+/// note count change.  Returns when the audio engine is shutting down
 /// or the playback mode changes away from `Continuous`.
 fn play_continuous_tick(
   running: &AtomicBool,
@@ -1085,7 +1085,7 @@ fn play_continuous_tick(
 /// iteration into the next via `replace()`.  Sleeps for the
 /// content duration (excluding release/echo tail) so the crossfade
 /// overlaps sustaining audio with the attack of the new graph.
-/// Returns when the daemon is shutting down or the playback mode
+/// Returns when the audio engine is shutting down or the playback mode
 /// changes away from `Loop`.
 fn play_loop(
   running: &AtomicBool,

@@ -8,7 +8,7 @@ mod common;
 use sonify_health_lib::config::SliderRanges;
 use sonify_health_lib::{builtin_library, HeartbeatConfig};
 use sonify_health_server::{
-  daemon::spawn_poll_thread, preview_state::PreviewState,
+  audio_engine::spawn_poll_thread, preview_state::PreviewState,
 };
 use std::collections::HashMap;
 use std::sync::{

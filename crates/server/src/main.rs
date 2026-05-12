@@ -1,4 +1,4 @@
-//! sonify-health-server — daemon entry point.
+//! sonify-health-server entry point.
 //!
 //! `#[foundation_main]` generates the real `fn main()` with CLI
 //! parsing, config resolution, logging init, tokio runtime, and
@@ -6,15 +6,15 @@
 //! request counter, frontend path).  This file owns only the
 //! application-specific glue: building `PreviewState`, registering
 //! sonify's audio metrics against the foundation registry, spawning
-//! the audio daemon thread + the remote-source connector tasks, and
-//! racing `Server::listen()` against the daemon so either exiting
+//! the audio engine + the remote-source connector tasks, and racing
+//! `Server::listen()` against the audio engine so either exiting
 //! tears the other down.
 
 use rust_template_foundation::main as foundation_main;
 use rust_template_foundation::{Server, ServerError};
 use sonify_health_lib::config::ConfigError as LibConfigError;
+use sonify_health_server::audio_engine::{self, AudioEngineError};
 use sonify_health_server::config::{Config, ConfigError};
-use sonify_health_server::daemon::{self, DaemonError};
 use sonify_health_server::metrics::{self, Metrics};
 use sonify_health_server::preview_state::{self, PreviewState};
 use sonify_health_server::remote_source;
@@ -35,8 +35,8 @@ pub enum ApplicationError {
   #[error("Failed to load configuration: {0}")]
   ConfigurationLoad(#[source] Box<ConfigError>),
 
-  #[error("Daemon failed: {0}")]
-  Daemon(#[from] DaemonError),
+  #[error("Audio engine failed: {0}")]
+  AudioEngine(#[from] AudioEngineError),
 
   #[error("Server runtime: {0}")]
   Server(#[from] ServerError),
@@ -44,11 +44,11 @@ pub enum ApplicationError {
   #[error("Failed to initialize metrics: {0}")]
   MetricsInit(#[from] metrics::MetricsInitError),
 
-  /// The daemon `spawn_blocking` task itself panicked.  Carries the
-  /// `JoinError` so the panic payload can be inspected / re-raised
-  /// by the caller if desired.
-  #[error("Daemon task panicked or was cancelled: {0}")]
-  DaemonTaskJoin(#[source] tokio::task::JoinError),
+  /// The audio-engine `spawn_blocking` task itself panicked.
+  /// Carries the `JoinError` so the panic payload can be inspected
+  /// / re-raised by the caller if desired.
+  #[error("Audio engine task panicked or was cancelled: {0}")]
+  AudioEngineTaskJoin(#[source] tokio::task::JoinError),
 }
 
 impl From<ConfigError> for ApplicationError {
@@ -157,36 +157,36 @@ pub async fn main(
     .merge(web_base::mute_api())
     .merge(ws_routes);
 
-  // Spawn the blocking daemon loop in a separate thread.
+  // Spawn the blocking audio-engine loop in a separate thread.
   let audio_device = config.audio_device.clone();
-  let daemon_preview = Arc::clone(&preview);
-  let daemon_headless = config.headless;
-  let mut daemon_handle = tokio::task::spawn_blocking(move || {
-    daemon::run_daemon(daemon::DaemonContext {
+  let engine_preview = Arc::clone(&preview);
+  let engine_headless = config.headless;
+  let mut engine_handle = tokio::task::spawn_blocking(move || {
+    audio_engine::run_audio_engine(audio_engine::AudioEngineContext {
       audio_device: audio_device.as_deref(),
-      headless: daemon_headless,
-      preview: daemon_preview,
+      headless: engine_headless,
+      preview: engine_preview,
     })
   });
 
-  // Race the server against the daemon: if either exits, the other
-  // is torn down.  Dropping `server.listen()` on cancellation drops
-  // the inner axum::serve future and its listener.  Flipping
-  // `running` to false tells the daemon's main loop to exit
-  // gracefully when the server-arm wins.
+  // Race the web server against the audio engine: if either exits,
+  // the other is torn down.  Dropping `server.listen()` on
+  // cancellation drops the inner axum::serve future and its
+  // listener.  Flipping `running` to false tells the audio engine's
+  // main loop to exit gracefully when the server-arm wins.
   tokio::select! {
     result = server.listen() => {
       running.store(false, Ordering::Relaxed);
       result?;
-      info!("Web server shut down, waiting for daemon loop");
-      daemon_handle
+      info!("Web server shut down, waiting for audio engine");
+      engine_handle
         .await
-        .map_err(ApplicationError::DaemonTaskJoin)??;
+        .map_err(ApplicationError::AudioEngineTaskJoin)??;
     }
-    result = &mut daemon_handle => {
+    result = &mut engine_handle => {
       running.store(false, Ordering::Relaxed);
-      result.map_err(ApplicationError::DaemonTaskJoin)??;
-      error!("Daemon exited before web server; shutting down");
+      result.map_err(ApplicationError::AudioEngineTaskJoin)??;
+      error!("Audio engine exited before web server; shutting down");
     }
   }
 
