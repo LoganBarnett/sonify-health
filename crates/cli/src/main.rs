@@ -1,4 +1,3 @@
-mod logging;
 mod print;
 
 use sonify_health_cli::{command, config, patch_args};
@@ -6,8 +5,8 @@ use sonify_health_cli::{command, config, patch_args};
 use clap::Parser;
 use command::{Command, PrintFormat};
 use config::{Config, ConfigError};
-use logging::init_logging;
 use patch_args::CliPatchOverrides;
+use rust_template_foundation::logging::init_cli_logging;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer, AudioOutput},
   heartbeat, ResolvedNote,
@@ -58,7 +57,7 @@ fn main() -> ExitCode {
     }
   };
 
-  init_logging(config.log_level, config.log_format);
+  init_cli_logging(config.log_level, config.log_format);
 
   debug!(
     log_level = ?config.log_level,

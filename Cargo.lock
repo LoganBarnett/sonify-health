@@ -3400,37 +3400,14 @@ dependencies = [
 name = "sonify-health-cli"
 version = "0.1.0"
 dependencies = [
- "aide",
- "axum",
  "clap",
  "ctrlc",
- "fundsp",
- "futures",
- "openidconnect",
- "parking_lot",
- "prometheus",
- "reqwest 0.11.27",
  "rust-template-foundation",
- "rustls 0.23.40",
- "schemars 0.9.0",
- "sd-notify",
  "serde",
- "serde_json",
  "sonify-health-lib",
- "tap",
- "tempfile",
  "thiserror 2.0.18",
- "tokio",
- "tokio-listener",
- "tokio-tungstenite 0.26.2",
  "toml 0.8.23",
- "tower",
- "tower-http",
- "tower-sessions",
  "tracing",
- "tracing-journald",
- "tracing-subscriber",
- "url",
 ]
 
 [[package]]

@@ -15,51 +15,24 @@ path = "src/lib.rs"
 name = "sonify-health"
 path = "src/main.rs"
 
+# The cli is preview/print one-shots only.  The daemon (audio
+# engine, web server, OIDC, WebSocket, metrics) lives in the sibling
+# server crate; nothing here pulls those concerns in.
 [dependencies]
 sonify-health-lib = { workspace = true }
 rust-template-foundation = { workspace = true, features = ["cli"] }
 clap = { workspace = true }
-fundsp = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+ctrlc = { workspace = true }
+# Required by the `MergeConfig` derive — the generated
+# `ConfigFileRaw` carries `#[derive(serde::Deserialize)]` so serde
+# must be visible to the cli crate even though our own source
+# doesn't `use` it directly.
 serde = { workspace = true }
-serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-tap = { workspace = true }
-ctrlc = { workspace = true }
-axum = { workspace = true }
-tokio = { workspace = true }
-tokio-listener = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
-prometheus = { workspace = true }
-aide = { workspace = true }
-schemars = { workspace = true }
-sd-notify = { workspace = true }
-futures = { workspace = true }
-openidconnect = { workspace = true }
-reqwest = { workspace = true }
-tower-sessions = { workspace = true }
-tempfile = { workspace = true }
-tokio-tungstenite = { workspace = true }
-parking_lot = { workspace = true }
-url = { workspace = true }
-# rustls 0.23 requires a CryptoProvider to be selected before the
-# first TLS handshake.  tokio-tungstenite's
-# rustls-tls-native-roots feature pulls rustls in but does not
-# enable a provider feature on it, so without this dep the first
-# `wss://` connection panics with "Could not automatically
-# determine the process-level CryptoProvider".  We pick `ring`
-# because it's already in the tree (used by reqwest's rustls 0.21
-# backend), and call `install_default()` from `main` to make the
-# choice explicit and visible.
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
-
-[target.'cfg(unix)'.dependencies]
-tracing-journald = "0.3"
 
 [lints]
 workspace = true
