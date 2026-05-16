@@ -149,390 +149,529 @@ pub struct AudioEngineContext<'a> {
   pub preview: Arc<PreviewState>,
 }
 
-/// Run the audio engine's main loop: spawn per-heartbeat poll/play threads,
-/// supervise them, and respond to preview-UI actions.  Shuts down
-/// when `running` becomes false or a thread exhausts its failure
-/// budget.
-pub fn run_audio_engine(ctx: AudioEngineContext<'_>) -> Result<(), AudioEngineError> {
-  let AudioEngineContext {
-    audio_device,
-    headless,
-    preview,
-  } = ctx;
+/// Exponential-backoff state for re-establishing a failed audio
+/// stream.  Carried separately from the rest of the engine so the
+/// stream-recovery tick has one cohesive piece of state to mutate
+/// and reset.
+struct AudioRecoveryState {
+  backoff: Duration,
+  next_at: Option<Instant>,
+  attempts: u64,
+}
 
-  // Headless instances skip the audio device entirely.  The mixer,
-  // play threads, audio recovery, and audio health logging are all
-  // gated on this `Option`; everything else (pollers, supervision,
-  // the WebSocket-driven mute/volume hooks) runs unconditionally.
-  let mut mixer = if headless {
-    None
-  } else {
-    let m = AudioMixer::new(audio_device)?;
-    preview.set_mixer_handle(m.handle());
-    Some(m)
-  };
+impl AudioRecoveryState {
+  /// Cap on exponential backoff between recovery attempts.
+  const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-  let mut supervised: Vec<SupervisedThread> = Vec::new();
-  let mut total_heartbeats = 0usize;
-
-  // Snapshot heartbeat configs for thread setup; transitions are
-  // re-read at runtime so live edits take effect.  Iterate every
-  // Source even though today only the Local Source exists, so the
-  // poll/play thread topology already understands per-Source
-  // addressing when remote Sources arrive.
-  let initial_sources = preview.sources_snapshot();
-  let source_count = initial_sources.len();
-  // Bind the mixer handle once.  `Some(handle)` and `!headless`
-  // are equivalent invariants, so gating play-thread spawns on
-  // `if let Some(...)` lets the type system carry the
-  // "non-headless implies handle exists" claim instead of a
-  // separate `if !headless` check followed by an `.expect()`.
-  let mixer_handle = mixer.as_ref().map(AudioMixer::handle);
-  for source in &initial_sources {
-    let hb_count = source.heartbeats.read().len();
-    total_heartbeats += hb_count;
-    // Poll threads run only for Local sources — remote heartbeats
-    // are probed by the remote instance and arrive over the wire.
-    for hb_idx in 0..hb_count {
-      if source.kind.is_local() {
-        let poll_h = spawn_poll_thread(&preview, source, hb_idx);
-        supervised.push(SupervisedThread::new(
-          poll_h,
-          source.name.clone(),
-          hb_idx,
-          ThreadRole::Poll,
-        ));
-      }
-      if let Some(handle) = mixer_handle.as_ref() {
-        let play_h =
-          spawn_play_thread(&preview, source, hb_idx, handle.clone());
-        supervised.push(SupervisedThread::new(
-          play_h,
-          source.name.clone(),
-          hb_idx,
-          ThreadRole::Play,
-        ));
-      }
+  fn new() -> Self {
+    Self {
+      backoff: Duration::from_secs(1),
+      next_at: None,
+      attempts: 0,
     }
   }
 
-  info!(
-    sources = source_count,
-    heartbeats = total_heartbeats,
-    headless,
-    "Daemon started"
-  );
+  /// True when enough time has elapsed since the last failed
+  /// attempt that another try is warranted.
+  fn should_try(&self) -> bool {
+    self.next_at.is_none_or(|t| Instant::now() >= t)
+  }
 
-  // Stream recovery state (exponential backoff).
-  const MAX_RECOVERY_BACKOFF: Duration = Duration::from_secs(60);
-  let mut recovery_backoff = Duration::from_secs(1);
-  let mut next_recovery_at: Option<Instant> = None;
-  let mut recovery_attempts: u64 = 0;
+  /// Reset to "stream healthy" after a successful recovery.
+  fn on_success(&mut self) {
+    self.backoff = Duration::from_secs(1);
+    self.next_at = None;
+  }
 
-  // Main loop: handle mute transitions + supervision + health.
-  let mut was_muted = preview.muted.load(Ordering::Relaxed);
-  let mut tick: u32 = 0;
+  /// Schedule the next retry, doubling the backoff up to the cap.
+  fn on_failure(&mut self) {
+    self.next_at = Some(Instant::now() + self.backoff);
+    self.backoff = (self.backoff * 2).min(Self::MAX_BACKOFF);
+  }
+}
 
-  while preview.running.load(Ordering::Relaxed) {
-    let is_muted = preview.muted.load(Ordering::Relaxed);
-    if is_muted != was_muted {
-      if is_muted {
-        info!("Audio muted via API");
-      } else {
-        info!("Audio unmuted via API");
-      }
-      preview.update_all_effective_volumes();
-      was_muted = is_muted;
-    }
+/// The audio engine: owns the mixer (when not headless), the
+/// supervised worker thread handles, and the loop-local state for
+/// stream recovery / mute tracking / tick counting.  Constructed
+/// once via `new`, driven via `run`, torn down via `shutdown`
+/// (which `run` calls on every exit path).
+pub struct AudioEngine {
+  preview: Arc<PreviewState>,
+  mixer: Option<AudioMixer>,
+  supervised: Vec<SupervisedThread>,
+  audio_recovery: AudioRecoveryState,
+  was_muted: bool,
+  tick: u32,
+}
 
-    // -- Supervision check (~every 1 s).
-    if tick.is_multiple_of(SUPERVISION_CHECK_INTERVAL) {
-      let mut budget_exhausted: Option<(String, usize, String)> = None;
+impl AudioEngine {
+  /// Build the engine: open the audio device (when not headless),
+  /// spawn the initial poll/play threads for every (source,
+  /// heartbeat) pair, and log a startup summary.
+  pub fn new(ctx: AudioEngineContext<'_>) -> Result<Self, AudioEngineError> {
+    let AudioEngineContext {
+      audio_device,
+      headless,
+      preview,
+    } = ctx;
 
-      for st in supervised.iter_mut() {
-        // Combine the "is this thread finished?" check and the
-        // `take()` into a single conditional take so the borrow
-        // checker carries the invariant — no separate predicate
-        // followed by an `.unwrap()` that could rot under
-        // refactoring.
-        let Some(handle) = st.handle.take_if(|h| h.is_finished()) else {
-          continue;
-        };
-        match handle.join() {
-          Ok(()) => {
-            debug!(
-              source = %st.source_name,
-              heartbeat = st.hb_idx,
-              role = %st.role,
-              "Thread exited cleanly"
-            );
-          }
-          Err(payload) => {
-            let msg = extract_panic_message(&payload);
-            error!(
-              source = %st.source_name,
-              heartbeat = st.hb_idx,
-              role = %st.role,
-              panic = msg,
-              "Thread panicked"
-            );
-            if st.record_failure() {
-              error!(
-                source = %st.source_name,
-                heartbeat = st.hb_idx,
-                role = %st.role,
-                "Failure budget exhausted, shutting down"
-              );
-              budget_exhausted =
-                Some((st.source_name.clone(), st.hb_idx, st.role.to_string()));
-              break;
-            }
+    // Headless instances skip the audio device entirely.  The mixer,
+    // play threads, audio recovery, and audio health logging are all
+    // gated on this `Option`; everything else (pollers, supervision,
+    // the WebSocket-driven mute/volume hooks) runs unconditionally.
+    let mixer = if headless {
+      None
+    } else {
+      let m = AudioMixer::new(audio_device)?;
+      preview.set_mixer_handle(m.handle());
+      Some(m)
+    };
 
-            // Respawn.  Resolve the source by name first — if
-            // it has been removed in the interim, log and skip
-            // instead of asserting.  For play threads, the same
-            // structural rule as initial spawn applies: a handle
-            // exists IFF we are not headless.
-            let Some(source) = preview.source_by_name(&st.source_name) else {
-              warn!(
-                source = %st.source_name,
-                heartbeat = st.hb_idx,
-                role = %st.role,
-                "Cannot respawn thread: source no longer exists",
-              );
-              continue;
-            };
-            info!(
-              source = %st.source_name,
-              heartbeat = st.hb_idx,
-              role = %st.role,
-              recent_failures = st.failures.len(),
-              "Respawning thread"
-            );
-            let new_handle = match (&st.role, mixer_handle.as_ref()) {
-              (ThreadRole::Poll, _) => {
-                spawn_poll_thread(&preview, &source, st.hb_idx)
-              }
-              (ThreadRole::Play, Some(handle)) => {
-                spawn_play_thread(&preview, &source, st.hb_idx, handle.clone())
-              }
-              (ThreadRole::Play, None) => {
-                // Should be unreachable: Play roles only enter
-                // `supervised` when a mixer handle exists, and
-                // the handle is set-once at audio-engine start.  Log
-                // structurally rather than panic so the bug — if
-                // it ever happens — surfaces in operator logs.
-                error!(
-                  source = %st.source_name,
-                  heartbeat = st.hb_idx,
-                  "Cannot respawn play thread without mixer handle; \
-                   this is an audio-engine-startup invariant violation",
-                );
-                continue;
-              }
-            };
-            st.handle = Some(new_handle);
-          }
+    let mut supervised: Vec<SupervisedThread> = Vec::new();
+    let mut total_heartbeats = 0usize;
+
+    // Snapshot heartbeat configs for thread setup; transitions are
+    // re-read at runtime so live edits take effect.  Iterate every
+    // Source even though today only the Local Source exists, so the
+    // poll/play thread topology already understands per-Source
+    // addressing when remote Sources arrive.
+    let initial_sources = preview.sources_snapshot();
+    let source_count = initial_sources.len();
+    // `Some(handle)` and `!headless` are equivalent invariants;
+    // gating play-thread spawns on `if let Some(...)` lets the type
+    // system carry the "non-headless implies handle exists" claim
+    // instead of a separate `if !headless` check followed by an
+    // `.expect()`.
+    let mixer_handle = mixer.as_ref().map(AudioMixer::handle);
+    for source in &initial_sources {
+      let hb_count = source.heartbeats.read().len();
+      total_heartbeats += hb_count;
+      for hb_idx in 0..hb_count {
+        // Poll threads run only for Local sources — remote
+        // heartbeats are probed by the remote instance and arrive
+        // over the wire.
+        if source.kind.is_local() {
+          let poll_h = spawn_poll_thread(&preview, source, hb_idx);
+          supervised.push(SupervisedThread::new(
+            poll_h,
+            source.name.clone(),
+            hb_idx,
+            ThreadRole::Poll,
+          ));
         }
-      }
-
-      if let Some((source_name, heartbeat, role)) = budget_exhausted {
-        preview.running.store(false, Ordering::Relaxed);
-        for st in supervised.iter_mut() {
-          if let Some(h) = st.handle.take() {
-            if let Err(p) = h.join() {
-              let m = extract_panic_message(&p);
-              warn!(
-                source = %st.source_name,
-                heartbeat = st.hb_idx,
-                role = %st.role,
-                panic = m,
-                "Thread panicked during shutdown"
-              );
-            }
-          }
-        }
-        if let Some(m) = mixer.as_mut() {
-          m.clear();
-        }
-        return Err(AudioEngineError::ThreadBudgetExhausted {
-          source_name,
-          heartbeat,
-          role,
-        });
-      }
-
-      // -- Ensure play threads exist for every (source, hb) pair.
-      //    Catches Remote Sources whose heartbeats arrive after
-      //    startup, and respawns any that exited cleanly because
-      //    a heartbeat was removed and then re-added.
-      if let Some(handle) = mixer_handle.as_ref() {
-        rebalance_play_threads(&preview, &mut supervised, handle);
-      }
-
-      // -- Stream recovery: if the audio stream has failed, attempt
-      //    to rebuild it with exponential backoff.  Skipped entirely
-      //    in headless mode (no mixer to recover).
-      if let Some(mixer) = mixer.as_mut() {
-        if mixer.stream_failed() {
-          let should_try = next_recovery_at.is_none_or(|t| Instant::now() >= t);
-          if should_try {
-            recovery_attempts += 1;
-            preview
-              .metrics
-              .audio_recovery_attempts
-              .set(recovery_attempts as i64);
-            match mixer.try_recover() {
-              Ok(()) => {
-                info!(
-                  attempts = recovery_attempts,
-                  "Audio stream recovered successfully"
-                );
-                recovery_backoff = Duration::from_secs(1);
-                next_recovery_at = None;
-              }
-              Err(e) => {
-                let next = Instant::now() + recovery_backoff;
-                error!(
-                  error = %e,
-                  next_retry_secs = recovery_backoff.as_secs(),
-                  attempts = recovery_attempts,
-                  "Audio stream recovery failed"
-                );
-                recovery_backoff =
-                  (recovery_backoff * 2).min(MAX_RECOVERY_BACKOFF);
-                next_recovery_at = Some(next);
-              }
-            }
-          }
+        if let Some(handle) = mixer_handle.as_ref() {
+          let play_h =
+            spawn_play_thread(&preview, source, hb_idx, handle.clone());
+          supervised.push(SupervisedThread::new(
+            play_h,
+            source.name.clone(),
+            hb_idx,
+            ThreadRole::Play,
+          ));
         }
       }
     }
 
-    // -- Health logging (~every 30 s).  Skipped in headless mode —
-    //    no mixer means no audio metrics to publish.
-    if tick > 0 && tick.is_multiple_of(HEALTH_LOG_INTERVAL) {
-      if let Some(mixer) = mixer.as_mut() {
-        let lock_fail = mixer.lock_failures();
-        let nan = mixer.nan_frames();
-        let peak_us = mixer.peak_callback_us();
-        let stream_errs = mixer.stream_errors();
-        let stream_fail = mixer.stream_failed();
+    info!(
+      sources = source_count,
+      heartbeats = total_heartbeats,
+      headless,
+      "Audio engine started"
+    );
 
-        let out_peak = mixer.output_peak_amplitude();
-        let slot_peaks = mixer.slot_peak_amplitudes();
-        let slot_rms = mixer.slot_rms_amplitudes();
-        let (buf_min, buf_max) = mixer.callback_buffer_range();
-        mixer.reset_amplitude_stats();
+    let was_muted = preview.muted.load(Ordering::Relaxed);
+    Ok(Self {
+      preview,
+      mixer,
+      supervised,
+      audio_recovery: AudioRecoveryState::new(),
+      was_muted,
+      tick: 0,
+    })
+  }
 
-        preview.metrics.audio_lock_failures.set(lock_fail as i64);
-        preview.metrics.audio_nan_frames.set(nan as i64);
-        preview.metrics.audio_peak_callback_us.set(peak_us as i64);
-        preview.metrics.audio_stream_errors.set(stream_errs as i64);
-        preview
-          .metrics
-          .audio_stream_failed
-          .set(i64::from(stream_fail));
-        mixer.reset_peak_callback_us();
+  /// Drive the loop until `preview.running` becomes false or a
+  /// thread exhausts its failure budget.  Always tears the engine
+  /// down (`shutdown`) before returning, regardless of which exit
+  /// path was taken.
+  pub fn run(mut self) -> Result<(), AudioEngineError> {
+    let result = self.run_loop();
+    self.shutdown();
+    result
+  }
 
-        preview
-          .metrics
-          .audio_output_peak_amplitude
-          .set(out_peak as f64);
-        for i in 0..MAX_MIXER_SLOTS {
-          let label = i.to_string();
-          preview
-            .metrics
-            .audio_slot_peak_amplitude
-            .with_label_values(&[&label])
-            .set(slot_peaks[i] as f64);
-          preview
-            .metrics
-            .audio_slot_rms_amplitude
-            .with_label_values(&[&label])
-            .set(slot_rms[i] as f64);
-        }
-        preview.metrics.audio_callback_buffer_frames_min.set(
-          if buf_min == u32::MAX {
-            0
-          } else {
-            buf_min as i64
-          },
-        );
-        preview
-          .metrics
-          .audio_callback_buffer_frames_max
-          .set(buf_max as i64);
+  fn run_loop(&mut self) -> Result<(), AudioEngineError> {
+    while self.preview.running.load(Ordering::Relaxed) {
+      self.mute_tick();
+      if self.tick.is_multiple_of(SUPERVISION_CHECK_INTERVAL) {
+        self.supervision_tick()?;
+        self.rebalance_play_threads();
+        self.stream_recovery_tick();
+      }
+      if self.tick > 0 && self.tick.is_multiple_of(HEALTH_LOG_INTERVAL) {
+        self.health_log_tick();
+      }
+      self.tick = self.tick.wrapping_add(1);
+      thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
+  }
 
-        // Format non-zero slot amplitudes as "0:0.123/0.089 1:0.456/0.234".
-        let slot_amplitudes: String = (0..MAX_MIXER_SLOTS)
-          .filter(|&i| slot_peaks[i] > 0.0)
-          .map(|i| format!("{}:{:.4}/{:.4}", i, slot_peaks[i], slot_rms[i]))
-          .collect::<Vec<_>>()
-          .join(" ");
+  /// `Some` iff the engine is non-headless and a mixer is open.
+  /// Play threads need this to schedule audio.
+  fn mixer_handle(&self) -> Option<MixerHandle> {
+    self.mixer.as_ref().map(AudioMixer::handle)
+  }
 
-        let clipping = out_peak > 1.0;
-        let period_renego =
-          buf_min != buf_max && buf_min != u32::MAX && buf_max != 0;
+  /// Detect a mute transition and propagate volume updates.
+  fn mute_tick(&mut self) {
+    let is_muted = self.preview.muted.load(Ordering::Relaxed);
+    if is_muted == self.was_muted {
+      return;
+    }
+    if is_muted {
+      info!("Audio muted via API");
+    } else {
+      info!("Audio unmuted via API");
+    }
+    self.preview.update_all_effective_volumes();
+    self.was_muted = is_muted;
+  }
 
-        if lock_fail > 0 || nan > 0 || stream_fail || clipping || period_renego
-        {
-          warn!(
-            lock_failures = lock_fail,
-            nan_frames = nan,
-            peak_callback_us = peak_us,
-            stream_errors = stream_errs,
-            stream_failed = stream_fail,
-            output_peak = out_peak,
-            slot_amplitudes = slot_amplitudes.as_str(),
-            callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
-            callback_buffer_max = buf_max,
-            "Audio health"
-          );
-        } else {
+  /// Reap finished threads, count failures, and either respawn or
+  /// return `Err(ThreadBudgetExhausted)` when a thread crashes too
+  /// often.  Called at the supervision cadence (~1 s).
+  fn supervision_tick(&mut self) -> Result<(), AudioEngineError> {
+    let mixer_handle = self.mixer_handle();
+    for st in self.supervised.iter_mut() {
+      // Combine the "is this thread finished?" check and the
+      // `take()` into a single conditional take so the borrow
+      // checker carries the invariant — no separate predicate
+      // followed by an `.unwrap()` that could rot under
+      // refactoring.
+      let Some(handle) = st.handle.take_if(|h| h.is_finished()) else {
+        continue;
+      };
+      match handle.join() {
+        Ok(()) => {
           debug!(
-            lock_failures = lock_fail,
-            nan_frames = nan,
-            peak_callback_us = peak_us,
-            stream_errors = stream_errs,
-            stream_failed = stream_fail,
-            output_peak = out_peak,
-            slot_amplitudes = slot_amplitudes.as_str(),
-            callback_buffer_min = if buf_min == u32::MAX { 0 } else { buf_min },
-            callback_buffer_max = buf_max,
-            "Audio health"
+            source = %st.source_name,
+            heartbeat = st.hb_idx,
+            role = %st.role,
+            "Thread exited cleanly"
           );
         }
-      }
-    }
-
-    tick = tick.wrapping_add(1);
-    thread::sleep(Duration::from_millis(100));
-  }
-
-  info!("Waiting for heartbeat threads to finish");
-  for st in supervised.iter_mut() {
-    if let Some(h) = st.handle.take() {
-      match h.join() {
-        Ok(()) => {}
         Err(payload) => {
           let msg = extract_panic_message(&payload);
-          warn!(
+          error!(
             source = %st.source_name,
             heartbeat = st.hb_idx,
             role = %st.role,
             panic = msg,
-            "Thread panicked during shutdown"
+            "Thread panicked"
           );
+          if st.record_failure() {
+            error!(
+              source = %st.source_name,
+              heartbeat = st.hb_idx,
+              role = %st.role,
+              "Failure budget exhausted, shutting down"
+            );
+            return Err(AudioEngineError::ThreadBudgetExhausted {
+              source_name: st.source_name.clone(),
+              heartbeat: st.hb_idx,
+              role: st.role.to_string(),
+            });
+          }
+
+          // Respawn.  Resolve the source by name first — if it has
+          // been removed in the interim, log and skip instead of
+          // asserting.  For play threads, the same structural rule
+          // as initial spawn applies: a handle exists IFF we are
+          // not headless.
+          let Some(source) = self.preview.source_by_name(&st.source_name)
+          else {
+            warn!(
+              source = %st.source_name,
+              heartbeat = st.hb_idx,
+              role = %st.role,
+              "Cannot respawn thread: source no longer exists",
+            );
+            continue;
+          };
+          info!(
+            source = %st.source_name,
+            heartbeat = st.hb_idx,
+            role = %st.role,
+            recent_failures = st.failures.len(),
+            "Respawning thread"
+          );
+          let new_handle = match (&st.role, mixer_handle.as_ref()) {
+            (ThreadRole::Poll, _) => {
+              spawn_poll_thread(&self.preview, &source, st.hb_idx)
+            }
+            (ThreadRole::Play, Some(handle)) => spawn_play_thread(
+              &self.preview,
+              &source,
+              st.hb_idx,
+              handle.clone(),
+            ),
+            (ThreadRole::Play, None) => {
+              // Should be unreachable: Play roles only enter
+              // `supervised` when a mixer handle exists, and the
+              // handle is set-once at audio-engine start.  Log
+              // structurally rather than panic so the bug — if it
+              // ever happens — surfaces in operator logs.
+              error!(
+                source = %st.source_name,
+                heartbeat = st.hb_idx,
+                "Cannot respawn play thread without mixer handle; \
+                 this is an audio-engine-startup invariant violation",
+              );
+              continue;
+            }
+          };
+          st.handle = Some(new_handle);
+        }
+      }
+    }
+    Ok(())
+  }
+
+  /// Ensure every (source, heartbeat) pair has a live play thread.
+  /// Catches Remote Sources whose heartbeats arrive after startup
+  /// and respawns play threads that exited cleanly because a
+  /// heartbeat was removed and then re-added.  No-op in headless
+  /// mode (no mixer means no play threads).
+  fn rebalance_play_threads(&mut self) {
+    let Some(play_mix) = self.mixer_handle() else {
+      return;
+    };
+
+    // Build the desired set of (Arc<Source>, hb_idx) play targets.
+    // Carrying the Arc<Source> rather than just the name lets the
+    // spawn call below skip a re-lookup that would otherwise have
+    // to assert the source still exists.
+    let snapshot = self.preview.sources_snapshot();
+    let desired: Vec<(Arc<Source>, usize)> = snapshot
+      .iter()
+      .flat_map(|source| {
+        let s = Arc::clone(source);
+        let hb_count = s.heartbeats.read().len();
+        (0..hb_count).map(move |hb_idx| (Arc::clone(&s), hb_idx))
+      })
+      .collect();
+
+    // Drop play-thread entries whose Source no longer exists.  The
+    // threads themselves see `kind.is_alive() == false` and exit,
+    // but their `SupervisedThread` slots would otherwise pile up
+    // forever.
+    self.supervised.retain(|st| {
+      if st.role != ThreadRole::Play {
+        return true;
+      }
+      desired
+        .iter()
+        .any(|(source, _)| source.name == st.source_name)
+    });
+
+    for (source, hb_idx) in &desired {
+      let live = self.supervised.iter().any(|st| {
+        st.role == ThreadRole::Play
+          && st.source_name == source.name
+          && st.hb_idx == *hb_idx
+          && st.handle.as_ref().is_some_and(|h| !h.is_finished())
+      });
+      if live {
+        continue;
+      }
+      let play_h =
+        spawn_play_thread(&self.preview, source, *hb_idx, play_mix.clone());
+      let existing = self.supervised.iter_mut().find(|st| {
+        st.role == ThreadRole::Play
+          && st.source_name == source.name
+          && st.hb_idx == *hb_idx
+      });
+      match existing {
+        Some(st) => {
+          st.handle = Some(play_h);
+        }
+        None => {
+          self.supervised.push(SupervisedThread::new(
+            play_h,
+            source.name.clone(),
+            *hb_idx,
+            ThreadRole::Play,
+          ));
         }
       }
     }
   }
-  if let Some(mixer) = mixer.as_mut() {
-    mixer.clear();
+
+  /// Attempt to rebuild the audio stream after a failure, with
+  /// exponential backoff between tries.  No-op in headless mode or
+  /// when the stream is healthy.
+  fn stream_recovery_tick(&mut self) {
+    let Some(mixer) = self.mixer.as_mut() else {
+      return;
+    };
+    if !mixer.stream_failed() {
+      return;
+    }
+    if !self.audio_recovery.should_try() {
+      return;
+    }
+    self.audio_recovery.attempts += 1;
+    self
+      .preview
+      .metrics
+      .audio_recovery_attempts
+      .set(self.audio_recovery.attempts as i64);
+    match mixer.try_recover() {
+      Ok(()) => {
+        info!(
+          attempts = self.audio_recovery.attempts,
+          "Audio stream recovered successfully"
+        );
+        self.audio_recovery.on_success();
+      }
+      Err(e) => {
+        error!(
+          error = %e,
+          next_retry_secs = self.audio_recovery.backoff.as_secs(),
+          attempts = self.audio_recovery.attempts,
+          "Audio stream recovery failed"
+        );
+        self.audio_recovery.on_failure();
+      }
+    }
   }
-  info!("Daemon stopped");
-  Ok(())
+
+  /// Pull current mixer stats and push them to the Prometheus
+  /// metrics + a warning/debug log line.  No-op in headless mode.
+  fn health_log_tick(&mut self) {
+    let Some(mixer) = self.mixer.as_mut() else {
+      return;
+    };
+    let lock_fail = mixer.lock_failures();
+    let nan = mixer.nan_frames();
+    let peak_us = mixer.peak_callback_us();
+    let stream_errs = mixer.stream_errors();
+    let stream_fail = mixer.stream_failed();
+
+    let out_peak = mixer.output_peak_amplitude();
+    let slot_peaks = mixer.slot_peak_amplitudes();
+    let slot_rms = mixer.slot_rms_amplitudes();
+    let (buf_min, buf_max) = mixer.callback_buffer_range();
+    mixer.reset_amplitude_stats();
+
+    let metrics = &self.preview.metrics;
+    metrics.audio_lock_failures.set(lock_fail as i64);
+    metrics.audio_nan_frames.set(nan as i64);
+    metrics.audio_peak_callback_us.set(peak_us as i64);
+    metrics.audio_stream_errors.set(stream_errs as i64);
+    metrics.audio_stream_failed.set(i64::from(stream_fail));
+    mixer.reset_peak_callback_us();
+
+    metrics.audio_output_peak_amplitude.set(out_peak as f64);
+    for i in 0..MAX_MIXER_SLOTS {
+      let label = i.to_string();
+      metrics
+        .audio_slot_peak_amplitude
+        .with_label_values(&[&label])
+        .set(slot_peaks[i] as f64);
+      metrics
+        .audio_slot_rms_amplitude
+        .with_label_values(&[&label])
+        .set(slot_rms[i] as f64);
+    }
+    metrics
+      .audio_callback_buffer_frames_min
+      .set(if buf_min == u32::MAX {
+        0
+      } else {
+        buf_min as i64
+      });
+    metrics.audio_callback_buffer_frames_max.set(buf_max as i64);
+
+    // Format non-zero slot amplitudes as "0:0.123/0.089 1:0.456/0.234".
+    let slot_amplitudes: String = (0..MAX_MIXER_SLOTS)
+      .filter(|&i| slot_peaks[i] > 0.0)
+      .map(|i| format!("{}:{:.4}/{:.4}", i, slot_peaks[i], slot_rms[i]))
+      .collect::<Vec<_>>()
+      .join(" ");
+
+    let clipping = out_peak > 1.0;
+    let period_renego =
+      buf_min != buf_max && buf_min != u32::MAX && buf_max != 0;
+    let buf_min_logged = if buf_min == u32::MAX { 0 } else { buf_min };
+
+    if lock_fail > 0 || nan > 0 || stream_fail || clipping || period_renego {
+      warn!(
+        lock_failures = lock_fail,
+        nan_frames = nan,
+        peak_callback_us = peak_us,
+        stream_errors = stream_errs,
+        stream_failed = stream_fail,
+        output_peak = out_peak,
+        slot_amplitudes = slot_amplitudes.as_str(),
+        callback_buffer_min = buf_min_logged,
+        callback_buffer_max = buf_max,
+        "Audio health"
+      );
+    } else {
+      debug!(
+        lock_failures = lock_fail,
+        nan_frames = nan,
+        peak_callback_us = peak_us,
+        stream_errors = stream_errs,
+        stream_failed = stream_fail,
+        output_peak = out_peak,
+        slot_amplitudes = slot_amplitudes.as_str(),
+        callback_buffer_min = buf_min_logged,
+        callback_buffer_max = buf_max,
+        "Audio health"
+      );
+    }
+  }
+
+  /// Join every supervised thread and clear the mixer.  `run` calls
+  /// this on every exit path so the engine never leaves dangling
+  /// threads or a live audio stream behind.
+  fn shutdown(&mut self) {
+    self.preview.running.store(false, Ordering::Relaxed);
+    info!("Waiting for heartbeat threads to finish");
+    for st in self.supervised.iter_mut() {
+      if let Some(h) = st.handle.take() {
+        match h.join() {
+          Ok(()) => {}
+          Err(payload) => {
+            let msg = extract_panic_message(&payload);
+            warn!(
+              source = %st.source_name,
+              heartbeat = st.hb_idx,
+              role = %st.role,
+              panic = msg,
+              "Thread panicked during shutdown"
+            );
+          }
+        }
+      }
+    }
+    if let Some(mixer) = self.mixer.as_mut() {
+      mixer.clear();
+    }
+    info!("Audio engine stopped");
+  }
+}
+
+/// Construct an `AudioEngine` from the given context and run it to
+/// completion.  Convenience wrapper for callers that don't need to
+/// hold the engine to mutate it from outside the loop.
+pub fn run_audio_engine(
+  ctx: AudioEngineContext<'_>,
+) -> Result<(), AudioEngineError> {
+  AudioEngine::new(ctx)?.run()
 }
 
 // ---------------------------------------------------------------------------
@@ -792,82 +931,6 @@ pub fn spawn_play_thread(
       }
     }
   })
-}
-
-/// Ensure a play thread is alive for every `(source_idx, hb_idx)`
-/// pair that exists in the current `preview.sources`.  Called on
-/// each supervision tick so a Remote Source whose heartbeat list
-/// arrives or grows after startup picks up play threads without
-/// requiring an audio-engine restart.
-///
-/// The check considers a pair "live" only when its `SupervisedThread`
-/// has a `handle: Some(h)` and `!h.is_finished()`.  Existing entries
-/// whose handle has been taken (clean exit) get a fresh thread;
-/// pairs that were never spawned get a new `SupervisedThread`.
-///
-/// Skipped entirely when the audio engine is headless — headless instances
-/// never spawn play threads, by design.
-fn rebalance_play_threads(
-  preview: &Arc<PreviewState>,
-  supervised: &mut Vec<SupervisedThread>,
-  play_mix: &MixerHandle,
-) {
-  // Build the desired set of (Arc<Source>, hb_idx) play targets.
-  // Carrying the Arc<Source> rather than just the name lets the
-  // spawn call below skip a re-lookup that would otherwise have to
-  // assert the source still exists.
-  let snapshot = preview.sources_snapshot();
-  let desired: Vec<(Arc<Source>, usize)> = snapshot
-    .iter()
-    .flat_map(|source| {
-      let s = Arc::clone(source);
-      let hb_count = s.heartbeats.read().len();
-      (0..hb_count).map(move |hb_idx| (Arc::clone(&s), hb_idx))
-    })
-    .collect();
-
-  // Drop play-thread entries whose Source no longer exists.  The
-  // threads themselves see `kind.is_alive() == false` and exit, but
-  // their `SupervisedThread` slots would otherwise pile up forever.
-  supervised.retain(|st| {
-    if st.role != ThreadRole::Play {
-      return true;
-    }
-    desired
-      .iter()
-      .any(|(source, _)| source.name == st.source_name)
-  });
-
-  for (source, hb_idx) in &desired {
-    let live = supervised.iter().any(|st| {
-      st.role == ThreadRole::Play
-        && st.source_name == source.name
-        && st.hb_idx == *hb_idx
-        && st.handle.as_ref().is_some_and(|h| !h.is_finished())
-    });
-    if live {
-      continue;
-    }
-    let play_h = spawn_play_thread(preview, source, *hb_idx, play_mix.clone());
-    let existing = supervised.iter_mut().find(|st| {
-      st.role == ThreadRole::Play
-        && st.source_name == source.name
-        && st.hb_idx == *hb_idx
-    });
-    match existing {
-      Some(st) => {
-        st.handle = Some(play_h);
-      }
-      None => {
-        supervised.push(SupervisedThread::new(
-          play_h,
-          source.name.clone(),
-          *hb_idx,
-          ThreadRole::Play,
-        ));
-      }
-    }
-  }
 }
 
 /// Spawn poll and (conditionally) play threads for the heartbeat
