@@ -1005,6 +1005,37 @@ impl MixerHandle {
 mod tests {
   use super::*;
 
+  /// Open an `AudioMixer` for tests, with a strict default that
+  /// panics if no audio device is available.  Surfaces real
+  /// regressions on dev machines that *should* have audio.  Hermetic
+  /// build environments (the Nix sandbox, CI without a sound card)
+  /// opt out by setting `sonify_health_tests_strict_audio_device=false`
+  /// in the build env; in that mode the helper returns `None` and
+  /// the caller skips the test as before.
+  fn open_test_mixer() -> Option<AudioMixer> {
+    match AudioMixer::new(None) {
+      Ok(mixer) => Some(mixer),
+      Err(e) => {
+        let strict = std::env::var("sonify_health_tests_strict_audio_device")
+          .map(|v| !v.trim().eq_ignore_ascii_case("false"))
+          .unwrap_or(true);
+        if strict {
+          panic!(
+            "AudioMixer::new(None) failed: {e}\n\
+             If this is an environment with no audio device available, \
+             opt out by setting:\n    \
+             sonify_health_tests_strict_audio_device=false"
+          );
+        }
+        eprintln!(
+          "AudioMixer::new(None) failed ({e}); skipping test \
+           (opt-out via sonify_health_tests_strict_audio_device=false)"
+        );
+        None
+      }
+    }
+  }
+
   #[test]
   fn graph_produces_samples() {
     let mut graph: Box<dyn AudioUnit> = Box::new(sine_hz(440.0) * 0.5);
@@ -1075,8 +1106,7 @@ mod tests {
   /// available (CI).
   #[test]
   fn mixer_handle_health_accessors() {
-    let Ok(mixer) = AudioMixer::new(None) else {
-      eprintln!("No audio device available, skipping test");
+    let Some(mixer) = open_test_mixer() else {
       return;
     };
 
@@ -1385,8 +1415,7 @@ mod tests {
   /// the new amplitude fields.  Skipped if no audio device.
   #[test]
   fn mixer_amplitude_accessors() {
-    let Ok(mixer) = AudioMixer::new(None) else {
-      eprintln!("No audio device available, skipping test");
+    let Some(mixer) = open_test_mixer() else {
       return;
     };
 
@@ -1562,8 +1591,7 @@ mod tests {
   /// the slot Vec bounded.  Skipped if no audio device available.
   #[test]
   fn add_reuses_slot_after_remove_fadeout_drains() {
-    let Ok(mixer) = AudioMixer::new(None) else {
-      eprintln!("No audio device available, skipping test");
+    let Some(mixer) = open_test_mixer() else {
       return;
     };
 

@@ -107,6 +107,13 @@
         buildInputs = audioBuildInputs system pkgs;
         nativeBuildInputs = [pkgs.pkg-config];
         cargoTestExtraArgs = "--lib --bins";
+        # The Nix sandbox has no audio device.  The lib's audio
+        # tests default to "strict" (panic if AudioMixer::new
+        # fails) so a dev machine catches regressions; opt the
+        # sandbox out so it skips those tests instead.
+        env = {
+          sonify_health_tests_strict_audio_device = "false";
+        };
       };
       buildCrate = key: crate: let
         pkgFile = ./. + "/nix/packages/${key}.nix";
