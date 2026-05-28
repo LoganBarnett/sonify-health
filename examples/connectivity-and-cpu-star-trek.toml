@@ -2,7 +2,11 @@
 # -c 1: send one packet (--count).  -W N: seconds to wait for a
 # reply (--linger).
 [[heartbeats]]
-command = "ping -c 1 -W 2 192.168.1.1"
+command = '''
+gw=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+[ -z "$gw" ] && gw=$(route -n get default 2>/dev/null | awk '/gateway/ {print $2}')
+ping -c 1 -W 2 "$gw"
+'''
 crossfade_ms = 6.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0

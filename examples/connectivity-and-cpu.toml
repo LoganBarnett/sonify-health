@@ -17,12 +17,19 @@ log_format = "text"
 # -c 1: send one packet (--count).  -W N: seconds to wait for a
 # reply (--linger).
 #
-# Gateway reachability.  Replace 192.168.1.1 with your actual gateway
-# address (`ip route | awk '/default/ {print $3}'` on Linux,
-# `netstat -nr | awk '/default/ {print $2; exit}'` on macOS).
+# Gateway reachability.  The default-route lookup tries Linux's
+# `ip route` first, then falls back to macOS's `route -n get
+# default`, so the same config works on both.  If neither command
+# yields a gateway (no default route configured), ping is invoked
+# with an empty argument and exits non-zero — registering as
+# "down", which is the correct signal.
 [[heartbeats]]
 name = "gateway"
-command = "ping -c 1 -W 2 192.168.1.1"
+command = '''
+gw=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+[ -z "$gw" ] && gw=$(route -n get default 2>/dev/null | awk '/gateway/ {print $2}')
+ping -c 1 -W 2 "$gw"
+'''
 result_mode = "exit-code"
 cycle_secs = 15
 cycle_offset_secs = 0
