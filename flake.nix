@@ -17,19 +17,24 @@
     crane,
     foundation,
   }: let
-    # Audio + frontend dependencies that aren't part of foundation's
-    # default crane build: alsa headers for cpal on Linux, libiconv for
-    # Darwin, and pkg-config to find them.  Both binaries link the
-    # audio stack via the lib crate, so this applies to every package.
-    audioBuildInputs = system: pkgs:
-      pkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.alsa-lib]
-      ++ pkgs.lib.optionals pkgs.stdenv.isDarwin (with pkgs.darwin; [
-        libiconv
-      ]);
+    forAllSystems =
+      nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
 
-    project = foundation.lib.mkRustProject {
-      inherit self nixpkgs rust-overlay crane;
-      name = "sonify-health";
+    perSystem = forAllSystems (system: let
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [(import rust-overlay)];
+      };
+      craneLib =
+        (crane.mkLib pkgs).overrideToolchain
+        (p: p.rust-bin.stable.latest.default);
+      rust = pkgs.rust-bin.stable.latest.default.override {
+        extensions = [
+          "rust-src"
+          "rust-analyzer"
+          "rustfmt"
+        ];
+      };
       crates = {
         cli = {
           name = "sonify-health-cli";
@@ -42,10 +47,31 @@
           description = "Infrastructure sonification daemon";
         };
       };
-      extraBuildInputs = [];
-      extraNativeBuildInputs = [];
-      extraDevPackages = system: pkgs:
-        [
+      commonArgs = {
+        src = craneLib.cleanCargoSource self;
+        # Audio + frontend dependencies that aren't part of foundation's
+        # default crane build: alsa headers for cpal on Linux, libiconv
+        # for Darwin.  Both binaries link the audio stack via the lib
+        # crate, so this applies to every package.
+        buildInputs =
+          nixpkgs.lib.optionals pkgs.stdenv.isLinux [pkgs.alsa-lib]
+          ++ nixpkgs.lib.optionals pkgs.stdenv.isDarwin (
+            with pkgs.darwin; [libiconv]
+          );
+        nativeBuildInputs = [pkgs.pkg-config];
+        # The Nix sandbox has no audio device, so the lib's audio tests
+        # (strict by default — see crates/lib/src/audio.rs) need an
+        # opt-out at build time.
+        env = {sonify_health_tests_strict_audio_device = "false";};
+      };
+      rustPackages = foundation.lib.mkRustPackages {
+        inherit self pkgs craneLib crates commonArgs;
+      };
+    in {
+      inherit (rustPackages) packages apps;
+      devShell = pkgs.mkShell {
+        buildInputs = [
+          rust
           pkgs.cargo-sweep
           pkgs.jq
           # Unified formatter and per-language helpers.
@@ -58,97 +84,38 @@
           pkgs.elm2nix
           # Task runner.
           pkgs.just
-          # Native build inputs surfaced into the devShell so
-          # `cargo build` in the shell can link cpal.
-          pkgs.pkg-config
-        ]
-        ++ audioBuildInputs system pkgs;
-      shellHook = _pkgs: ''
-        echo "sonify-health development environment"
-        echo ""
-        echo "Available Cargo packages (use 'cargo build -p <name>'):"
-        cargo metadata --no-deps --format-version 1 2>/dev/null | \
-          jq --raw-output '.packages[].name' | \
-          sort | \
-          sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
+        ];
+        shellHook = ''
+          ${foundation.lib.cargoHuskyHookSnippet pkgs}
+          echo "sonify-health development environment"
+          echo ""
+          echo "Available Cargo packages (use 'cargo build -p <name>'):"
+          cargo metadata --no-deps --format-version 1 2>/dev/null | \
+            jq -r '.packages[].name' | \
+            sort | \
+            sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
 
-        echo ""
-        echo "Elm frontend:"
-        echo "  Build:       cd frontend && elm make src/Main.elm --output public/elm.js"
-        echo "  Regenerate:  cd frontend && elm2nix convert 2>/dev/null > elm-srcs.nix && elm2nix snapshot"
-      '';
+          echo ""
+          echo "Elm frontend:"
+          echo "  Build:       cd frontend && elm make src/Main.elm --output public/elm.js"
+          echo "  Regenerate:  cd frontend && elm2nix convert 2>/dev/null > elm-srcs.nix && elm2nix snapshot"
+        '';
+      };
+    });
+  in {
+    devShells =
+      nixpkgs.lib.mapAttrs (_: p: {default = p.devShell;}) perSystem;
+    packages = nixpkgs.lib.mapAttrs (_: p: p.packages) perSystem;
+    apps = nixpkgs.lib.mapAttrs (_: p: p.apps) perSystem;
+
+    nixosModules = {
+      daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
+      default = self.nixosModules.daemon;
     };
 
-    # mkRustProject's `extraBuildInputs` parameter takes a flat list
-    # (not a system-aware function), which can't carry cpal's
-    # platform-specific dependencies (alsa-lib on Linux,
-    # libiconv on Darwin).  Until foundation grows a system-aware
-    # variant, build a parallel packages set that wires the audio
-    # inputs through manually for the per-crate crane builds and
-    # merge it over mkRustProject's defaults.
-    workspaceCrates = {
-      cli = {
-        name = "sonify-health-cli";
-      };
-      server = {
-        name = "sonify-health-server";
-      };
+    darwinModules = {
+      daemon = import ./nix/modules/darwin-daemon.nix {inherit self;};
+      default = self.darwinModules.daemon;
     };
-    overrideAudioInputs = system: let
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [(import rust-overlay)];
-      };
-      craneLib =
-        (crane.mkLib pkgs).overrideToolchain
-        (p: p.rust-bin.stable.latest.default);
-      commonArgs = {
-        src = craneLib.cleanCargoSource self;
-        buildInputs = audioBuildInputs system pkgs;
-        nativeBuildInputs = [pkgs.pkg-config];
-        cargoTestExtraArgs = "--lib --bins";
-        # The Nix sandbox has no audio device.  The lib's audio
-        # tests default to "strict" (panic if AudioMixer::new
-        # fails) so a dev machine catches regressions; opt the
-        # sandbox out so it skips those tests instead.
-        env = {
-          sonify_health_tests_strict_audio_device = "false";
-        };
-      };
-      buildCrate = key: crate: let
-        pkgFile = ./. + "/nix/packages/${key}.nix";
-      in
-        if builtins.pathExists pkgFile
-        then import pkgFile {inherit craneLib commonArgs pkgs;}
-        else
-          craneLib.buildPackage (commonArgs
-            // {
-              pname = crate.name;
-              cargoExtraArgs = "-p ${crate.name}";
-            });
-    in
-      nixpkgs.lib.mapAttrs buildCrate workspaceCrates
-      // {
-        default = craneLib.buildPackage (commonArgs // {pname = "sonify-health";});
-      };
-
-    systems = nixpkgs.lib.systems.flakeExposed;
-    audioPackages = nixpkgs.lib.genAttrs systems overrideAudioInputs;
-  in
-    project
-    // {
-      packages =
-        nixpkgs.lib.genAttrs systems (system:
-          project.packages.${system} // audioPackages.${system});
-
-      nixosModules = {
-        daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
-        default = self.nixosModules.daemon;
-      };
-
-      darwinModules = {
-        daemon = import ./nix/modules/darwin-daemon.nix {inherit self;};
-        default = self.darwinModules.daemon;
-      };
-    };
+  };
 }
