@@ -16,34 +16,59 @@ name = "sonify-health-server"
 path = "src/main.rs"
 
 [dependencies]
+# Patch model, audio synthesis, and config types shared with the cli.
 sonify-health-lib = { workspace = true }
 # `auth` implies `cli` + `server`, giving us MergeConfig + Server +
 # BaseServerState + the OIDC handlers all in one feature gate.
 rust-template-foundation = { workspace = true, features = ["auth"] }
+# The `#[derive(clap::Args)]` on CliExtraFields and the MergeConfig-
+# generated CliRaw parser both need clap visible here.
 clap = { workspace = true }
+# Audio-graph synthesis for the live sonification stream.
 fundsp = { workspace = true }
+# Structured request and lifecycle logging.
 tracing = { workspace = true }
+# Derives the config and WebSocket payload types.
 serde = { workspace = true }
+# Encodes the WebSocket protocol and the JSON HTTP responses.
 serde_json = { workspace = true }
+# Parses the daemon's config file and patch tables.
 toml = { workspace = true }
+# Semantic error enums for the server.
 thiserror = { workspace = true }
+# Enables method chaining and reduces superfluous local variables that only
+# exist to name intermediate results.  Prefer .tap() over temporary variables
+# when it improves readability.
 tap = { workspace = true }
-ctrlc = { workspace = true }
+# HTTP router and the WebSocket route serving the live note stream.
 axum = { workspace = true }
+# Async runtime hosting the server and audio-engine tasks.
 tokio = { workspace = true }
+# Listener binding for TCP, Unix sockets, and systemd socket activation.
 tokio-listener = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
+# Metrics registry behind the /metrics endpoint.
 prometheus = { workspace = true }
+# Builds the OpenAPI document and serves the Scalar explorer.
 aide = { workspace = true }
+# JSON Schema generation for the aide-documented routes.
 schemars = { workspace = true }
+# Sink/Stream combinators driving the WebSocket handlers.
 futures = { workspace = true }
+# Required by foundation's `impl_server_state!` macro, which expands to an
+# `Arc<::openidconnect::core::CoreClient>` field in AppState — the generated
+# absolute path only resolves if openidconnect is a direct dependency here.
 openidconnect = { workspace = true }
+# Pulled for its rustls-tls-native-roots feature: Cargo's feature
+# unification then makes the whole tree read the system CA store at runtime
+# (see the workspace manifest's reqwest note).  Not used via its API.
 reqwest = { workspace = true }
-tower-sessions = { workspace = true }
+# WebSocket client for the remote-source connector.
 tokio-tungstenite = { workspace = true }
+# Temp files for the WebSocket snapshot writes and test fixtures.
 tempfile = { workspace = true }
+# Poison-free locks around the shared preview / remote-source state.
 parking_lot = { workspace = true }
+# Normalizes operator-supplied remote-source URLs.
 url = { workspace = true }
 # rustls 0.23 requires a CryptoProvider to be selected before the
 # first TLS handshake.  tokio-tungstenite's

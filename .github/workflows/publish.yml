@@ -22,5 +22,3 @@ permissions:
 jobs:
   publish:
     uses: LoganBarnett/rust-template/.github/workflows/reusable-publish.yml@main
-    with:
-      crate-name: sonify-health-cli

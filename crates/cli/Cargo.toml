@@ -19,18 +19,31 @@ path = "src/main.rs"
 # engine, web server, OIDC, WebSocket, metrics) lives in the sibling
 # server crate; nothing here pulls those concerns in.
 [dependencies]
+# The patch library, audio output, and heartbeat graph the preview and
+# print commands drive.
 sonify-health-lib = { workspace = true }
+# Config plumbing: the MergeConfig derive, the CliApp trait, and the
+# #[foundation_main] entry attribute plus CLI logging init.
 rust-template-foundation = { workspace = true, features = ["cli"] }
+# Parses the preview / print subcommands and their flags.
 clap = { workspace = true }
+# Stops continuous preview playback when the user presses Ctrl-C.
 ctrlc = { workspace = true }
 # Required by the `MergeConfig` derive — the generated
 # `ConfigFileRaw` carries `#[derive(serde::Deserialize)]` so serde
 # must be visible to the cli crate even though our own source
 # doesn't `use` it directly.
 serde = { workspace = true }
+# Parses CLI-supplied patch libraries and renders `print --format toml`.
 toml = { workspace = true }
+# Derives ApplicationError, the binary's top-level error type.
 thiserror = { workspace = true }
+# Emits the debug / info diagnostics in the command handlers.
 tracing = { workspace = true }
+# Enables method chaining and reduces superfluous local variables that only
+# exist to name intermediate results.  Prefer .tap() over temporary variables
+# when it improves readability.
+tap = { workspace = true }
 
 [dev-dependencies]
 

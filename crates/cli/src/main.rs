@@ -2,11 +2,10 @@ mod print;
 
 use sonify_health_cli::{command, config, patch_args};
 
-use clap::Parser;
 use command::{Command, PrintFormat};
-use config::{Config, ConfigError};
+use config::Config;
 use patch_args::CliPatchOverrides;
-use rust_template_foundation::logging::init_cli_logging;
+use rust_template_foundation::main as foundation_main;
 use sonify_health_lib::{
   audio::{AudioError, AudioMixer, AudioOutput},
   heartbeat, ResolvedNote,
@@ -19,14 +18,8 @@ use std::sync::{
 use thiserror::Error;
 use tracing::{debug, info};
 
-/// CLI args parser — alias for the macro-generated `CliRaw`.
-type Cli = <Config as rust_template_foundation::CliApp>::CliArgs;
-
 #[derive(Debug, Error)]
 enum ApplicationError {
-  #[error("Failed to load configuration: {0}")]
-  ConfigurationLoad(#[source] Box<ConfigError>),
-
   #[error("Unknown patch name: {0}")]
   UnknownPatch(String),
 
@@ -41,24 +34,13 @@ enum ApplicationError {
   },
 }
 
-impl From<ConfigError> for ApplicationError {
-  fn from(e: ConfigError) -> Self {
-    Self::ConfigurationLoad(Box::new(e))
-  }
-}
-
-fn main() -> ExitCode {
-  let cli = Cli::parse();
-  let config = match Config::from_cli_and_file(cli) {
-    Ok(c) => c,
-    Err(e) => {
-      eprintln!("Configuration error: {e}");
-      return ExitCode::FAILURE;
-    }
-  };
-
-  init_cli_logging(config.log_level, config.log_format);
-
+// The `#[foundation_main]` macro generates the real `fn main()`: it parses the
+// CLI, resolves the `Config` (config-file load plus CLI merge), initializes CLI
+// logging from the resolved log settings, and maps the returned `Result` to an
+// `ExitCode`, logging the error on the `Err` path.  This function holds only the
+// command dispatch.
+#[foundation_main]
+pub fn main(config: Config) -> Result<ExitCode, ApplicationError> {
   debug!(
     log_level = ?config.log_level,
     log_format = ?config.log_format,
@@ -66,23 +48,16 @@ fn main() -> ExitCode {
     "Resolved configuration"
   );
 
-  let result = match &config.command {
+  match &config.command {
     Command::Preview { continuous, patch } => {
-      run_preview(&config, patch, *continuous)
+      run_preview(&config, patch, *continuous)?
     }
     Command::Print { format, patch } => {
-      run_print(&config, patch, format.clone());
-      Ok(())
-    }
-  };
-
-  match result {
-    Ok(()) => ExitCode::SUCCESS,
-    Err(e) => {
-      tracing::error!("Application error: {e}");
-      ExitCode::FAILURE
+      run_print(&config, patch, format.clone())
     }
   }
+
+  Ok(ExitCode::SUCCESS)
 }
 
 // -- Preview -----------------------------------------------------------------

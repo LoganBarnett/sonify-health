@@ -1,6 +1,30 @@
 #+title:     LLMs
 #+language:  en
 
+* Server crate: role and scope
+
+The =crates/server= crate is the project's general-purpose long-running service.
+It is /not/ specifically an HTTP server — HTTP is present only as infrastructure
+for health checks, metrics, and observability.
+
+The server might primarily:
+
+- Watch local files for changes and react to them.
+- Communicate over a binary protocol, gRPC, or WebSockets.
+- Bridge between systems (queues, databases, external APIs).
+- Serve any other role that calls for a persistent process responding to
+  stimuli.
+
+When adding new functionality that requires a long-running process, build it in
+the server crate rather than creating a separate service.  The server already
+provides structured logging, systemd socket activation, watchdog integration,
+graceful shutdown, and an Elm frontend — duplicating this infrastructure is
+wasteful and error-prone.
+
+Do not mistake the server for "just a web server" and stand up a separate HTTP
+service from scratch.  The existing HTTP routes (=/healthz=, =/metrics=, =/me=,
+=/scalar=) are supporting infrastructure, not the defining purpose.
+
 * General code guidelines
 
 These are instructions for LLMs to write code more to my liking.
@@ -161,3 +185,38 @@ nix develop --command git commit --message "your message"
 ** Run all tests after changes
 
 Run ~just test~ after making any change to verify nothing is broken.
+
+* Persistent memory
+
+Use the assistant's local memory only for facts specific to one clone or one
+machine — local paths, machine quirks, transient personal context.  Anything
+that is a project convention, decision, or standard belongs in the repository
+(~llms.org~, ~CONTRIBUTING.org~, or ~docs/~), where every contributor benefits
+from it and it can be reviewed.  Reaching for memory to record a convention is
+the signal that it should be codified here instead.
+
+* Capturing plans
+
+When a planning pass produces a design worth keeping, record it as a ~TODO~
+entry in ~tasks.org~ (the project's backlog), cross-linking related entries and
+marking superseded ones, rather than leaving it only in an ephemeral plan file.
+
+* Template compliance
+
+This project was generated from rust-template ([[https://github.com/LoganBarnett/rust-template]]).
+Periodic work called /compliance sync/ keeps the project's structure and
+infrastructure aligned with what the template would emit today — things like
+missing or drifted CI workflows, foundation feature wiring, crate-to-role
+mappings, and similar plumbing.  Application logic is explicitly out of scope.
+
+The authoritative description of what compliance means, when it runs, the
+process for performing it, the crate-mapping rules, the items it checks, and
+what it does /not/ cover lives in rust-template itself at [[https://github.com/LoganBarnett/rust-template/blob/main/docs/compliance.org][=docs/compliance.org=]].
+Consult that document when working on a compliance task; rust-template is the
+authority and evolves independently of this repo.
+
+Do *not* copy the compliance documentation into this repo or paraphrase it here.
+A local duplicate will drift the moment the canonical document changes, and the
+canonical source is one fetch away.  If a future change to the compliance
+process belongs in the docs, propose it against rust-template, not against this
+repo.

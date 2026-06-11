@@ -11,11 +11,20 @@ publish = false
 proc-macro = true
 
 [dependencies]
+# Parses the annotated struct and its #[patch_param] attributes that the
+# PatchGenerate derive reads.
 syn = { workspace = true }
+# Quasi-quoting that builds the derive's generated impl tokens.
 quote = { workspace = true }
+# Token-stream primitives the macro constructs and splices.
 proc-macro2 = { workspace = true }
+# Enables method chaining and reduces superfluous local variables that only
+# exist to name intermediate results.  Prefer .tap() over temporary variables
+# when it improves readability.
+tap = { workspace = true }
 
 [dev-dependencies]
+# Compile-fail tests asserting bad #[patch_param] usage is rejected.
 trybuild = { workspace = true }
 
 [lints]

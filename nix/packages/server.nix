@@ -32,6 +32,7 @@
   elmFrontend = pkgs.stdenv.mkDerivation {
     name = "sonify-health-elm-frontend";
     src = ../../frontend;
+    # The Elm compiler that builds the dashboard's elm.js bundle.
     nativeBuildInputs = [pkgs.elmPackages.elm];
 
     configurePhase = pkgs.elmPackages.fetchElmDeps {

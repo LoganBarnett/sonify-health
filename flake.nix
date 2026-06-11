@@ -58,6 +58,7 @@
           ++ nixpkgs.lib.optionals pkgs.stdenv.isDarwin (
             with pkgs.darwin; [libiconv]
           );
+        # pkg-config resolves the alsa-lib link flags for cpal at build time.
         nativeBuildInputs = [pkgs.pkg-config];
         # The Nix sandbox has no audio device, so the lib's audio tests
         # (strict by default — see crates/lib/src/audio.rs) need an
@@ -71,8 +72,12 @@
       inherit (rustPackages) packages apps;
       devShell = pkgs.mkShell {
         buildInputs = [
+          # Rust toolchain (compiler, cargo, rustfmt, rust-analyzer).
           rust
+          # Prunes stale per-profile artifacts from target/ to reclaim disk.
           pkgs.cargo-sweep
+          # JSON parsing for the shellHook's cargo-package listing and ad-hoc
+          # scripting in the dev shell.
           pkgs.jq
           # Unified formatter and per-language helpers.
           pkgs.treefmt
@@ -91,7 +96,7 @@
           echo ""
           echo "Available Cargo packages (use 'cargo build -p <name>'):"
           cargo metadata --no-deps --format-version 1 2>/dev/null | \
-            jq -r '.packages[].name' | \
+            jq --raw-output '.packages[].name' | \
             sort | \
             sed 's/^/  • /' || echo "  Run 'cargo init' to get started"
 

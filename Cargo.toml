@@ -21,7 +21,7 @@ members = [
 # lints from that group share a table — otherwise cargo errors
 # with "lints contain duplicate".
 #
-# Matches rust-template's lint set so a sync run doesn't drift on
+# Matches the template's lint set so a sync run doesn't drift on
 # the clippy block alone.  See `docs/compliance.org` in the
 # template.
 [workspace.lints.clippy]
@@ -34,8 +34,8 @@ panic = "deny"
 # Combinator preference: nudge toward the least powerful construct that
 # fits.  These flag manual reimplementations of standard combinators —
 # match-on-Option that could be Option::map, if-let-else that could be
-# map_or, and so on.  See rust-template's template/llms.org "Rule of
-# least power" for the principle behind the set.
+# map_or, and so on.  See llms.org "Rule of least power" for the
+# principle behind the set.
 #
 # Configured at "warn" rather than "deny" because some imperative forms
 # are genuinely clearer (multi-line bodies, side effects, nested control
@@ -70,30 +70,37 @@ repository = "https://gitea.proton/logan/sonify-health"
 
 [workspace.dependencies]
 # Foundation infrastructure crate (config-merge derive, logging,
-# server runner, health, metrics, OpenAPI, OIDC).  Tracked at
-# rust-template HEAD; the template_sync_hashes list in
-# rust-template.json records each sync point so a
-# `cargo update` here corresponds to a known template commit.
+# server runner, health, metrics, OpenAPI, OIDC).  Tracked at the
+# template's HEAD; the template_sync_hashes list in the provenance
+# file records each sync point so a `cargo update` here corresponds
+# to a known template commit.
 rust-template-foundation = { git = "https://github.com/LoganBarnett/rust-template.git" }
 
-# Logging and tracing
+# Structured logging and span instrumentation: the facade every crate
+# emits diagnostics through.
 tracing = "0.1"
+# Installs the subscriber that filters and renders those logs — env-filter
+# honours RUST_LOG, and the json / fmt features select the output shape.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
-# Utilities
-# tap - Enables method chaining and reduces superfluous local variables
-# that only exist to name intermediate results. Prefer .tap() over temporary
-# variables when it improves readability.
+# Enables method chaining and reduces superfluous local variables that only
+# exist to name intermediate results.  Prefer .tap() over temporary variables
+# when it improves readability.
 tap = "1.0"
-
-# CLI parsing
+# Derive-based argument parsing for the cli and server binaries; the env
+# feature lets flags fall back to environment variables.
 clap = { version = "4.5", features = ["derive", "env"] }
 
-# Configuration
+# Derives Serialize/Deserialize for the config types, patch definitions,
+# and the dashboard's WebSocket payloads.
 serde = { version = "1.0", features = ["derive"] }
+# JSON codec for the WebSocket protocol, the health/metrics responses, and
+# the generated OpenAPI document.
 serde_json = "1.0"
+# Parses the on-disk config.toml and the CLI-supplied patch libraries, and
+# renders the `print --format toml` output.
 toml = "0.8"
 
-# Error handling
+# Derives the semantic error enums used across every crate.
 thiserror = "2.0"
 
 # URL parsing.  Used by the Remote Source connector to normalize
@@ -112,8 +119,11 @@ url = "2"
 # `.unwrap()` / `.unwrap_or_recover()`.
 parking_lot = "0.12"
 
-# Testing
+# Scratch files and directories for tests — config fixtures and
+# throwaway Unix-socket paths.
 tempfile = "3"
+# Compile-fail testing for the voice-derive proc-macro (asserts that bad
+# annotations produce the expected errors).
 trybuild = "1.0"
 # `rustls-tls-native-roots` matches the reqwest pattern above:
 # rustls for TLS, with `rustls-native-certs` reading the system CA
@@ -122,28 +132,33 @@ trybuild = "1.0"
 # connections fail with "URL error: TLS support not compiled in".
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 
-# Audio
+# Audio DSP graph that synthesizes the sonification — oscillators,
+# envelopes, and mixing for heartbeats, boops, and drones.
 fundsp = "0.23"
+# Cross-platform audio output: enumerates devices and streams the
+# synthesized samples to the selected speaker.
 cpal = "0.17"
 
-# Voice generation
-sha2 = "0.10"
-rand = "0.8"
-rand_xoshiro = "0.6"
-gethostname = "0.4"
-
-# Signal handling
+# Installs the Ctrl-C handler that stops continuous preview playback and
+# drives graceful shutdown.
 ctrlc = "3.4"
 
-# Web server
+# HTTP and WebSocket framework for the daemon's dashboard, health, and
+# metrics routes; the ws feature enables the live note stream.
 axum = { version = "0.8", features = ["ws"] }
+# Async runtime hosting the server and the audio-engine tasks.
 tokio = { version = "1.41", features = ["full"] }
+# Listener binding that layers Unix-socket and systemd socket-activation
+# support on top of plain TCP.
 tokio-listener = { version = "0.5", features = ["axum08"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "fs", "set-header"] }
+# Sink/Stream combinators for driving the WebSocket connections — both the
+# server side and the remote-source client.
 futures = "0.3"
 
-# Authentication
+# OIDC client type the server's AppState holds.  foundation's
+# `impl_server_state!` macro expands to `Arc<::openidconnect::core::CoreClient>`
+# in the server crate, so openidconnect must be a direct dependency there for
+# that generated path to resolve.
 openidconnect = { version = "3", features = ["reqwest"] }
 # openidconnect's "rustls-tls" feature uses webpki-roots (Mozilla's CA list
 # baked in at compile time), which doesn't include private CAs like proton-ca.
@@ -151,25 +166,27 @@ openidconnect = { version = "3", features = ["reqwest"] }
 # unification pull in rustls-native-certs, so the system CA store
 # (/etc/ssl/certs/ca-certificates.crt) is read at runtime instead.
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls-native-roots"] }
-tower-sessions = { version = "0.15", features = ["memory-store"] }
 
-# Observability
+# Metrics registry and the Prometheus text exposition served at /metrics.
 prometheus = "0.13"
 
-# OpenAPI
+# Builds the OpenAPI document from the annotated routes and serves the
+# Scalar API explorer.
 aide = { version = "0.15", features = ["axum", "axum-json", "axum-query", "scalar", "macros"] }
+# JSON Schema generation that aide uses to describe the documented routes.
 schemars = "0.9"
 
-# Systemd integration
-sd-notify = "0.4"
-
-# Proc-macro support
+# Parses the annotated input in the voice-derive proc-macro; full +
+# extra-traits give the macro the syntax detail it inspects.
 syn = { version = "2.0", features = ["full", "extra-traits"] }
+# Quasi-quoting that builds the voice-derive macro's generated output.
 quote = "1.0"
+# Token-stream primitives underpinning the voice-derive proc-macro.
 proc-macro2 = "1.0"
 
-# Shared library
+# Workspace library crate: patch model, audio synthesis, and config.
 sonify-health-lib = { path = "crates/lib" }
+# Workspace proc-macro crate backing the patch/voice derives.
 sonify-health-voice-derive = { path = "crates/voice-derive" }
 
 # ============================================================================

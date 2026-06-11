@@ -2808,8 +2808,8 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation"
-version = "0.1.0"
-source = "git+https://github.com/LoganBarnett/rust-template.git#866d8ac95de415b710e188d195a2f0f3ddd17e7f"
+version = "0.12.0"
+source = "git+https://github.com/LoganBarnett/rust-template.git#a545c471a304d8e1ca508c5bb9ab6d91555916da"
 dependencies = [
  "aide",
  "axum",
@@ -2839,8 +2839,8 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation-derive"
-version = "0.1.0"
-source = "git+https://github.com/LoganBarnett/rust-template.git#866d8ac95de415b710e188d195a2f0f3ddd17e7f"
+version = "0.12.0"
+source = "git+https://github.com/LoganBarnett/rust-template.git#a545c471a304d8e1ca508c5bb9ab6d91555916da"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3405,6 +3405,7 @@ dependencies = [
  "rust-template-foundation",
  "serde",
  "sonify-health-lib",
+ "tap",
  "thiserror 2.0.18",
  "toml 0.8.23",
  "tracing",
@@ -3415,7 +3416,6 @@ name = "sonify-health-lib"
 version = "0.1.0"
 dependencies = [
  "cargo-husky",
- "clap",
  "cpal",
  "fundsp",
  "parking_lot",
@@ -3436,7 +3436,6 @@ dependencies = [
  "aide",
  "axum",
  "clap",
- "ctrlc",
  "fundsp",
  "futures",
  "openidconnect",
@@ -3456,9 +3455,6 @@ dependencies = [
  "tokio-listener",
  "tokio-tungstenite 0.26.2",
  "toml 0.8.23",
- "tower",
- "tower-http",
- "tower-sessions",
  "tracing",
  "url",
 ]
@@ -3470,6 +3466,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "tap",
  "trybuild",
 ]
 

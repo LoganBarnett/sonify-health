@@ -8,22 +8,35 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# Logging types (LogLevel / LogFormat) and config helpers the lib builds on.
 rust-template-foundation = { workspace = true }
+# Diagnostics from the audio engine and the connectivity probe.
 tracing = { workspace = true }
+# Derives Serialize / Deserialize on the Patch and config models.
 serde = { workspace = true }
-serde_json = { workspace = true }
+# Derives the lib's error enums (ConfigError, AudioError).
 thiserror = { workspace = true }
+# Parses patch-library TOML and the on-disk config file.
 toml = { workspace = true }
+# Enables method chaining and reduces superfluous local variables that only
+# exist to name intermediate results.  Prefer .tap() over temporary variables
+# when it improves readability.
 tap = { workspace = true }
-clap = { workspace = true }
+# Builds the audio synthesis graph for heartbeats, boops, and drones.
 fundsp = { workspace = true }
+# Streams synthesized samples to the output device (AudioMixer / AudioOutput).
 cpal = { workspace = true }
+# Mutex guarding the AudioMixer's live voice set, without lock poisoning.
 parking_lot = { workspace = true }
+# Provides the PatchGenerate derive applied to the Patch model.
 sonify-health-voice-derive = { workspace = true }
 
 [dev-dependencies]
+# Installs the git pre-commit hook that runs treefmt over staged files.
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+# JSON round-trip assertions in the transition and patch unit tests.
 serde_json = { workspace = true }
+# TOML fixtures for the config and patch-library tests.
 toml = { workspace = true }
 
 [lints]
