@@ -6,6 +6,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/25.11";
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
+    org-fmt.url = "github:LoganBarnett/org-fmt";
+    org-fmt.inputs.nixpkgs.follows = "nixpkgs";
+    org-fmt.inputs.rust-overlay.follows = "rust-overlay";
+    org-fmt.inputs.crane.follows = "crane";
     foundation.url = "github:LoganBarnett/rust-template";
     foundation.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -15,6 +19,7 @@
     nixpkgs,
     rust-overlay,
     crane,
+    org-fmt,
     foundation,
   }: let
     forAllSystems =
@@ -83,6 +88,8 @@
           pkgs.treefmt
           pkgs.alejandra
           pkgs.prettier
+          # Formats org-mode documents (treefmt delegates .org files to it).
+          org-fmt.packages.${system}.default
           # Elm frontend toolchain.
           pkgs.elmPackages.elm
           pkgs.elmPackages.elm-format

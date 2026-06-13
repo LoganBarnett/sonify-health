@@ -3,5 +3,7 @@
 
 * Upcoming
 ** Added
+1. A heavy sync with ~rust-template~ brings in a load of shared behavior as well
+   as this very change log.
 ** Fixes
 ** Breaking

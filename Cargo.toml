@@ -70,11 +70,15 @@ repository = "https://gitea.proton/logan/sonify-health"
 
 [workspace.dependencies]
 # Foundation infrastructure crate (config-merge derive, logging,
-# server runner, health, metrics, OpenAPI, OIDC).  Tracked at the
-# template's HEAD; the template_sync_hashes list in the provenance
-# file records each sync point so a `cargo update` here corresponds
-# to a known template commit.
-rust-template-foundation = { git = "https://github.com/LoganBarnett/rust-template.git" }
+# server runner, health, metrics, OpenAPI, OIDC).  Consumed from
+# crates.io by version rather than git: this workspace's own crates
+# publish to crates.io, and crates.io rejects git dependencies, so
+# every dependency — foundation included — must be a published-version
+# dependency.  Bump this in step with the template's releases; the
+# flake's `foundation` input still tracks the template by commit for
+# the Nix build helpers, and template_sync_hashes still records the
+# doc/infra sync points.
+rust-template-foundation = "0.13.0"
 
 # Structured logging and span instrumentation: the facade every crate
 # emits diagnostics through.
@@ -184,10 +188,12 @@ quote = "1.0"
 # Token-stream primitives underpinning the voice-derive proc-macro.
 proc-macro2 = "1.0"
 
-# Workspace library crate: patch model, audio synthesis, and config.
-sonify-health-lib = { path = "crates/lib" }
+# Workspace library crate: patch model, audio synthesis, and config.  The
+# version specifier is required for crates.io publishing — a published crate's
+# path deps must also carry a version that crates.io can resolve.
+sonify-health-lib = { path = "crates/lib", version = "0.1.0" }
 # Workspace proc-macro crate backing the patch/voice derives.
-sonify-health-voice-derive = { path = "crates/voice-derive" }
+sonify-health-voice-derive = { path = "crates/voice-derive", version = "0.1.0" }
 
 # ============================================================================
 # BUILD PROFILES

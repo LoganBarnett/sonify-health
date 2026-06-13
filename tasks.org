@@ -2,15 +2,16 @@
 #+language:  en
 
 * DONE Sync with rust-template (420397e..c3d6e14+)
-Forward-port changes from rust-template that landed after the last synced
-commit (=5f606c5=).  The following commits need review:
+Forward-port changes from rust-template that landed after the last synced commit
+(=5f606c5=).  The following commits need review:
 
 - =420397e= docs: add task for pre-commit hook treefmt scoping bug
-  - =tasks.org= only — no code to forward-port, but check if the treefmt
-    scoping bug applies to sonify-health's pre-commit hook too.
+  - =tasks.org= only — no code to forward-port, but check if the treefmt scoping
+    bug applies to sonify-health's pre-commit hook too.
 - =2d71318= feat: use native CA store for TLS instead of webpki-roots
   - Already applied directly to sonify-health (=5330281=).  No action needed.
-- =e681440= fix: use Debug format for OIDC discovery error to preserve cause chain
+- =e681440= fix: use Debug format for OIDC discovery error to preserve cause
+  chain
   - Already applied directly to sonify-health (=cea961d=).  No action needed.
 - =66d819e= feat: add justfile with build, test, and run recipes
   - Add =pkgs.just= to =flake.nix= devShell.
@@ -29,20 +30,21 @@ Verified: treefmt v2.4.0 correctly respects positional path arguments
 (=traversed 1 files= when given a single file).  Bug is already resolved.
 
 * DONE Add protocol contract test for state snapshot
-  Write a Rust test that deserializes =state_snapshot()= JSON through
-  structs mirroring the Elm frontend decoders.  Demonstrate it catches
-  the texture→freq/boops drift that broke the UI.
+Write a Rust test that deserializes =state_snapshot()= JSON through structs
+mirroring the Elm frontend decoders.  Demonstrate it catches the
+texture→freq/boops drift that broke the UI.
 
 * DONE Filter slope (pole count)
-Replaced =lowpass()= with =moog()= 4-pole ladder filter.  Q scaled by 0.2
-to map =resonance= range into moog's 0..1 parameter space.
+Replaced =lowpass()= with =moog()= 4-pole ladder filter.  Q scaled by 0.2 to map
+=resonance= range into moog's 0..1 parameter space.
 
 * DONE Square/pulse oscillator
 Added =square_ratio= voice parameter (commit =c04cd4e=).
 
 * DONE Vibrato depth + rate
 Added =vibrato_rate= and =vibrato_depth= voice parameters (commit =59c4e3d=).
-Extended ranges: rate up to 200 Hz, depth up to 12 semitones for FM-like effects.
+Extended ranges: rate up to 200 Hz, depth up to 12 semitones for FM-like
+effects.
 
 * DONE Drive, noise, crush, FM synthesis, downsample
 Added six new voice parameters for gritty/textured sound:
@@ -51,28 +53,28 @@ Added six new voice parameters for gritty/textured sound:
 - =crush= — post-filter bitcrushing (exponential level mapping).
 - =fm_ratio= — FM modulator frequency ratio.
 - =fm_depth= — FM modulation index.
-- =downsample= — sample rate reduction via hold_hz.
-Also: rich sub-oscillator (weighted waveform mix instead of pure sine),
-moog ladder filter replacing lowpass.
+- =downsample= — sample rate reduction via hold_hz.  Also: rich sub-oscillator
+  (weighted waveform mix instead of pure sine), moog ladder filter replacing
+  lowpass.
 
 * DONE Connect Prometheus metrics to daemon heartbeat threads
 Wire up the =Metrics= struct to the daemon's per-heartbeat poll and play
-threads.  Currently only =muted= is updated; the =heartbeats_played=
-counter is registered but never incremented.  Add per-heartbeat probe
-metric gauges and poll counters, and increment =heartbeats_played= each
-time a heartbeat sound is played.
+threads.  Currently only =muted= is updated; the =heartbeats_played= counter is
+registered but never incremented.  Add per-heartbeat probe metric gauges and
+poll counters, and increment =heartbeats_played= each time a heartbeat sound is
+played.
 
 ** DONE Add =Metrics= to =DaemonContext= and thread through from =main.rs=
 ** DONE Replace =heartbeats_played= with =IntCounterVec= labeled by heartbeat name
-   Increment in play threads after each heartbeat plays.
+Increment in play threads after each heartbeat plays.
 ** DONE Add =probes_completed= =IntCounterVec= labeled by heartbeat name
-   Increment in poll threads after each successful probe.
+Increment in poll threads after each successful probe.
 ** DONE Add =probe_value= =GaugeVec= labeled by heartbeat name
-   Set to current metric value in poll threads after each probe.
+Set to current metric value in poll threads after each probe.
 
 * DONE Patch-level detune
-User-facing detune offset (cents) applied to all boops, independent of
-severity.  Creates chorus-like thickness on healthy tones.
+User-facing detune offset (cents) applied to all boops, independent of severity.
+Creates chorus-like thickness on healthy tones.
 
 * DONE Patch-level harshness offset
 User-facing offset added to severity-driven harshness.  Lets user push healthy
@@ -87,25 +89,24 @@ parsing, frontend, and all serialisation paths.
 
 * DONE Roll frequency into Voice / rename Voice
 With lo/hi profiles the frequency should interpolate like every other voice
-parameter.  Currently =freq= lives on =Voice= but actual note frequencies
-are generated separately in =BoopSpec= and overridden via
-=DroneMetricConfig.freq=.
+parameter.  Currently =freq= lives on =Voice= but actual note frequencies are
+generated separately in =BoopSpec= and overridden via =DroneMetricConfig.freq=.
 
 Consolidate: =BoopSpec= keeps =duration= only; frequency comes from the
-interpolated voice's =freq= at play time.  Remove
-=DroneMetricConfig.freq= override (lo/hi profiles replace it).  Rename
-=Voice= to something more accurate (=Patch=, =Tone=, =SoundGraph=, =Profile=,
-etc.) since it is really a synthesis recipe, not a vocal identity.
+interpolated voice's =freq= at play time.  Remove =DroneMetricConfig.freq=
+override (lo/hi profiles replace it).  Rename =Voice= to something more accurate
+(=Patch=, =Tone=, =SoundGraph=, =Profile=, etc.) since it is really a synthesis
+recipe, not a vocal identity.
 
 * DONE Full config round-trip export with integration tests
-Currently =export_config= only exports the =PatchLibrary= (patch
-definitions).  The full config — heartbeats, timing, notes, transitions,
-slider ranges, log level, etc. — is not included in the export.
+Currently =export_config= only exports the =PatchLibrary= (patch definitions).
+The full config — heartbeats, timing, notes, transitions, slider ranges, log
+level, etc. — is not included in the export.
 
 Change the export so the user can hit export and receive the *entire*
-configuration as valid TOML that can be pasted into a config file and
-loaded verbatim.  Local patch overrides are fine to keep; the exported
-config should include them alongside everything else.
+configuration as valid TOML that can be pasted into a config file and loaded
+verbatim.  Local patch overrides are fine to keep; the exported config should
+include them alongside everything else.
 
 Write property-style integration tests that prove the round-trip:
 1. Load a config file.
@@ -113,411 +114,375 @@ Write property-style integration tests that prove the round-trip:
 3. Make programmatic tweaks (change values, add/remove notes, etc.).
 4. Export the full config.
 5. Write the export to a file, reload the program from that file.
-6. Assert that *every* value in the reloaded config matches the
-   tweaked config exactly.
+6. Assert that *every* value in the reloaded config matches the tweaked config
+   exactly.
 
-The tests should not assert individual fields one by one; treat it as a
-property test where equality of the entire config struct is the
-invariant.  Feed several materially different configs (discrete
-transitions, gradient transitions, multiple heartbeats, custom patches,
-non-default slider ranges) to cover the space.
+The tests should not assert individual fields one by one; treat it as a property
+test where equality of the entire config struct is the invariant.  Feed several
+materially different configs (discrete transitions, gradient transitions,
+multiple heartbeats, custom patches, non-default slider ranges) to cover the
+space.
 
 * DONE Render each note in its own sub-panel
-Notes inside a heartbeat card are hard to visually distinguish from one
-another.  Wrap each note (=viewNoteEditor=) in its own bordered
-sub-panel within the heartbeat card so the boundary between notes is
-immediately obvious.  Maintain the existing styling language (CSS
-variables, spacing, radius conventions already in =style.css=).
+Notes inside a heartbeat card are hard to visually distinguish from one another.
+Wrap each note (=viewNoteEditor=) in its own bordered sub-panel within the
+heartbeat card so the boundary between notes is immediately obvious.  Maintain
+the existing styling language (CSS variables, spacing, radius conventions
+already in =style.css=).
 
 * DONE Configurable labels and colors for metric tiers
-The metric status labels (=healthy=, =degraded=, =down=) and their
-thresholds are hardcoded in both the backend (=metric_label= in
-=preview_state.rs=) and the frontend (=metricClass= / =metricLabel= in
-=Main.elm=).  The CSS correctly uses =text-transform: uppercase= for
-a11y, so the display is fine — but the label strings and tier boundaries
-are not user-configurable and the system supports arbitrary severity
-ranges.
+The metric status labels (=healthy=, =degraded=, =down=) and their thresholds
+are hardcoded in both the backend (=metric_label= in =preview_state.rs=) and the
+frontend (=metricClass= / =metricLabel= in =Main.elm=).  The CSS correctly uses
+=text-transform: uppercase= for a11y, so the display is fine — but the label
+strings and tier boundaries are not user-configurable and the system supports
+arbitrary severity ranges.
 
-Labels are *independent of transitions*.  A heartbeat (or note) can
-define labeled tiers at arbitrary severity thresholds regardless of
-whether the transition is discrete or gradient.  For gradient
-transitions this means labels need not align with the keyframe
-patches — you can label any point along the 0–1 range.
+Labels are *independent of transitions*.  A heartbeat (or note) can define
+labeled tiers at arbitrary severity thresholds regardless of whether the
+transition is discrete or gradient.  For gradient transitions this means labels
+need not align with the keyframe patches — you can label any point along the 0–1
+range.
 
 Each tier needs:
-- A label (arbitrary string, displayed via CSS =text-transform:
-  uppercase=).  Default: ={{value}}= — just displays the raw metric
-  value, so users who do not care about labels get a sensible
-  fallback without extra configuration.
+- A label (arbitrary string, displayed via CSS =text-transform: uppercase=).
+  Default: ={{value}}= — just displays the raw metric value, so users who do not
+  care about labels get a sensible fallback without extra configuration.
 - A color (used for the badge background / accent).
 - A threshold defining the upper bound of the tier's range.
 
-The UI must allow editing labels, picking colors, and setting
-thresholds for each tier.  Labels and colors must round-trip through
-the config file.  If no custom tiers are configured, fall back to
-displaying ={{value}}=.
+The UI must allow editing labels, picking colors, and setting thresholds for
+each tier.  Labels and colors must round-trip through the config file.  If no
+custom tiers are configured, fall back to displaying ={{value}}=.
 
 * DONE Full heartbeat editing in the UI
-Allow editing all heartbeat-level fields directly in the web editor:
-name, command, result mode, continuous flag, poll interval, cycle
-duration, cycle offset, phrase gap, repeat rate — everything that
-=HeartbeatConfig= carries.  The heartbeat card header should let the
-user rename the heartbeat inline, and the remaining fields should
-appear as appropriate inputs (text, number, select, toggle) within
-the card body.
+Allow editing all heartbeat-level fields directly in the web editor: name,
+command, result mode, continuous flag, poll interval, cycle duration, cycle
+offset, phrase gap, repeat rate — everything that =HeartbeatConfig= carries.
+The heartbeat card header should let the user rename the heartbeat inline, and
+the remaining fields should appear as appropriate inputs (text, number, select,
+toggle) within the card body.
 
 * DONE Inline sparkline graph in heartbeat card header
-Show a small sparkline graph in the heartbeat card header, to the
-right of the label and status badge.  It plots the probe value over
-time using only data the frontend has observed since page load — no
-server-side history needed.  Append each incoming metric value to a
-per-heartbeat list in the Elm model.
+Show a small sparkline graph in the heartbeat card header, to the right of the
+label and status badge.  It plots the probe value over time using only data the
+frontend has observed since page load — no server-side history needed.  Append
+each incoming metric value to a per-heartbeat list in the Elm model.
 
-The time axis should be roughly 3px per poll interval.  The value
-axis spans 0–1 (the severity range).  Use an inline SVG or canvas
-element that fits naturally in the header row.  The graph should
-remain visible when the heartbeat card is collapsed.
+The time axis should be roughly 3px per poll interval.  The value axis spans 0–1
+(the severity range).  Use an inline SVG or canvas element that fits naturally
+in the header row.  The graph should remain visible when the heartbeat card is
+collapsed.
 
 * DONE Timestamps in probe log with browser timezone
-Add a timestamp to each probe log entry, formatted in the browser's
-local timezone.  Display the timezone abbreviation and UTC offset (e.g., =CST
-(UTC−06:00)=) in the probe log header line so the user knows which
-zone the timestamps refer to.
+Add a timestamp to each probe log entry, formatted in the browser's local
+timezone.  Display the timezone abbreviation and UTC offset (e.g., =CST
+(UTC−06:00)=) in the probe log header line so the user knows which zone the
+timestamps refer to.
 
 * DONE Collapsible heartbeat cards
-Allow heartbeat cards to be collapsed.  When collapsed, still show
-the heartbeat name and its current metric state (the colored status
-badge).  Heartbeats should be expanded by default.  A simple
-chevron or toggle in the card header is sufficient.
+Allow heartbeat cards to be collapsed.  When collapsed, still show the heartbeat
+name and its current metric state (the colored status badge).  Heartbeats should
+be expanded by default.  A simple chevron or toggle in the card header is
+sufficient.
 
 * DONE Eliminate all modals — inline-expand UI pattern
-Do not use modals anywhere in the UI.  Replace every modal with an
-inline expansion that keeps surrounding context visible.
+Do not use modals anywhere in the UI.  Replace every modal with an inline
+expansion that keeps surrounding context visible.
 
 Design principles:
-- The UI never obscures content the user might need while making a
-  decision.
+- The UI never obscures content the user might need while making a decision.
 - No backdrop divs, no tab-index trapping, no z-index layering.
 - Every piece of revealed UI lives in the normal document flow.
 
 Specific patterns to apply:
-- *Export*: clicking the export button slides the action bar down
-  and reveals the export text below it, inline.
-- *Destructive confirmations*: replace the triggering button in-place
-  with a "Confirm delete?  Yes / No" label and two buttons.  When
-  the user decides (or clicks elsewhere), restore the original
-  button.
-- *Any future progressive disclosure*: expand a section in-place
-  rather than overlaying.
+- *Export*: clicking the export button slides the action bar down and reveals
+  the export text below it, inline.
+- *Destructive confirmations*: replace the triggering button in-place with a
+  "Confirm delete?  Yes / No" label and two buttons.  When the user decides (or
+  clicks elsewhere), restore the original button.
+- *Any future progressive disclosure*: expand a section in-place rather than
+  overlaying.
 
 Backport the existing export modal to this inline pattern.
 
-Document this philosophy and the concrete examples in the
-contributing guide (=CONTRIBUTING.org= or equivalent).  Also
-backport the guideline to the Rust template repository so all
-future projects inherit it.
+Document this philosophy and the concrete examples in the contributing guide
+(=CONTRIBUTING.org= or equivalent).  Also backport the guideline to the Rust
+template repository so all future projects inherit it.
 
-The core argument: modals mark the boundary where the UI ran out of
-answers.  As the interface matures, the probability of needing a
-modal inside a modal trends to 1.  They block the UI — which may
-contain information relevant to the decision at hand — and they are
-an accessibility nightmare.  Powerful UIs do not use modals.
+The core argument: modals mark the boundary where the UI ran out of answers.  As
+the interface matures, the probability of needing a modal inside a modal trends
+to 1.  They block the UI — which may contain information relevant to the
+decision at hand — and they are an accessibility nightmare.  Powerful UIs do not
+use modals.
 
 * DONE Allow creating new patches from the UI
-Already implemented: backend =create_patch= handler, frontend
-=CreatePatch= message, =encodeCreatePatch= encoder, and "+" button
-in the patch list.  New patches persist in the runtime library and
-round-trip through export/save.
-Add a control (button or similar) in the patch library section that
-lets the user create a new patch.  The user should be able to name
-it and then edit its parameters with the existing patch editor.
-The new patch must persist in the runtime library and round-trip
-through export/save.
+Already implemented: backend =create_patch= handler, frontend =CreatePatch=
+message, =encodeCreatePatch= encoder, and "+" button in the patch list.  New
+patches persist in the runtime library and round-trip through export/save.  Add
+a control (button or similar) in the patch library section that lets the user
+create a new patch.  The user should be able to name it and then edit its
+parameters with the existing patch editor.  The new patch must persist in the
+runtime library and round-trip through export/save.
 
 * DONE Allow creating new heartbeats from the UI
-Add a control in the heartbeats section that lets the user create a
-new heartbeat.  It should start probing immediately with a dummy
-command (=echo 0= / =exit 0=) so it always returns a value.  Use a
-neutral beep patch for severity 0 and alarm for severity 1 as
-defaults.  The new heartbeat must be fully editable immediately
-after creation and must round-trip through export/save.
+Add a control in the heartbeats section that lets the user create a new
+heartbeat.  It should start probing immediately with a dummy command (=echo 0= /
+=exit 0=) so it always returns a value.  Use a neutral beep patch for severity 0
+and alarm for severity 1 as defaults.  The new heartbeat must be fully editable
+immediately after creation and must round-trip through export/save.
 
 * DONE Save button (write config back to source file)
-Add a save button that writes the current full configuration back
-to the config file the program was launched with.  Only show the
-save button when the config file is writable — check file
-permissions on startup and expose the result to the frontend.  If
-the file is not writable, do not show the button (or show it
+Add a save button that writes the current full configuration back to the config
+file the program was launched with.  Only show the save button when the config
+file is writable — check file permissions on startup and expose the result to
+the frontend.  If the file is not writable, do not show the button (or show it
 disabled with a tooltip explaining why).
 
 * DONE Replace =extra_patches_file= with repeatable =--patch-library=
-Remove the =extra_patches_file= config key.  Instead, allow
-=--patch-library= to be specified multiple times on the CLI, each
-pointing to a patch file.  Last-in wins for overlapping patch
-names.  The config file itself always wins over CLI-supplied patch
-libraries.  When saving, new patches and patch modifications are
-written into the main config file.
+Remove the =extra_patches_file= config key.  Instead, allow =--patch-library= to
+be specified multiple times on the CLI, each pointing to a patch file.  Last-in
+wins for overlapping patch names.  The config file itself always wins over
+CLI-supplied patch libraries.  When saving, new patches and patch modifications
+are written into the main config file.
 
 * DONE Export in JSON and Nix formats
-The export currently emits TOML only.  Add JSON and Nix as
-additional export format options.  The Nix output should assume it
-is already inside the =sonify-health= config section (i.e., produce
-the attribute set body, not a top-level module wrapper).  Reuse or
-extend the existing =print= subcommand's format logic (=print.rs=
-already supports TOML, Nix, and CLI flags for the patch library) to
-cover the full config.  Provide a format selector in the export UI
+The export currently emits TOML only.  Add JSON and Nix as additional export
+format options.  The Nix output should assume it is already inside the
+=sonify-health= config section (i.e., produce the attribute set body, not a
+top-level module wrapper).  Reuse or extend the existing =print= subcommand's
+format logic (=print.rs= already supports TOML, Nix, and CLI flags for the patch
+library) to cover the full config.  Provide a format selector in the export UI
 (inline, not a modal).
 
 * DONE Copy button in the export UI
-Add a clipboard-copy button next to the exported config text.  Use
-the Clipboard API (=navigator.clipboard.writeText=).  Provide
-brief visual feedback on success (e.g., the button text changes to
-"Copied!" for a moment).
+Add a clipboard-copy button next to the exported config text.  Use the Clipboard
+API (=navigator.clipboard.writeText=).  Provide brief visual feedback on success
+(e.g., the button text changes to "Copied!" for a moment).
 
 * DONE Skip wall-clock alignment for non-clock playback modes
-Loop and Continuous play threads currently wait for the wall-clock
-grid (~seconds_until_next~) before the first play, same as Clock
-mode.  Only Clock mode benefits from this alignment.  Wrap the
-initial sleep in ~if cfg.playback == Playback::Clock~ so Loop and
-Continuous start playing immediately on daemon startup.
+Loop and Continuous play threads currently wait for the wall-clock grid
+(~seconds_until_next~) before the first play, same as Clock mode.  Only Clock
+mode benefits from this alignment.  Wrap the initial sleep in ~if cfg.playback
+== Playback::Clock~ so Loop and Continuous start playing immediately on daemon
+startup.
 
 Files: ~crates/cli/src/daemon.rs~
 
 * DONE Make override slider and playback cycler optimistic
-The override slider (~OverrideHeartbeat~) sends to the server
-without updating local state — the UI waits for ~override_changed~
-to move the slider, causing visible lag.  Change to the same
-optimistic+debounce pattern used by heartbeat sliders: update
-~hb.metric~ and ~hb.overridden~ locally, debounce the server send
-at 150 ms.  Add ~OverrideDebounce~ msg variant.
+The override slider (~OverrideHeartbeat~) sends to the server without updating
+local state — the UI waits for ~override_changed~ to move the slider, causing
+visible lag.  Change to the same optimistic+debounce pattern used by heartbeat
+sliders: update ~hb.metric~ and ~hb.overridden~ locally, debounce the server
+send at 150 ms.  Add ~OverrideDebounce~ msg variant.
 
-The playback cycler (~CyclePlayback~) also waits for the server.
-Update ~hb.playback~ locally before sending ~encodeSetPlayback~.
+The playback cycler (~CyclePlayback~) also waits for the server.  Update
+~hb.playback~ locally before sending ~encodeSetPlayback~.
 
 Files: ~frontend/src/Main.elm~
 
 * DONE Rename Override to Value with status label
-The "Override" slider label is confusing — it always shows the
-current metric value whether overridden or live.  Rename the slider
-label to "Value".  Add a decorated status indicator to the right
-showing "(overridden)" or "(live)".  Rename the clear button from
-"Live" to "Track Live".  Keep the header badge unchanged.
+The "Override" slider label is confusing — it always shows the current metric
+value whether overridden or live.  Rename the slider label to "Value".  Add a
+decorated status indicator to the right showing "(overridden)" or "(live)".
+Rename the clear button from "Live" to "Track Live".  Keep the header badge
+unchanged.
 
 Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~
 
 * DONE Click-to-expand descriptions on controls
-Replace ~title~ attribute tooltips with a click-to-expand pattern.
-Add ~expandedDescriptions : Set String~ to the Elm model.  Clicking
-a label with a description toggles a ~div.slider-description~ below
-the control.  Labels with descriptions show ~cursor: help~.
+Replace ~title~ attribute tooltips with a click-to-expand pattern.  Add
+~expandedDescriptions : Set String~ to the Elm model.  Clicking a label with a
+description toggles a ~div.slider-description~ below the control.  Labels with
+descriptions show ~cursor: help~.
 
-Change ~viewSlider~ signature to accept ~Model~, a unique key, and
-~Maybe String~ description.  Update all call sites.  Apply the same
-pattern to ~viewParamSlider~ for patch params (remove ~title
-meta.description~, add click-to-expand).
+Change ~viewSlider~ signature to accept ~Model~, a unique key, and ~Maybe
+String~ description.  Update all call sites.  Apply the same pattern to
+~viewParamSlider~ for patch params (remove ~title meta.description~, add
+click-to-expand).
 
 Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~
 
 * DONE Per-heartbeat trigger that plays immediately
-Replace the global ~heartbeat_trigger: AtomicBool~ with a
-~mixer_handle: RwLock<Option<MixerHandle>>~ on ~PreviewState~.
-Add ~trigger_immediate_play(&self, index)~ that resolves notes,
-builds a one-shot graph, adds it to the mixer, and spawns a thread
-to remove the slot after the sound finishes.
+Replace the global ~heartbeat_trigger: AtomicBool~ with a ~mixer_handle:
+RwLock<Option<MixerHandle>>~ on ~PreviewState~.  Add
+~trigger_immediate_play(&self, index)~ that resolves notes, builds a one-shot
+graph, adds it to the mixer, and spawns a thread to remove the slot after the
+sound finishes.
 
-Change the ~"trigger_heartbeat"~ WebSocket handler to accept an
-~index~ field and call ~trigger_immediate_play~.  Remove the old
-trigger flag checks in ~play_loop~ and ~play_oneshot_once~.
+Change the ~"trigger_heartbeat"~ WebSocket handler to accept an ~index~ field
+and call ~trigger_immediate_play~.  Remove the old trigger flag checks in
+~play_loop~ and ~play_oneshot_once~.
 
-Move the trigger button from the global toolbar to each heartbeat
-card.  Change ~TriggerHeartbeat~ to carry an ~Int~ index.
+Move the trigger button from the global toolbar to each heartbeat card.  Change
+~TriggerHeartbeat~ to carry an ~Int~ index.
 
-Files: ~crates/cli/src/preview_state.rs~,
-~crates/cli/src/daemon.rs~, ~crates/cli/src/websocket.rs~,
-~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~
-
-* DONE Play-on-change checkbox for patches
-Add an ephemeral (not persisted) "Play on change" checkbox per
-patch.  When checked, any parameter change triggers a one-shot play
-of that patch.
-
-Backend: add ~"play_patch"~ WebSocket handler and
-~play_patch_immediate(&self, name)~ on ~PreviewState~ (uses the
-~mixer_handle~ from the trigger task).  Resolves the patch, builds
-a single-note graph, plays fire-and-forget.
-
-Frontend: add ~playOnChange : Set String~ to the model.  In
-~PatchParamDebounce~, if the patch is in the set, also send
-~encodePlayPatch~.  Add ~encodePlayPatch : String -> String~ in
-~Protocol.elm~.
-
-Files: ~crates/cli/src/preview_state.rs~,
+Files: ~crates/cli/src/preview_state.rs~, ~crates/cli/src/daemon.rs~,
 ~crates/cli/src/websocket.rs~, ~frontend/src/Protocol.elm~,
 ~frontend/src/Main.elm~
 
-* TODO Clickable cross-references inside help text
-Descriptions in the bottom help panel use backtick-delimited
-monospace spans to refer to related fields (e.g. ~`attack_ms`~
-inside the ~duration~ description).  Right now they're purely
-decorative — the reader has to hunt for the referenced label
-elsewhere in the UI and click it to see its entry.  Make these
-spans themselves clickable links that dispatch ~HelpClicked~
-with the right ~Help.Source~.
+* DONE Play-on-change checkbox for patches
+Add an ephemeral (not persisted) "Play on change" checkbox per patch.  When
+checked, any parameter change triggers a one-shot play of that patch.
 
-The tricky part is mapping a backtick identifier to a ~Source~.
-For static frontend-registered entries (anything in
-~Help.lookup~) the mapping is by key.  For dynamic backend
-descriptions (~PatchParamMeta.description~) the Elm side needs a
-way to look up a param's description by name — either by threading
-~patchParamMeta~ into ~renderHelpText~, or by shipping a
-separate name→description lookup dict in the Model.  Identifiers
-that match neither should fall back to a disabled-looking
-non-clickable span.
+Backend: add ~"play_patch"~ WebSocket handler and ~play_patch_immediate(&self,
+name)~ on ~PreviewState~ (uses the ~mixer_handle~ from the trigger task).
+Resolves the patch, builds a single-note graph, plays fire-and-forget.
+
+Frontend: add ~playOnChange : Set String~ to the model.  In
+~PatchParamDebounce~, if the patch is in the set, also send ~encodePlayPatch~.
+Add ~encodePlayPatch : String -> String~ in ~Protocol.elm~.
+
+Files: ~crates/cli/src/preview_state.rs~, ~crates/cli/src/websocket.rs~,
+~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~
+
+* TODO Clickable cross-references inside help text
+Descriptions in the bottom help panel use backtick-delimited monospace spans to
+refer to related fields (e.g. ~`attack_ms`~ inside the ~duration~ description).
+Right now they're purely decorative — the reader has to hunt for the referenced
+label elsewhere in the UI and click it to see its entry.  Make these spans
+themselves clickable links that dispatch ~HelpClicked~ with the right
+~Help.Source~.
+
+The tricky part is mapping a backtick identifier to a ~Source~.  For static
+frontend-registered entries (anything in ~Help.lookup~) the mapping is by key.
+For dynamic backend descriptions (~PatchParamMeta.description~) the Elm side
+needs a way to look up a param's description by name — either by threading
+~patchParamMeta~ into ~renderHelpText~, or by shipping a separate
+name→description lookup dict in the Model.  Identifiers that match neither
+should fall back to a disabled-looking non-clickable span.
 
 Files: ~frontend/src/Main.elm~, ~frontend/src/Help.elm~,
 ~frontend/public/style.css~.
 
 * TODO Glossary help entries for general audio/music-theory terms
-Add ~Help.lookup~ entries for terms that aren't attached to a
-specific UI label: ~cents~, ~dB~, ~Hz~, ~ADSR~, ~FM~, and so on.
-Backtick-referencing these inside existing help text (e.g.
-referring to ~cents~ from the ~detune~ description) would then
-let the user learn what ~cents~ means by clicking through —
-which is what makes this task dependent on /Clickable
-cross-references inside help text/ above.  Without that, a
-glossary entry has no surface the user can reach to find it.
+Add ~Help.lookup~ entries for terms that aren't attached to a specific UI label:
+~cents~, ~dB~, ~Hz~, ~ADSR~, ~FM~, and so on.  Backtick-referencing these inside
+existing help text (e.g.  referring to ~cents~ from the ~detune~ description)
+would then let the user learn what ~cents~ means by clicking through — which is
+what makes this task dependent on /Clickable cross-references inside help text/
+above.  Without that, a glossary entry has no surface the user can reach to find
+it.
 
 Files: ~frontend/src/Help.elm~.
 
 * TODO Multi-instance support: remote sources of heartbeat state
-Today a single ~sonify-health~ process owns both halves of the system:
-the *poller* (runs commands, computes severity, holds the runtime
-config) and the *sounder* (resolves notes, drives the mixer, emits
-audio).  They are entangled in ~PreviewState~, ~daemon.rs~, and the
-WebSocket protocol.  This task splits them so that one local instance
-can present heartbeats sourced from any number of remote ~sonify-health~
-instances — including itself — and choose which of those sources it
-actually plays.
+Today a single ~sonify-health~ process owns both halves of the system: the
+*poller* (runs commands, computes severity, holds the runtime config) and the
+*sounder* (resolves notes, drives the mixer, emits audio).  They are entangled
+in ~PreviewState~, ~daemon.rs~, and the WebSocket protocol.  This task splits
+them so that one local instance can present heartbeats sourced from any number
+of remote ~sonify-health~ instances — including itself — and choose which of
+those sources it actually plays.
 
-The motivating use case: run the daemon on servers that do not have
-speakers (so the poller is doing real work near the metrics it is
-probing), and have a laptop instance subscribe to those servers to
-*hear* their state when out of the office.  Back at the desk, the
-laptop disables those remote sources so the office speakers don't echo
-what the servers are already broadcasting elsewhere — without losing
-the live state display.
+The motivating use case: run the daemon on servers that do not have speakers (so
+the poller is doing real work near the metrics it is probing), and have a laptop
+instance subscribe to those servers to *hear* their state when out of the
+office.  Back at the desk, the laptop disables those remote sources so the
+office speakers don't echo what the servers are already broadcasting elsewhere —
+without losing the live state display.
 
-We are *not* streaming audio.  We are streaming state along the
-existing WebSocket protocol; the local instance synthesises audio from
-that state on its own mixer.
+We are *not* streaming audio.  We are streaming state along the existing
+WebSocket protocol; the local instance synthesises audio from that state on its
+own mixer.
 
 ** Conceptual model
 
-Introduce the term *Source*.  A Source is something that produces
-heartbeat state for the local instance to render.  There are two
-kinds:
+Introduce the term *Source*.  A Source is something that produces heartbeat
+state for the local instance to render.  There are two kinds:
 
-- A *Local Source* runs the poller in-process — the existing
-  behaviour.  Always present, always exactly one.
-- A *Remote Source* connects out to another ~sonify-health~ instance's
-  WebSocket and mirrors its state.  Zero or more, declared in config
-  and/or added at runtime through the UI.
+- A *Local Source* runs the poller in-process — the existing behaviour.  Always
+  present, always exactly one.
+- A *Remote Source* connects out to another ~sonify-health~ instance's WebSocket
+  and mirrors its state.  Zero or more, declared in config and/or added at
+  runtime through the UI.
 
-Every heartbeat the UI displays belongs to exactly one Source.  Each
-Source has its own *playback enabled* toggle, independent of how it is
-configured: a Source can be configured-and-disabled (state visible,
-audio muted at the source level) or configured-and-enabled (state
-visible, audio plays).  This is the laptop-versus-office switch.
+Every heartbeat the UI displays belongs to exactly one Source.  Each Source has
+its own *playback enabled* toggle, independent of how it is configured: a Source
+can be configured-and-disabled (state visible, audio muted at the source level)
+or configured-and-enabled (state visible, audio plays).  This is the
+laptop-versus-office switch.
 
-The Local Source is no exception — it gets the same toggle, so a
-user can listen to *only* remote sources by disabling Local
-playback.  The existing global ~muted~ flag is a separate
-cross-cutting kill switch (silences all output regardless of
-per-Source toggles), not a substitute.
+The Local Source is no exception — it gets the same toggle, so a user can listen
+to *only* remote sources by disabling Local playback.  The existing global
+~muted~ flag is a separate cross-cutting kill switch (silences all output
+regardless of per-Source toggles), not a substitute.
 
-Multiple Sources playing on the same wall-clock grid — e.g.  two
-Sources both running heartbeats in ~Clock~ playback mode with
-similar ~cycle_offset_secs~ — will land their notes on top of each
-other locally.  That is expected and intended: the mixer already
-handles overlapping voices, and the configurator (the user editing
-the remote configs) is responsible for staggering offsets if the
-overlap is undesirable.  No auto-stagger is provided.
+Multiple Sources playing on the same wall-clock grid — e.g.  two Sources both
+running heartbeats in ~Clock~ playback mode with similar ~cycle_offset_secs~ —
+will land their notes on top of each other locally.  That is expected and
+intended: the mixer already handles overlapping voices, and the configurator
+(the user editing the remote configs) is responsible for staggering offsets if
+the overlap is undesirable.  No auto-stagger is provided.
 
-A Remote Source ships its *entire* configuration to the local
-instance, not just its current metric values.  That means the
-patch library, heartbeat configs, note transitions, tiers, slider
-ranges, overrides — everything the remote's own UI shows and
-everything its own audio renderer would consume — is mirrored
-locally.  The local renderer then synthesises the audio using
-that mirrored config, so the laptop sounds the way the remote
-*would* have sounded if it had speakers.
+A Remote Source ships its *entire* configuration to the local instance, not just
+its current metric values.  That means the patch library, heartbeat configs,
+note transitions, tiers, slider ranges, overrides — everything the remote's own
+UI shows and everything its own audio renderer would consume — is mirrored
+locally.  The local renderer then synthesises the audio using that mirrored
+config, so the laptop sounds the way the remote *would* have sounded if it had
+speakers.
 
-This is the load-bearing decision behind the design.  When the
-remote's config is tweaked (a patch parameter changes, a tier
-threshold moves, a new heartbeat is added), the local instance
-sees the change immediately and the next note it plays uses the
-new config.  No separate sync step, no manual refresh — it falls
-out naturally from subscribing to the same state stream that
-drives the remote's own UI.
+This is the load-bearing decision behind the design.  When the remote's config
+is tweaked (a patch parameter changes, a tier threshold moves, a new heartbeat
+is added), the local instance sees the change immediately and the next note it
+plays uses the new config.  No separate sync step, no manual refresh — it falls
+out naturally from subscribing to the same state stream that drives the remote's
+own UI.
 
-Remote configuration is therefore read-only from the local UI.
-Config edits are made on the owning instance; the local instance
-is a faithful renderer, not an editor of remote state.
+Remote configuration is therefore read-only from the local UI.  Config edits are
+made on the owning instance; the local instance is a faithful renderer, not an
+editor of remote state.
 
 ** Architectural split
 
 *** Decouple poller from sounder
 
-Pull the poll/play threads apart in ~daemon.rs~.  The poll thread
-becomes a property of a Source; the play thread becomes a property of
-the local *renderer* that consumes one or more Sources.  Today
-~spawn_play_thread~ reads ~hb.metric~ from the same ~PreviewState~
-that ~spawn_poll_thread~ writes — that shared shared-memory pathway
-must become explicit so it works equally well when the metric value
-is arriving over a WebSocket from a remote.
+Pull the poll/play threads apart in ~daemon.rs~.  The poll thread becomes a
+property of a Source; the play thread becomes a property of the local *renderer*
+that consumes one or more Sources.  Today ~spawn_play_thread~ reads ~hb.metric~
+from the same ~PreviewState~ that ~spawn_poll_thread~ writes — that shared
+shared-memory pathway must become explicit so it works equally well when the
+metric value is arriving over a WebSocket from a remote.
 
-Concretely: the renderer should not care whether the ~Shared~ float
-backing a heartbeat's severity is being driven by a local poll
-thread or by a WebSocket subscriber thread.  Both paths write into
-the same ~Shared~; the play thread's logic is unchanged.
+Concretely: the renderer should not care whether the ~Shared~ float backing a
+heartbeat's severity is being driven by a local poll thread or by a WebSocket
+subscriber thread.  Both paths write into the same ~Shared~; the play thread's
+logic is unchanged.
 
 *** Headless mode
 
-Add a config flag (and CLI flag) that disables audio output entirely.
-A headless instance still spawns poll threads, still serves the
-WebSocket, still serves the frontend (useful for inspecting state
-locally), but never opens an audio device and never spawns play
-threads.  This is the mode every server that lacks speakers will run
-in.  The existing ~muted~ flag is per-session and reversible; this
-one is a startup-time toggle that means "this machine cannot play
-audio at all".
+Add a config flag (and CLI flag) that disables audio output entirely.  A
+headless instance still spawns poll threads, still serves the WebSocket, still
+serves the frontend (useful for inspecting state locally), but never opens an
+audio device and never spawns play threads.  This is the mode every server that
+lacks speakers will run in.  The existing ~muted~ flag is per-session and
+reversible; this one is a startup-time toggle that means "this machine cannot
+play audio at all".
 
 *** Source registry on ~PreviewState~
 
-Generalise the ~heartbeats~ vector on ~PreviewState~ from a flat list
-to a list-per-Source.  Each ~Source~ entry carries:
+Generalise the ~heartbeats~ vector on ~PreviewState~ from a flat list to a
+list-per-Source.  Each ~Source~ entry carries:
 
-- A ~source_id~ (the user-given Source name from config).  Internal
-  references to a heartbeat or patch from a remote are keyed by the
-  composite ~(source_id, name)~ — name alone is not unique because
-  two remotes can both have a heartbeat called ~disk-space~ or a
-  patch called ~alarm~.  The UI disambiguates by source-grouping
-  rather than by mangling the names.  URL is *not* used as the key
-  because servers move; the user-given ~source_id~ is the stable
-  handle.
+- A ~source_id~ (the user-given Source name from config).  Internal references
+  to a heartbeat or patch from a remote are keyed by the composite ~(source_id,
+  name)~ — name alone is not unique because two remotes can both have a
+  heartbeat called ~disk-space~ or a patch called ~alarm~.  The UI disambiguates
+  by source-grouping rather than by mangling the names.  URL is *not* used as
+  the key because servers move; the user-given ~source_id~ is the stable handle.
 - A kind (Local or Remote).
 - Connection status (Connected, Connecting, Disconnected, Error).
 - A playback-enabled flag.
 - Its own ~Vec<HeartbeatState>~ and ~Vec<HeartbeatConfig>~ snapshot.
-- For remote sources: its own ~PatchLibrary~ snapshot, its own
-  slider ranges, its own override map — everything the rendered
-  audio depends on, because remote patches may differ from local
-  ones and the local renderer must reproduce the remote sound
-  faithfully.
+- For remote sources: its own ~PatchLibrary~ snapshot, its own slider ranges,
+  its own override map — everything the rendered audio depends on, because
+  remote patches may differ from local ones and the local renderer must
+  reproduce the remote sound faithfully.
 
-This means the existing fields on ~PreviewState~ that are currently
-"the" library, "the" overrides, etc.  belong to the *local Source*.
-They should move into the local Source's own struct.
+This means the existing fields on ~PreviewState~ that are currently "the"
+library, "the" overrides, etc.  belong to the *local Source*.  They should move
+into the local Source's own struct.
 
 ** Protocol
 
@@ -525,41 +490,38 @@ They should move into the local Source's own struct.
 
 The existing protocol already broadcasts a full ~state~ snapshot plus
 incremental change messages (~patch_param_changed~, ~notes_changed~,
-~override_changed~, …).  A local instance subscribing to a remote is,
-for protocol purposes, just another WebSocket client of that remote.
-No new protocol is required for the state half.
+~override_changed~, …).  A local instance subscribing to a remote is, for
+protocol purposes, just another WebSocket client of that remote.  No new
+protocol is required for the state half.
 
 *** Read-only enforcement
 
-The remote does not need to enforce read-only at the protocol level
-on day one — the local instance simply chooses not to send mutating
-messages for remote sources.  We can later add a server-side toggle
-that rejects writes from non-loopback clients if we want defence in
-depth, but that is not required for the local-UI design.
+The remote does not need to enforce read-only at the protocol level on day one —
+the local instance simply chooses not to send mutating messages for remote
+sources.  We can later add a server-side toggle that rejects writes from
+non-loopback clients if we want defence in depth, but that is not required for
+the local-UI design.
 
 *** Authentication
 
-First pass assumes trusted networks (loopback, VPN, SSH tunnel,
-LAN behind a firewall).  Remote URLs may be ~ws://~ or ~wss://~,
-but the local instance does not present credentials and the
-remote does not require them.  Hardening this is tracked
-separately under /Authenticated remote sources/.
+First pass assumes trusted networks (loopback, VPN, SSH tunnel, LAN behind a
+firewall).  Remote URLs may be ~ws://~ or ~wss://~, but the local instance does
+not present credentials and the remote does not require them.  Hardening this is
+tracked separately under /Authenticated remote sources/.
 
 *** Connection lifecycle
 
-Remote source connections must reconnect automatically with backoff.
-Surface the connection state in the UI so the user knows whether
-silence from a heartbeat means "healthy" or "we lost the link".  On
-reconnect, the remote re-sends a full ~state~ snapshot, which the
-local Source replaces wholesale — same as the frontend already does
-on its own initial connection.
+Remote source connections must reconnect automatically with backoff.  Surface
+the connection state in the UI so the user knows whether silence from a
+heartbeat means "healthy" or "we lost the link".  On reconnect, the remote
+re-sends a full ~state~ snapshot, which the local Source replaces wholesale —
+same as the frontend already does on its own initial connection.
 
 ** Configuration
 
 *** New ~[[sources]]~ section
 
-Add a top-level repeatable section in the config file declaring
-remote sources:
+Add a top-level repeatable section in the config file declaring remote sources:
 
 #+begin_src toml :exports code
 [[sources]]
@@ -569,30 +531,28 @@ playback_enabled = false
 # auth fields reuse the existing oidc structure or a token file path
 #+end_src
 
-The CLI gets a matching ~--source~ flag (repeatable) for ad-hoc
-experimentation.  Sources are additive across CLI and config the same
-way patch libraries are.
+The CLI gets a matching ~--source~ flag (repeatable) for ad-hoc experimentation.
+Sources are additive across CLI and config the same way patch libraries are.
 
 *** Round-trip through export/save
 
-The existing config round-trip integration tests (already DONE
-above) must be extended so the ~[[sources]]~ section round-trips
-identically.  Playback-enabled is part of the persisted state — if
-the user disables a source in the UI and hits save, the saved config
-reflects that.
+The existing config round-trip integration tests (already DONE above) must be
+extended so the ~[[sources]]~ section round-trips identically.  Playback-enabled is
+part of the persisted state — if the user disables a source in the UI and hits
+save, the saved config reflects that.
 
 ** UI
 
 *** Group heartbeat cards by Source
 
-The flat list of heartbeat cards becomes a list of Source panels,
-each containing its own heartbeat cards.  The local Source panel is
-always present and is visually distinct (no connection indicator
-needed).  Remote Source panels show:
+The flat list of heartbeat cards becomes a list of Source panels, each
+containing its own heartbeat cards.  The local Source panel is always present
+and is visually distinct (no connection indicator needed).  Remote Source panels
+show:
 
 - Source name and URL.
-- Connection status badge (matches the existing tier colour vocab —
-  green for connected, amber for reconnecting, red for error).
+- Connection status badge (matches the existing tier colour vocab — green for
+  connected, amber for reconnecting, red for error).
 - Playback toggle (the laptop-versus-office switch).
 - A collapse/expand control like the existing heartbeat cards have.
 
@@ -600,221 +560,273 @@ needed).  Remote Source panels show:
 
 Match the patterns already established in the editor:
 
-- Add a "+ Add source" button at the top of the sources area.  New
-  sources start disabled until the user explicitly enables playback.
-- Per-source remove control, using the inline "Confirm delete?  Yes
-  / No" pattern (no modals, per the existing guideline).
+- Add a "+ Add source" button at the top of the sources area.  New sources start
+  disabled until the user explicitly enables playback.
+- Per-source remove control, using the inline "Confirm delete?  Yes / No"
+  pattern (no modals, per the existing guideline).
 - Per-source edit fields (name, URL, auth config).
 
 *** Source naming rules
 
-A Source's name is its user-facing identifier and the preferred
-form for logs and the WebSocket protocol's source field.  Names
-must be unique across `PreviewState::sources`; the UI rejects
-duplicates inline (next to the name input, no modal) and the
-config loader fails on duplicate names at startup.
+A Source's name is its user-facing identifier and the preferred form for logs
+and the WebSocket protocol's source field.  Names must be unique across
+`PreviewState::sources`; the UI rejects duplicates inline (next to the name
+input, no modal) and the config loader fails on duplicate names at startup.
 
-The Local Source is always named ~localhost~ (constant
-~LOCAL_SOURCE_NAME~) and is not user-renamable.
+The Local Source is always named ~localhost~ (constant ~LOCAL_SOURCE_NAME~) and
+is not user-renamable.
 
-When the user adds a Remote Source through the "+ Add source"
-flow, default the name field to the hostname parsed from the URL
-they typed (e.g.  ~wss://db1.internal.example.com/ws~ →
-~db1.internal.example.com~).  The user can edit the name before
-saving — useful when the hostname collides with an existing
+When the user adds a Remote Source through the "+ Add source" flow, default the
+name field to the hostname parsed from the URL they typed (e.g.
+~wss://db1.internal.example.com/ws~ → ~db1.internal.example.com~).  The user can
+edit the name before saving — useful when the hostname collides with an existing
 source or when a friendlier label is wanted (~prod-db-1~ over
-~db1.internal.example.com~).  The name is a *required* field for
-remote sources loaded from a config file; the config loader
-rejects entries that omit it rather than guessing.
+~db1.internal.example.com~).  The name is a *required* field for remote sources
+loaded from a config file; the config loader rejects entries that omit it rather
+than guessing.
 
 *** Patch lists scoped to their Source
 
-Today the patch library is a single top-level UI section separate
-from the heartbeat list.  With multiple Sources each carrying their
-own patch library, that single global section no longer fits.  Each
-Source panel grows its own patch list nested inside it.  The
-existing top-level patch section becomes the Local Source's patch
-list (visually elevated, since the local user is most likely to
-edit it).  Remote Source patch lists render read-only and start
-collapsed by default — the user can expand them when they want to
-inspect what a remote is actually playing.
+Today the patch library is a single top-level UI section separate from the
+heartbeat list.  With multiple Sources each carrying their own patch library,
+that single global section no longer fits.  Each Source panel grows its own
+patch list nested inside it.  The existing top-level patch section becomes the
+Local Source's patch list (visually elevated, since the local user is most
+likely to edit it).  Remote Source patch lists render read-only and start
+collapsed by default — the user can expand them when they want to inspect what a
+remote is actually playing.
 
 *** Probe log scoped per Source
 
-The probe log today is a single global panel.  Split it per Source
-panel so each remote's recent probe activity reads next to its own
-heartbeats.  An optional merged "all sources" view can come later
-if there is demand; not in scope for the first cut.
+The probe log today is a single global panel.  Split it per Source panel so each
+remote's recent probe activity reads next to its own heartbeats.  An optional
+merged "all sources" view can come later if there is demand; not in scope for
+the first cut.
 
 *** Read-only affordance for remote heartbeats
 
-Inputs inside remote heartbeat cards should render as read-only:
-sliders show value but don't drag, text fields are not editable, the
-trigger button is hidden, and so on.  The override slider can stay
-interactive — overriding a remote metric value locally is a useful
-debugging affordance and only changes how the *local* instance
-sounds, not the remote's state.  Make this distinction explicit in
-the UI ("Local override of remote value").
+Inputs inside remote heartbeat cards should render as read-only: sliders show
+value but don't drag, text fields are not editable, the trigger button is
+hidden, and so on.  The override slider can stay interactive — overriding a
+remote metric value locally is a useful debugging affordance and only changes
+how the *local* instance sounds, not the remote's state.  Make this distinction
+explicit in the UI ("Local override of remote value").
 
-A local override on a remote heartbeat is local state, not remote
-state, and persists across remote disconnect/reconnect.  Even when
-the remote re-sends a fresh ~state~ snapshot, the local override
-stays applied.  The user clears it explicitly via the existing
-"Track Live" button — the same affordance the local override
-already uses on local heartbeats.
+A local override on a remote heartbeat is local state, not remote state, and
+persists across remote disconnect/reconnect.  Even when the remote re-sends a
+fresh ~state~ snapshot, the local override stays applied.  The user clears it
+explicitly via the existing "Track Live" button — the same affordance the local
+override already uses on local heartbeats.
 
 *** Playback enabled toggle behaviour
 
-When the user disables playback for a Source, the local renderer
-stops scheduling that Source's heartbeats but keeps the state
-subscription open.  The metric values, sparklines, and probe log
-keep updating in real time; the audio just stops.  Re-enabling
-resumes audio at the next natural cycle (no replay of buffered
-events).
+When the user disables playback for a Source, the local renderer stops
+scheduling that Source's heartbeats but keeps the state subscription open.  The
+metric values, sparklines, and probe log keep updating in real time; the audio
+just stops.  Re-enabling resumes audio at the next natural cycle (no replay of
+buffered events).
 
 ** Migration and ordering
 
 The work splits naturally:
 
-1. *Refactor first, behaviour-preserving.*  Introduce the Source
-   abstraction internally with one Local Source and prove every
-   existing test still passes.  No protocol changes, no UI changes
-   yet.  As part of this step, audit ~state_snapshot()~ in
-   ~preview_state.rs~ to confirm it carries everything the future
-   subscriber will need to faithfully reproduce audio (patch
-   library, heartbeat configs, note transitions, tiers, slider
-   ranges, overrides, master volume).  Fix any gaps now, before
-   they become protocol incompatibilities.
-2. *Headless mode.*  Add a startup-time flag that skips the audio
-   device entirely: no ~AudioMixer::new~, no play threads, no
-   ~mixer_handle~.  Pollers, the WebSocket server, the frontend,
-   and the metrics endpoint all keep working; the instance is a
-   pure state producer.  Surface the mode in the state snapshot so
-   a connected client knows the instance can't sound itself.
+1. *Refactor first, behaviour-preserving.* Introduce the Source abstraction
+   internally with one Local Source and prove every existing test still passes.
+   No protocol changes, no UI changes yet.  As part of this step, audit
+   ~state_snapshot()~ in ~preview_state.rs~ to confirm it carries everything the
+   future subscriber will need to faithfully reproduce audio (patch library,
+   heartbeat configs, note transitions, tiers, slider ranges, overrides, master
+   volume).  Fix any gaps now, before they become protocol incompatibilities.
+2. *Headless mode.* Add a startup-time flag that skips the audio device
+   entirely: no ~AudioMixer::new~, no play threads, no ~mixer_handle~.  Pollers,
+   the WebSocket server, the frontend, and the metrics endpoint all keep
+   working; the instance is a pure state producer.  Surface the mode in the
+   state snapshot so a connected client knows the instance can't sound itself.
 
-   Plumb the option through every layer that already plumbs
-   ~audioDevice~: the Rust CLI/config (~--headless~ flag and
-   ~headless = true~ in the TOML), the NixOS module
-   (~services.sonify-health.headless~ in
+   Plumb the option through every layer that already plumbs ~audioDevice~: the
+   Rust CLI/config (~--headless~ flag and ~headless = true~ in the TOML), the
+   NixOS module (~services.sonify-health.headless~ in
    ~nix/modules/nixos-daemon.nix~), and the nix-darwin module
-   (~services.sonify-health.headless~ in
-   ~nix/modules/darwin-daemon.nix~).  A speakerless server should
-   be configurable as a one-line ~headless = true~ at the Nix
-   level — without it, deploying to a server requires faking an
-   audio device.
+   (~services.sonify-health.headless~ in ~nix/modules/darwin-daemon.nix~).  A
+   speakerless server should be configurable as a one-line ~headless = true~ at
+   the Nix level — without it, deploying to a server requires faking an audio
+   device.
 
-   Test on a machine with no speakers, or by forcing the flag on
-   locally.
-3. *Source-grouped UI.*  Render the single Local Source as its own
-   panel.  Still no remotes — but the UI shape is now ready.
-4. *Outbound WebSocket client.*  Implement Remote Source connection,
-   state mirroring, and reconnect.  Read-only renderer pass.
-5. *Config plumbing.*  ~[[sources]]~ section, CLI flag, round-trip
-   tests.
-6. *Playback toggle and source management UI.*  The laptop-versus-
-   office switch and the add/remove/edit controls.
+   Test on a machine with no speakers, or by forcing the flag on locally.
+3. *Source-grouped UI.* Render the single Local Source as its own panel.  Still
+   no remotes — but the UI shape is now ready.
+4. *Outbound WebSocket client.* Implement Remote Source connection, state
+   mirroring, and reconnect.  Read-only renderer pass.
+5. *Config plumbing.* ~[[sources]]~ section, CLI flag, round-trip tests.
+6. *Playback toggle and source management UI.* The laptop-versus- office switch
+   and the add/remove/edit controls.
 
-Each step ships independently and leaves the program in a working
-state.  Authentication is deliberately out of scope for this TODO and
-is tracked as its own follow-up below.
+Each step ships independently and leaves the program in a working state.
+Authentication is deliberately out of scope for this TODO and is tracked as its
+own follow-up below.
 
 * TODO Authenticated remote sources
-Follow-up to /Multi-instance support: remote sources of heartbeat
-state/.  Once that lands, the local instance connects to remotes
-unauthenticated, which is fine for trusted networks (loopback, VPN,
-SSH tunnel, firewalled LAN) but not for connections traversing the
-open internet.
+Follow-up to /Multi-instance support: remote sources of heartbeat state/.  Once
+that lands, the local instance connects to remotes unauthenticated, which is
+fine for trusted networks (loopback, VPN, SSH tunnel, firewalled LAN) but not
+for connections traversing the open internet.
 
 Add authenticated outbound connections:
 
-- Reuse the existing OIDC machinery in ~auth.rs~ to acquire a bearer
-  token before opening the WebSocket to a remote source.  The
-  ~[[sources]]~ config entry gains the credential fields needed to
-  drive that flow (issuer, client id, client secret file, or a
-  pre-issued token path — match whatever shape ~auth.rs~ already
-  expects for inbound auth).
-- Ensure ~wss://~ outbound connections use the ~native-tls~ root
-  store, consistent with the choice already made for the rest of
-  the project (see the rust-template sync history).
-- Server-side: add a config option that rejects mutating WebSocket
-  messages from non-loopback clients.  The local-instance design
-  already chooses not to send those, but defence in depth matters
-  once a remote is reachable from untrusted networks.
-- UI: surface auth-failure connection states distinctly from
-  network-failure states ("authentication required", "token
-  expired", "permission denied") so the user knows whether to
-  re-login versus check the network.
+- Reuse the existing OIDC machinery in ~auth.rs~ to acquire a bearer token
+  before opening the WebSocket to a remote source.  The ~[[sources]]~ config entry
+  gains the credential fields needed to drive that flow (issuer, client id,
+  client secret file, or a pre-issued token path — match whatever shape
+  ~auth.rs~ already expects for inbound auth).
+- Ensure ~wss://~ outbound connections use the ~native-tls~ root store,
+  consistent with the choice already made for the rest of the project (see the
+  rust-template sync history).
+- Server-side: add a config option that rejects mutating WebSocket messages from
+  non-loopback clients.  The local-instance design already chooses not to send
+  those, but defence in depth matters once a remote is reachable from untrusted
+  networks.
+- UI: surface auth-failure connection states distinctly from network-failure
+  states ("authentication required", "token expired", "permission denied") so
+  the user knows whether to re-login versus check the network.
 
 * TODO Local override layer for remote source config
-Follow-up to /Multi-instance support: remote sources of heartbeat
-state/.  By default the local instance renders a remote Source
-exactly the way the remote would have rendered itself — same
-patches, same tiers, same volumes.  Sometimes that's wrong for the
-*listener*: maybe the laptop's headphones turn one heartbeat
-piercing, maybe the office speakers can't reproduce the bass on
-another, maybe the user wants to mute one specific heartbeat on a
-remote without disabling the entire Source.
+Follow-up to /Multi-instance support: remote sources of heartbeat state/.  By
+default the local instance renders a remote Source exactly the way the remote
+would have rendered itself — same patches, same tiers, same volumes.  Sometimes
+that's wrong for the *listener*: maybe the laptop's headphones turn one
+heartbeat piercing, maybe the office speakers can't reproduce the bass on
+another, maybe the user wants to mute one specific heartbeat on a remote without
+disabling the entire Source.
 
-Add a *local override layer* that applies on top of the mirrored
-remote config when the local renderer synthesises audio.  The
-remote's config remains the source of truth and continues to stream
-in unchanged; the override layer sits between that mirror and the
-local renderer.  Things the layer should be able to override per
-remote heartbeat:
+Add a *local override layer* that applies on top of the mirrored remote config
+when the local renderer synthesises audio.  The remote's config remains the
+source of truth and continues to stream in unchanged; the override layer sits
+between that mirror and the local renderer.  Things the layer should be able to
+override per remote heartbeat:
 
 - Per-note volume.
-- Patch parameter deltas — reuse the existing ~OverrideInfo~
-  shape if it fits, or extend it.
-- Patch substitution — point a remote heartbeat at a *local*
-  patch instead of the one the remote uses.
-- Outright mute of a single remote heartbeat, distinct from
-  disabling the whole Source.
+- Patch parameter deltas — reuse the existing ~OverrideInfo~ shape if it fits,
+  or extend it.
+- Patch substitution — point a remote heartbeat at a *local* patch instead of
+  the one the remote uses.
+- Outright mute of a single remote heartbeat, distinct from disabling the whole
+  Source.
 
-The layer is local state and persists across remote
-disconnect/reconnect, the same way the existing local override of
-remote metric values does.  It round-trips through export/save as
-part of the *local* Source's persisted config — never written
-back to the remote.
+The layer is local state and persists across remote disconnect/reconnect, the
+same way the existing local override of remote metric values does.  It
+round-trips through export/save as part of the *local* Source's persisted config
+— never written back to the remote.
 
-Open question for when this is picked up: how the UI exposes the
-layer.  Likely the existing read-only remote heartbeat card grows
-an "Override locally" affordance per row that flips that specific
-row into editable local-override mode, with clear visual
-distinction between "this is what the remote actually has" and
-"this is your local override of it".
+Open question for when this is picked up: how the UI exposes the layer.  Likely
+the existing read-only remote heartbeat card grows an "Override locally"
+affordance per row that flips that specific row into editable local-override
+mode, with clear visual distinction between "this is what the remote actually
+has" and "this is your local override of it".
 
 * TODO Macro for wire-mirror structs
-The remote-source connector defines wire-format structs (e.g.
-~WireHeartbeat~, ~WireNoteConfig~) that mirror the corresponding
-~HeartbeatConfig~/~NoteConfig~ structures field-for-field plus a
-few wire-only additions (~metric~, ~overridden~).  The duplication
-is bounded today (two structs, ~30 lines) but if more wire mirrors
-land it will stop being bounded.
+The remote-source connector defines wire-format structs (e.g.  ~WireHeartbeat~,
+~WireNoteConfig~) that mirror the corresponding ~HeartbeatConfig~/~NoteConfig~
+structures field-for-field plus a few wire-only additions (~metric~,
+~overridden~).  The duplication is bounded today (two structs, ~30 lines) but if
+more wire mirrors land it will stop being bounded.
 
-Investigate a small proc macro that derives the wire mirror from a
-source struct, with attributes for "add this field" and (later)
-"omit this field".  Goals:
+Investigate a small proc macro that derives the wire mirror from a source
+struct, with attributes for "add this field" and (later) "omit this field".
+Goals:
 
 - Single source of truth for the field list.
-- Preserves ~deny_unknown_fields~ on the strict variant while the
-  wire variant accepts unknown fields for forward compat.
+- Preserves ~deny_unknown_fields~ on the strict variant while the wire variant
+  accepts unknown fields for forward compat.
 - No newtype indirection at call sites.
 
 The natural alternative — ~#[serde(flatten)]~ — collides with
-~deny_unknown_fields~, so a macro is the way to keep both
-properties.
+~deny_unknown_fields~, so a macro is the way to keep both properties.
 
-Trigger to do this work: when a third or fourth wire mirror struct
-shows up, not before.
+Trigger to do this work: when a third or fourth wire mirror struct shows up, not
+before.
 
 * TODO Allow removing the last metric tier from the UI
-The ~RemoveTier~ Msg, its update branch, and the per-row ×
-button are already wired, but the button is gated by ~tierCount >
-1~ in ~viewTierRow~ (≈Main.elm:2274).  That guard was copied from
-note-row code where a heartbeat must have at least one note, but
-tiers are purely cosmetic and can legally be empty — so a user
-who adds one tier gets stuck with it forever.  Drop the guard (or
-replace it with ~tierCount >= 1~ which is always true) so the
-single remaining tier can be removed.
+The ~RemoveTier~ Msg, its update branch, and the per-row × button are already
+wired, but the button is gated by ~tierCount > 1~ in ~viewTierRow~
+(≈Main.elm:2274).  That guard was copied from note-row code where a heartbeat
+must have at least one note, but tiers are purely cosmetic and can legally be
+empty — so a user who adds one tier gets stuck with it forever.  Drop the guard
+(or replace it with ~tierCount >= 1~ which is always true) so the single
+remaining tier can be removed.
 
 Files: ~frontend/src/Main.elm~.
+
+* TODO Per-source volume control
+Today the only volume knobs are the global *master volume*
+(~PreviewState.master_volume~, the "Master" slider in the toolbar) and *per-note
+volume* (~NoteConfig.volume~).  There is no volume control scoped to a single
+Source.  The ~Source~ abstraction now exists
+(~crates/server/src/preview_state.rs~ — ~local: Arc<Source>~ plus
+~remote_sources~), so each Source should carry its own volume that sits between
+master and per-note in the gain chain.
+
+This applies to the Local Source too, not just remotes: a user listening to
+several Sources at once needs to balance them against each other, and balancing
+the local one against the remotes is part of that.
+
+Implementation sketch:
+
+- Add a ~volume: f64~ (or a ~Shared~/atomic, matching how ~master_volume~ is
+  stored) to ~Source~.
+- Fold it into ~update_all_effective_volumes()~ in ~preview_state.rs~ so the
+  effective volume becomes ~master_volume * source_volume * mute_factor~ instead
+  of ~master_volume * mute_factor~.
+- Surface a per-Source volume slider in each Source panel in the frontend
+  (~frontend/src/Main.elm~), reusing the existing ~viewSlider~ + debounce
+  pattern that the master slider uses.  Add a WebSocket message alongside
+  ~set_master_volume~ (~crates/server/src/websocket.rs~,
+  ~frontend/src/Protocol.elm~).
+- Round-trip the per-source volume through export/save, alongside the source's
+  ~playback_enabled~ flag.
+
+Files: ~crates/server/src/preview_state.rs~, ~crates/server/src/websocket.rs~,
+~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~.
+
+* TODO Mute button does not actually silence audio
+Clicking *Mute* (the ~ToggleMute~ button in ~viewToolbar~, ≈Main.elm:2110)
+produces a brief audible hiccup but audio keeps playing — it never truly ceases.
+The button does round-trip correctly (frontend ~set_muted~ → ~mute_changed~
+broadcast, handled at ~crates/server/src/websocket.rs~ ~"set_muted"~), so the
+bug is in how ~muted~ reaches the live audio graph, not in the UI wiring.
+
+The current path: ~set_muted~ stores the flag and calls
+~update_all_effective_volumes()~ in ~preview_state.rs~, which computes
+~mute_factor = if muted { 0.0 } else { 1.0 }~ and writes each heartbeat's
+~effective_volume~.  The audio graph reads volume via ~ext_vol = var(&ext) >>
+follow(0.1)~ in ~crates/lib/src/heartbeat.rs~ (≈203), multiplied into the voice
+at ≈217.
+
+Likely root cause to confirm: ~update_all_effective_volumes()~ updates a value
+that newly-spawned voices read at construction time, but does not write into the
+*same* ~Shared~ that already-running voices hold — so notes already sounding
+keep their pre-mute gain and only the brief ~follow(0.1)~ transition on the next
+event is heard (the "hiccup").  Verify whether the ~Shared~/~var~ backing ~ext~
+is the one being mutated, and make mute drive that shared signal directly so
+in-flight voices fade to silence immediately.
+
+Add a test that mutes mid-playback and asserts the output signal reaches zero,
+rather than relying on manual listening.
+
+Files: ~crates/server/src/preview_state.rs~,
+~crates/server/src/audio_engine.rs~, ~crates/lib/src/heartbeat.rs~.
+
+* TODO Mute button shows a help (?) cursor
+Hovering the *Mute* button shows a "?" help cursor, implying a tooltip or help
+affordance that does not exist — clicking it only toggles mute, it never reveals
+anything.  The ~?~ cursor is the ~cursor: help~ style, which in
+~frontend/public/style.css~ is defined only on ~.help-label~ (≈247) and a couple
+of other help-text rules; plain ~.btn~ correctly declares ~cursor: pointer~
+(≈226).  The mute button (≈Main.elm:2110) renders as a bare ~.btn~ with no
+~title~ attribute, so the help cursor is leaking in from somewhere it should
+not.
+
+Investigate where the ~cursor: help~ is actually coming from (a cascading rule,
+an inherited ~title~, or a stray class) and ensure the mute button shows the
+normal ~cursor: pointer~ with no phantom tooltip.
+
+Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~.

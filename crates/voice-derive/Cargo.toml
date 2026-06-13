@@ -5,7 +5,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "PatchGenerate derive macro for sonify-health patch parameters"
+publish = true
 
 [lib]
 proc-macro = true

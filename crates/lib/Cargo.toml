@@ -5,7 +5,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "Infrastructure sonification library: patch model, audio synthesis, and configuration"
+publish = true
 
 [dependencies]
 # Logging types (LogLevel / LogFormat) and config helpers the lib builds on.

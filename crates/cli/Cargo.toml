@@ -5,7 +5,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+description = "Infrastructure sonification CLI"
+publish = true
 
 [lib]
 name = "sonify_health_cli"
