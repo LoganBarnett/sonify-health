@@ -163,7 +163,7 @@ futures = "0.3"
 # `impl_server_state!` macro expands to `Arc<::openidconnect::core::CoreClient>`
 # in the server crate, so openidconnect must be a direct dependency there for
 # that generated path to resolve.
-openidconnect = { version = "3", features = ["reqwest"] }
+openidconnect = { version = "4", features = ["reqwest"] }
 # openidconnect's "rustls-tls" feature uses webpki-roots (Mozilla's CA list
 # baked in at compile time), which doesn't include private CAs like proton-ca.
 # Adding reqwest directly with rustls-tls-native-roots makes Cargo's feature
