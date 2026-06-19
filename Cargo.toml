@@ -102,7 +102,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Parses the on-disk config.toml and the CLI-supplied patch libraries, and
 # renders the `print --format toml` output.
-toml = "0.8"
+toml = "1.1"
 
 # Derives the semantic error enums used across every crate.
 thiserror = "2.0"

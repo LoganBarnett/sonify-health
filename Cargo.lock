@@ -3409,7 +3409,7 @@ dependencies = [
  "sonify-health-lib",
  "tap",
  "thiserror 2.0.18",
- "toml 0.8.23",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
 ]
 
@@ -3427,7 +3427,7 @@ dependencies = [
  "sonify-health-voice-derive",
  "tap",
  "thiserror 2.0.18",
- "toml 0.8.23",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
 ]
 
@@ -3456,7 +3456,7 @@ dependencies = [
  "tokio",
  "tokio-listener",
  "tokio-tungstenite 0.26.2",
- "toml 0.8.23",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
  "url",
 ]
