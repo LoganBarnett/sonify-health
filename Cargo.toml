@@ -78,7 +78,7 @@ repository = "https://gitea.proton/logan/sonify-health"
 # flake's `foundation` input still tracks the template by commit for
 # the Nix build helpers, and template_sync_hashes still records the
 # doc/infra sync points.
-rust-template-foundation = "0.13.0"
+rust-template-foundation = "0.16.0"
 
 # Structured logging and span instrumentation: the facade every crate
 # emits diagnostics through.
