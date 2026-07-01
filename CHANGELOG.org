@@ -5,5 +5,13 @@
 ** Added
 1. A heavy sync with ~rust-template~ brings in a load of shared behavior as well
    as this very change log.
+2. Releases now ship prebuilt ~sonify-health~ and ~sonify-health-server~
+   binaries for Linux (glibc and static musl) and macOS (Intel and Apple
+   Silicon), attached to each GitHub release with a SHA-256 digest and a
+   build-provenance attestation.  A one-command ~curl ... | sh~ quick start
+   (~install.sh~) downloads the latest release for the platform, lays down the
+   Star Trek bridge preset, and runs it — a working, zero-configuration first
+   run.  The README also documents the underlying ~curl~ download, ~cargo
+   install~, and Nix routes.
 ** Fixes
 ** Breaking
