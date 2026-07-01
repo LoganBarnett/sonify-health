@@ -118,8 +118,8 @@ acceptable.  Do not swallow errors — let them propagate.
 associated functionality and have ~main.rs~ delegate to them.
 
 Delegate obvious concerns: ~config.rs~ for configuration, ~logging.rs~ for
-logging initialization.  It is okay if these wind up being a single struct and
-a single function.
+logging initialization.  It is okay if these wind up being a single struct and a
+single function.
 
 Keep ~.rs~ files under ~src~ for executables and ~lib~ for libraries.
 
@@ -132,9 +132,9 @@ You can further avoid local variables by using the ~tap~ crate to do logging in
 the middle of a call chain without breaking the chain.
 
 Another way to avoid local variables is to create structs atomically from
-function calls.  The ~foo~ field can be assigned the result of the ~foo()~
-call, for example.  Prefer nouns (~foo()~) over verb-prefixed names
-(~get_foo()~), since verbs are highly subjective in software.
+function calls.  The ~foo~ field can be assigned the result of the ~foo()~ call,
+for example.  Prefer nouns (~foo()~) over verb-prefixed names (~get_foo()~),
+since verbs are highly subjective in software.
 
 Prefer functional combinators over explicit ~loop~ and early ~return~.  When
 functions grow complicated, simplify by extracting smaller functions.
@@ -142,8 +142,8 @@ functions grow complicated, simplify by extracting smaller functions.
 *** Debugging
 
 When lacking information during debugging, permanent additions to the logs (at
-appropriate levels) are one of the best cures.  The program should tell you
-what ails it.
+appropriate levels) are one of the best cures.  The program should tell you what
+ails it.
 
 Create tests which exercise the problem you are running into.  Prefer mock
 services with integration tests so we can test real behavior, over unit tests
@@ -155,8 +155,8 @@ Tests and test scripts must exit with a proper error code.
 
 Only use ~Option~ if the field is truly optional.  If a struct would be invalid
 without a field set, do not use ~Option~.  Instead, make an intermediate type
-that represents a candidate whose validity is not yet fully known.  This is
-very helpful for processing phases.
+that represents a candidate whose validity is not yet fully known.  This is very
+helpful for processing phases.
 
 For example, ~CliArgs~ can represent arguments as provided on the command line.
 ~ConfigFile~ can represent the configuration file's state.  Meshing the two
@@ -174,9 +174,9 @@ nix develop --command just build
 nix develop --command just test
 #+end_src
 
-This ensures the correct Rust toolchain and associated tools (such as
-~rustfmt~) are in use.  The pre-commit hook requires ~rustfmt~ in PATH, so
-~git commit~ must also go through the shell:
+This ensures the correct Rust toolchain and associated tools (such as ~rustfmt~)
+are in use.  The pre-commit hook requires ~rustfmt~ in PATH, so ~git commit~
+must also go through the shell:
 
 #+begin_src sh :results none :exports code
 nix develop --command git commit --message "your message"
@@ -200,6 +200,12 @@ the signal that it should be codified here instead.
 When a planning pass produces a design worth keeping, record it as a ~TODO~
 entry in ~tasks.org~ (the project's backlog), cross-linking related entries and
 marking superseded ones, rather than leaving it only in an ephemeral plan file.
+
+When a change completes a ~TODO~, flip that entry to ~DONE~ in the same change
+set that does the work — the way a commit ~Closes #1234~ claims an issue.  The
+implementing PR carries its own status flip; do not leave it for a follow-up
+commit, which otherwise either drifts (the work merges but the backlog still
+says ~TODO~) or forces an otherwise-empty commit just to move the marker.
 
 * Template compliance
 

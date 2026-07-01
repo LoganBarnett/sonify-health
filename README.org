@@ -5,34 +5,102 @@
 
 * Introduction
 
-sonify-health turns infrastructure health into ambient sound.  Each
-machine self-reports via a heartbeat model: probe commands run
-periodically, and their results select patches from a sound library.
-Each heartbeat can contain multiple notes, and each note maps a metric
-to patches via discrete thresholds or smooth gradients.
+sonify-health turns infrastructure health into ambient sound.  Each machine
+self-reports via a heartbeat model: probe commands run periodically, and their
+results select patches from a sound library.  Each heartbeat can contain
+multiple notes, and each note maps a metric to patches via discrete thresholds
+or smooth gradients.
 
 Heartbeats support three playback modes:
 
-- *Clock* — one-shot plays on a wall-clock cycle, enabling
-  time-slotted multi-machine ensembles.
+- *Clock* — one-shot plays on a wall-clock cycle, enabling time-slotted
+  multi-machine ensembles.
 - *Loop* — repeats a phrase with a configurable gap.
-- *Continuous* — streams audio that crossfades on metric changes,
-  useful for stress layers like CPU or memory pressure.
+- *Continuous* — streams audio that crossfades on metric changes, useful for
+  stress layers like CPU or memory pressure.
 
-The result is a Star Trek bridge feel: rhythmic pulses and tonal
-shifts that encode real meaning into peripheral awareness without
-requiring visual attention.  Physical speaker placement gives spatial
-location for free.
+The result is a Star Trek bridge feel: rhythmic pulses and tonal shifts that
+encode real meaning into peripheral awareness without requiring visual
+attention.  Physical speaker placement gives spatial location for free.
 
-A single ~sonify-health~ process can also subscribe to *other*
-instances' state and play their heartbeats on its own speakers — so
-a speakerless server can run the daemon to do the polling, and a
-laptop or workstation elsewhere can listen.  See /Multi-instance
-setup/ below.
+A single ~sonify-health~ process can also subscribe to *other* instances' state
+and play their heartbeats on its own speakers — so a speakerless server can run
+the daemon to do the polling, and a laptop or workstation elsewhere can listen.
+See /Multi-instance setup/ below.
 
 See [[file:sonification.org][sonification.org]] for the full design rationale.
 
+* Quick start
+
+No toolchain, no configuration, no choices.  Paste this and a Star Trek bridge
+sonification of your gateway, internet, and CPU starts playing — it downloads
+the latest released daemon for your platform, lays down a working config you can
+edit later, and runs it:
+
+#+begin_src sh :results none :exports code
+curl --fail --silent --show-error --location \
+  https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/install.sh | sh
+#+end_src
+
+Stop with =SIGINT= (Ctrl-C).  To see exactly what it does — or to install
+without running, pick a different config, or build from source — read on.
+
 * Installation
+
+** Prebuilt binary (curl)
+
+Each release attaches prebuilt binaries for Linux and macOS to its GitHub
+release, so this route needs only =curl= and =tar= — no Rust toolchain and no
+Nix, because a Rust binary carries no runtime to install.  The snippet detects
+your platform, resolves the latest release, and unpacks the daemon (=tar='s
+=-xzf= preserves the executable bit, so there is no =chmod= step):
+
+#+begin_src sh :results none :exports code
+repo=LoganBarnett/sonify-health
+# Map the running platform to a release-asset label.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)  label=aarch64-darwin ;;
+  Darwin-x86_64) label=x86_64-darwin ;;
+  Linux-x86_64)  label=x86_64-linux-gnu ;;
+  Linux-aarch64) label=aarch64-linux-gnu ;;
+  *) echo "no prebuilt binary for $(uname -s)-$(uname -m); build from source below" >&2 ;;
+esac
+# grep, cut, and tar take short flags here: their long forms are GNU-only, and
+# this snippet also runs on macOS's BSD tools.
+tag=$(curl --fail --silent --location \
+  "https://api.github.com/repos/${repo}/releases/latest" \
+  | grep -m1 '"tag_name":' | cut -d'"' -f4)
+curl --fail --location --proto '=https' --tlsv1.2 \
+  "https://github.com/${repo}/releases/download/${tag}/sonify-health-server-${tag}-${label}.tar.gz" \
+  | tar -xzf -
+#+end_src
+
+Swap =sonify-health-server= for =sonify-health= to fetch the preview/print CLI
+instead.
+
+The Linux builds come in two flavours: =-linux-gnu= (selected above) for
+mainstream distributions, and a fully static =-linux-musl= that runs on any
+Linux.  Either way the binary is dynamically linked against ~libasound.so.2~,
+which audio-capable desktops already have; a bare server may need it installed
+(see /Speakerless host (headless)/).  Each asset ships a =.sha256= digest and a
+build-provenance attestation you can check with =gh attestation verify=.
+
+** From GitHub (cargo install)
+
+A source build that needs only =cargo=: =cargo install --git= builds a binary
+from =main='s HEAD with no clone and no crates.io release required (the
+workspace is not published to crates.io; cargo compiles straight from the
+repository):
+
+#+begin_src sh :results none :exports code
+# The daemon (installs the sonify-health-server binary).
+cargo install --git https://github.com/LoganBarnett/sonify-health --branch main sonify-health-server
+# The preview/print CLI (installs the sonify-health binary).
+cargo install --git https://github.com/LoganBarnett/sonify-health --branch main sonify-health-cli
+#+end_src
+
+On Linux this needs ALSA headers and =pkg-config= for the audio backend; on
+macOS the system CoreAudio framework is used directly.
 
 ** From source (inside Nix devshell)
 
@@ -40,36 +108,83 @@ See [[file:sonification.org][sonification.org]] for the full design rationale.
 nix develop --command cargo build --release --workspace
 #+end_src
 
-The binary is at =target/release/sonify-health=.
+The binaries are at =target/release/sonify-health-server= (the daemon) and
+=target/release/sonify-health= (the CLI).
 
 ** Nix build
 
+The flake has no default package, so name the one you want:
+
 #+begin_src sh :results none :exports code
-nix build
+nix build .#server   # or .#cli
 #+end_src
 
-The result symlink contains =bin/sonify-health=.
+The =result= symlink contains =bin/sonify-health-server= (or =bin/sonify-health=
+for the CLI).
 
 ** Nix run (without installing)
 
 #+begin_src sh :results none :exports code
-nix run .#cli
+nix run .#server   # the daemon
+nix run .#cli      # the preview/print CLI
 #+end_src
 
 * Nix flake exports
 
-The flake exposes several outputs for integration into NixOS and
-nix-darwin configurations:
+The flake exposes several outputs for integration into NixOS and nix-darwin
+configurations:
 
-- =packages.${system}.default= — full workspace build.
-- =packages.${system}.cli= — just the CLI/daemon binary.
-- =apps.${system}.cli= — runnable app entry point.
-- =devShells.${system}.default= — development shell with Rust
-  toolchain, Elm, formatters, and task runner.
+- =packages.${system}.server= — the =sonify-health-server= daemon.
+- =packages.${system}.cli= — the =sonify-health= preview/print CLI.
+- =apps.${system}.server= / =apps.${system}.cli= — runnable app entry points
+  (=nix run .#server= / =nix run .#cli=).
+- =devShells.${system}.default= — development shell with Rust toolchain, Elm,
+  formatters, and task runner.
 - =nixosModules.daemon= — NixOS service module.
 - =darwinModules.daemon= — nix-darwin service module.
 
 * Usage
+
+** Run the daemon
+
+The daemon is sonify-health's primary entry point: it spawns the probe commands,
+plays heartbeats, and serves the live state over a WebSocket.
+
+The fastest start needs no toolchain at all.  Download the prebuilt binary (see
+/Prebuilt binary (curl)/ under /Installation/ above), lay down a ready-to-run
+config, and start it — a complete Star Trek bridge sonification of your gateway,
+internet, and CPU, with nothing to configure:
+
+#+begin_src sh :results none :exports code
+# Fetch the Star Trek bridge preset from main as a local, writable config — one
+# you can edit, and that the dashboard's sliders can save back to.
+curl --fail --silent --location --output config.toml \
+  https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/examples/connectivity-and-cpu-star-trek.toml
+
+./sonify-health-server --config config.toml
+#+end_src
+
+Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
+
+Prefer to build it yourself?  Both of these compile from =main='s HEAD and need
+only their own toolchain; point either at the same =config.toml=:
+
+#+begin_src sh :results none :exports code
+# With cargo (on Linux also needs ALSA headers and pkg-config).
+cargo install --git https://github.com/LoganBarnett/sonify-health --branch main sonify-health-server
+sonify-health-server --config config.toml
+
+# Or with Nix, skipping a Rust toolchain entirely.
+nix run github:LoganBarnett/sonify-health#server -- --config config.toml
+#+end_src
+
+That preset sonifies three probes out of the box — gateway reachability,
+internet reachability, and CPU load — so the bridge comes alive immediately;
+edit =config.toml= to tune it.  For a blank slate instead, =config.example.toml=
+documents every field with all heartbeats commented out.  The bundled web
+dashboard additionally needs the built Elm assets at =frontend_path= (default
+=frontend/public=), so it appears when you run from a checkout.  See
+/Configuration/ below.
 
 ** Preview a patch
 
@@ -81,8 +196,8 @@ sonify-health preview --patch-name alarm --freq 880
 sonify-health preview --continuous --patch-name warm
 #+end_src
 
-Any patch parameter can be overridden on the command line.  Run
-=sonify-health preview --help= for the full list.
+Any patch parameter can be overridden on the command line.  Run =sonify-health
+preview --help= for the full list.
 
 ** Print the patch library
 
@@ -94,62 +209,51 @@ sonify-health print --format nix
 sonify-health print --format cli --patch-name sine
 #+end_src
 
-** Run the daemon
-
-Long-running mode that spawns probe commands, updates shared state,
-plays heartbeats, and serves the web frontend:
-
-#+begin_src sh :results none :exports code
-sonify-health --config config.toml daemon
-#+end_src
-
-Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
-
-Note that global options like =--config=, =--headless=, and
-=--source= must appear *before* the subcommand.
-
 ** Multi-instance setup
 
-The daemon decouples the *poller* (the process running probe
-commands and producing metric data) from the *renderer* (the
-process that owns the audio device).  The two halves don't have
-to live on the same machine.
+The daemon decouples the *poller* (the process running probe commands and
+producing metric data) from the *renderer* (the process that owns the audio
+device).  The two halves don't have to live on the same machine.
 
 Two independent knobs:
 
-- =headless= is a property of /this/ host — "no speakers, don't
-  open an audio device."  It has nothing to do with whether
-  anyone subscribes to this instance.
-- =[[sources]]= declares /other/ instances /this/ host should
-  subscribe to.  Whether subscribed remotes are played locally
-  is per-source via =playback_enabled=.
+- =headless= is a property of /this/ host — "no speakers, don't open an audio
+  device."  It has nothing to do with whether anyone subscribes to this
+  instance.
+- =[[sources]]= declares /other/ instances /this/ host should subscribe to.  Whether
+  subscribed remotes are played locally is per-source via =playback_enabled=.
 
-These compose freely: a non-headless instance can both play its
-own heartbeats and subscribe to remotes; a headless instance can
-declare =[[sources]]= but won't play them (it has no audio
-device).  The two-host laptop/server pattern below is just the
-common case.
+These compose freely: a non-headless instance can both play its own heartbeats
+and subscribe to remotes; a headless instance can declare =[[sources]]= but won't
+play them (it has no audio device).  The two-host laptop/server pattern below is
+just the common case.
 
 *** Speakerless host (headless)
 
 A host without speakers runs the daemon in headless mode:
 
 #+begin_src sh :results none :exports code
-sonify-health --config config.toml --headless daemon
+sonify-health-server --config config.toml --headless
 #+end_src
 
-Or set =headless = true= in =config.toml=, or
-=services.sonify-health.headless = true= in the NixOS / nix-darwin
-module.  No audio device is opened and no play threads are
-spawned (for local heartbeats /or/ for any subscribed remotes).
-Heartbeat polling and the WebSocket / metrics endpoints stay live
-so other instances can subscribe.
+Or set =headless = true= in =config.toml=, or =services.sonify-health.headless =
+true= in the NixOS / nix-darwin module.  No audio device is opened and no play
+threads are spawned (for local heartbeats /or/ for any subscribed remotes).
+Heartbeat polling and the WebSocket / metrics endpoints stay live so other
+instances can subscribe.
 
-A host /with/ speakers stays at =headless = false= even when
-other instances subscribe to it — both ends will play, which is
-fine if that's what you want.  The listener-side
-=playback_enabled= toggle is the right knob for "don't double up
-the audio."
+On a non-NixOS Linux host, note that the prebuilt binary is dynamically linked
+against ~libasound.so.2~ and needs it present just to *start* — even headless,
+where no audio device is ever opened, because the ALSA backend is still linked
+in.  A minimal server image often lacks it; install it from the distro (~apt
+install libasound2~, ~pacman -S alsa-lib~, ~apk add alsa-lib~).  Anything
+delivered through Nix (this module, or ~nix run~ / ~nix build~) pulls it in via
+the package closure, so this affects only hand-installed binaries.
+
+A host /with/ speakers stays at =headless = false= even when other instances
+subscribe to it — both ends will play, which is fine if that's what you want.
+The listener-side =playback_enabled= toggle is the right knob for "don't double
+up the audio."
 
 *** Subscribing to another instance
 
@@ -162,49 +266,46 @@ url  = "wss://db1.internal.example.com/ws"
 playback_enabled = true
 #+end_src
 
-Or on the command line, repeatable and merged with the config
-file's entries:
+Or on the command line, repeatable and merged with the config file's entries:
 
 #+begin_src sh :results none :exports code
-sonify-health --source prod-db-1=wss://db1.internal.example.com/ws daemon
+sonify-health-server --source prod-db-1=wss://db1.internal.example.com/ws
 #+end_src
 
-Each source carries a =playback_enabled= toggle.  When false, the
-listener mirrors state silently — useful when you're back at a
-desk where another instance is already sounding the same servers.
-Flip it to true on the road and the listener plays the remote
-heartbeats from its own speakers without any other change.
+Each source carries a =playback_enabled= toggle.  When false, the listener
+mirrors state silently — useful when you're back at a desk where another
+instance is already sounding the same servers.  Flip it to true on the road and
+the listener plays the remote heartbeats from its own speakers without any other
+change.
 
-The Local Source is always named =localhost= (reserved).  Remote
-source names must be unique within the listener's config.
+The Local Source is always named =localhost= (reserved).  Remote source names
+must be unique within the listener's config.
 
 *** Trusted networks only
 
-Outbound connections are not authenticated yet — use the feature
-on loopback, a VPN, an SSH tunnel, or a firewalled LAN.  Don't
-expose a remote source endpoint on the open internet without
-fronting it with your own auth proxy.
+Outbound connections are not authenticated yet — use the feature on loopback, a
+VPN, an SSH tunnel, or a firewalled LAN.  Don't expose a remote source endpoint
+on the open internet without fronting it with your own auth proxy.
 
 ** Reverse proxy with WebSocket support
 
-The daemon serves the WebSocket on the same listener as the HTTP
-frontend — clients hit the same host:port and either get the
-static SPA or trigger a WebSocket upgrade depending on the
-request headers.  Reverse-proxying is therefore plain HTTP
-proxying /plus/ a tiny dance to forward the =Upgrade= and
+The daemon serves the WebSocket on the same listener as the HTTP frontend —
+clients hit the same host:port and either get the static SPA or trigger a
+WebSocket upgrade depending on the request headers.  Reverse-proxying is
+therefore plain HTTP proxying /plus/ a tiny dance to forward the =Upgrade= and
 =Connection= headers.
 
-By default nginx /strips/ those headers, so a vanilla =proxy_pass=
-will silently drop WebSocket traffic — clients see a 200 with the
-SPA HTML instead of a 101 protocol-switch.  The fix is the same
-whether you're configuring nginx by hand or through NixOS.
+By default nginx /strips/ those headers, so a vanilla =proxy_pass= will silently
+drop WebSocket traffic — clients see a 200 with the SPA HTML instead of a 101
+protocol-switch.  The fix is the same whether you're configuring nginx by hand
+or through NixOS.
 
 *** NixOS
 
-The NixOS sonify-health module defaults to a Unix domain socket
-at =/run/sonify-health/sonify-health.sock=, which is the easiest
-shape to front with nginx.  Add the nginx user to the
-sonify-health group so it can connect to the socket:
+The NixOS sonify-health module defaults to a Unix domain socket at
+=/run/sonify-health/sonify-health.sock=, which is the easiest shape to front
+with nginx.  Add the nginx user to the sonify-health group so it can connect to
+the socket:
 
 #+begin_src nix :results none :exports code
 {
@@ -231,14 +332,12 @@ sonify-health group so it can connect to the socket:
 }
 #+end_src
 
-=proxyWebsockets = true= is the nixpkgs convenience that wires
-=Upgrade= / =Connection= headers /and/ the required
-=$connection_upgrade= map.  Listeners point at
-=wss://sonify.example.com/ws=.
+=proxyWebsockets = true= is the nixpkgs convenience that wires =Upgrade= /
+=Connection= headers /and/ the required =$connection_upgrade= map.  Listeners
+point at =wss://sonify.example.com/ws=.
 
-For TCP mode instead of a socket, set
-=services.sonify-health.socket = null;= and =port = 3000;=, and
-change the =proxyPass= to =http://127.0.0.1:3000=.
+For TCP mode instead of a socket, set =services.sonify-health.socket = null;=
+and =port = 3000;=, and change the =proxyPass= to =http://127.0.0.1:3000=.
 
 *** Plain nginx
 
@@ -269,64 +368,56 @@ server {
 }
 #+end_src
 
-Listeners use =wss://sonify.example.com/ws= the same way.  The
-daemon doesn't know or care that TLS is being terminated upstream
-— it sees a regular HTTP/1.1 connection with =Upgrade:
-websocket= and runs the handshake.
+Listeners use =wss://sonify.example.com/ws= the same way.  The daemon doesn't
+know or care that TLS is being terminated upstream — it sees a regular HTTP/1.1
+connection with =Upgrade: websocket= and runs the handshake.
 
-The default 60s =proxy_read_timeout= is left in place
-deliberately: the daemon broadcasts =metric_changed= every poll
-interval, so a healthy WebSocket sees traffic well inside that
-window.  If a connection /does/ idle out, something has actually
-gone wrong (the remote's polls have stopped, or the network has
+The default 60s =proxy_read_timeout= is left in place deliberately: the daemon
+broadcasts =metric_changed= every poll interval, so a healthy WebSocket sees
+traffic well inside that window.  If a connection /does/ idle out, something has
+actually gone wrong (the remote's polls have stopped, or the network has
 silently dropped) — a reconnect is the right response.
 
 * Configuration
 
-Copy =config.example.toml= to =config.toml=.  All fields are
-optional; the daemon runs with sensible defaults.
+Copy =config.example.toml= to =config.toml=.  All fields are optional; the
+daemon runs with sensible defaults.
 
 Top-level keys:
 
 - =log_level= / =log_format= — logging control.
 - =listen= — web server bind address.
 - =audio_device= — audio output device name (default: system default).
-- =headless= — when true, skip the audio device entirely.  Pollers
-  and the WebSocket stay live; no audio is produced.  Default
-  false.  See /Multi-instance setup/ above.
+- =headless= — when true, skip the audio device entirely.  Pollers and the
+  WebSocket stay live; no audio is produced.  Default false.  See
+  /Multi-instance setup/ above.
 - =[patches]= — named patch definitions for the sound library.
-- =[[sources]]= — remote ~sonify-health~ instances to subscribe
-  to.  Each entry sets =name=, =url=, and an optional
-  =playback_enabled= (default false).
+- =[[sources]]= — remote ~sonify-health~ instances to subscribe to.  Each entry sets
+  =name=, =url=, and an optional =playback_enabled= (default false).
 
-Each =[[heartbeats]]= entry defines a probe and one or more notes.
-The =playback= field selects the mode (=clock=, =loop=, or
-=continuous=; defaults to =clock=).  The =result_mode= field
-determines how the command output is read:
+Each =[[heartbeats]]= entry defines a probe and one or more notes.  The =playback=
+field selects the mode (=clock=, =loop=, or =continuous=; defaults to =clock=).
+The =result_mode= field determines how the command output is read:
 
 - =exit-code= — exit code 0/1/2 maps to discrete thresholds.
 - =stdout= — command prints a metric value (0.0–1.0) to stdout.
 
-Each note within a heartbeat carries a =transition= that maps the
-probe metric to patches:
+Each note within a heartbeat carries a =transition= that maps the probe metric
+to patches:
 
-- =discrete= — selects the first state whose =threshold= exceeds the
-  metric.
+- =discrete= — selects the first state whose =threshold= exceeds the metric.
 - =gradient= — interpolates between adjacent patches.
 
 * Gotchas
 
-- *Audio device access* — the daemon opens the default audio output.
-  On Linux this requires ALSA or PipeWire.  On macOS, CoreAudio is
-  used directly.
-- *NTP precision* — multi-machine timing relies on wall-clock
-  synchronization.  NTP provides ~10 ms accuracy, sufficient for
-  the default cycle duration.
-- *Nix sandbox* — =nix build= runs tests in a sandbox without audio
-  hardware.  Integration tests that play sound are skipped in the
-  sandbox build.
-- *Global options* — flags like =-c=, =--log-level=, and =--listen=
-  must appear before the subcommand, not after it.
+- *Audio device access* — the daemon opens the default audio output.  On Linux
+  this requires ALSA or PipeWire.  On macOS, CoreAudio is used directly.
+- *NTP precision* — multi-machine timing relies on wall-clock synchronization.
+  NTP provides ~10 ms accuracy, sufficient for the default cycle duration.
+- *Nix sandbox* — =nix build= runs tests in a sandbox without audio hardware.
+  Integration tests that play sound are skipped in the sandbox build.
+- *Global options* — flags like =-c=, =--log-level=, and =--listen= must appear
+  before the subcommand, not after it.
 
 * Contributing
 
@@ -335,8 +426,8 @@ nix develop --command cargo test --workspace
 nix develop --command cargo clippy --workspace
 #+end_src
 
-The pre-commit hook runs =rustfmt=.  Commits must go through the Nix
-devshell so the correct toolchain is in =PATH=:
+The pre-commit hook runs =rustfmt=.  Commits must go through the Nix devshell so
+the correct toolchain is in =PATH=:
 
 #+begin_src sh :results none :exports code
 nix develop --command git commit --message "your message"

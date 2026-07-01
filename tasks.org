@@ -49,6 +49,36 @@ Diagnosed from a live instance whose metrics showed the exact signature:
 =heartbeats_played= in the tens of thousands, every =audio_*= output/callback
 gauge at zero, and =audio_stream_errors=0=.
 
+* DONE rust-template release-binary compliance sync (e929cab..abb6bed / v0.21.0)
+Completed against rust-template v0.21.0, which gave =mkMuslPackages= and
+=mkDarwinCrossPackages= a =commonArgs= passthrough — so sonify's =cpal=/ALSA
+=buildInputs= now reach the musl and darwin-cross builds the same way they reach
+=mkRustPackages=, unblocking the two musl targets that were the original
+blocker.  Structural checker: 120 passed / 0 failed.
+
+What landed:
+- =.github/workflows/release-binaries.yml= delegating to the reusable workflow.
+- =flake.nix=: wired =mkMuslPackages= + =mkDarwinCrossPackages= (both threaded
+  =commonArgs=), =appleSdk = pkgs.apple-sdk.src= on the darwin-cross call,
+  =config.allowUnfree= / =config.allowUnsupportedSystem= on the =nixpkgs=
+  import, and the new =checks= output.  =nix eval .#packages.x86_64-linux=
+  resolves all eight attrs (=cli=/=server= × native, =-musl=, =-x86_64-darwin=,
+  =-aarch64-darwin=).
+- =[profile.release]= shipped-binary settings (=lto=, =codegen-units = 1=,
+  =strip=) in the workspace =Cargo.toml=.
+- =workspaces= map in =rust-template.json= (=cli=/=server= release-binary true,
+  =lib=/=voice-derive= false) and =actions: write= in =publish.yml=.
+- =* Release binaries= section in =CONTRIBUTING.org=; =foundation= flake input
+  bumped =c9b177a= → =abb6bed=; template hash =abb6bed= appended to
+  =template_sync_hashes=.
+
+One deliberate divergence from verbatim template content:
+=release-binaries.yml='s header comment referenced =rust-template.json= by name,
+which the =no-stale-rust-template-literals= check rejects (and which
+=new-project.sh='s =s/rust-template/<project>/= rewrite would turn into a
+nonexistent =sonify-health.json= in a fresh emission).  Reworded to "the
+project's provenance file" — see the rust-template thread.
+
 * DONE Sync with rust-template (420397e..c3d6e14+)
 Forward-port changes from rust-template that landed after the last synced commit
 (=5f606c5=).  The following commits need review:
