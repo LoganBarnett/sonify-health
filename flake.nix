@@ -29,6 +29,15 @@
       pkgs = import nixpkgs {
         inherit system;
         overlays = [(import rust-overlay)];
+        # apple-sdk, consumed below as apple-sdk.src for the macOS cross
+        # builds, is unfree and darwin-gated, so evaluating pkgs.apple-sdk.src
+        # on the x86_64-linux cross builder requires both acceptances.  The
+        # licence consent stays visible here in the project rather than hidden
+        # in the foundation library.
+        config = {
+          allowUnfree = true;
+          allowUnsupportedSystem = true;
+        };
       };
       craneLib =
         (crane.mkLib pkgs).overrideToolchain
@@ -73,31 +82,66 @@
       rustPackages = foundation.lib.mkRustPackages {
         inherit self pkgs craneLib crates commonArgs;
       };
+      # On Linux each binary also gets a statically-linked `<name>-musl`
+      # variant; empty on other systems.  commonArgs is threaded through so
+      # cpal's alsa buildInputs reach the musl build as they do the native
+      # one.
+      muslPackages = foundation.lib.mkMuslPackages {
+        inherit self pkgs system crates crane commonArgs;
+      };
+      # The x86_64-linux build cross-compiles the macOS `<key>-<arch>-darwin`
+      # variants via zig so a release needs no macOS runner; empty on other
+      # systems.  appleSdk supplies the CoreAudio framework headers and link
+      # stubs cpal needs — see CONTRIBUTING.org's Release binaries section.
+      darwinCrossPackages = foundation.lib.mkDarwinCrossPackages {
+        inherit self pkgs system crates crane commonArgs;
+        appleSdk = pkgs.apple-sdk.src;
+      };
+      packages =
+        rustPackages.packages
+        // muslPackages
+        // darwinCrossPackages;
     in {
-      inherit (rustPackages) packages apps;
+      inherit packages;
+      inherit (rustPackages) apps checks;
       devShell = pkgs.mkShell {
-        buildInputs = [
-          # Rust toolchain (compiler, cargo, rustfmt, rust-analyzer).
-          rust
-          # Prunes stale per-profile artifacts from target/ to reclaim disk.
-          pkgs.cargo-sweep
-          # JSON parsing for the shellHook's cargo-package listing and ad-hoc
-          # scripting in the dev shell.
-          pkgs.jq
-          # Unified formatter and per-language helpers.
-          pkgs.treefmt
-          pkgs.alejandra
-          pkgs.prettier
-          # Formats org-mode documents (treefmt delegates .org files to it).
-          org-fmt.packages.${system}.default
-          # Elm frontend toolchain.
-          pkgs.elmPackages.elm
-          pkgs.elmPackages.elm-format
-          pkgs.elm2nix
-          # Task runner.
-          pkgs.just
-        ];
+        # The audio crates (cpal → alsa-sys) need pkg-config and, on Linux,
+        # alsa-lib to compile.  Those live in commonArgs for the crane build;
+        # reuse them here so `nix develop --command cargo build/test` — the path
+        # CI's Test and Clippy jobs take — can build the workspace too.  macOS
+        # links CoreAudio and needs neither, so this gap only bit Linux CI.
+        nativeBuildInputs = commonArgs.nativeBuildInputs;
+        buildInputs =
+          commonArgs.buildInputs
+          ++ [
+            # Rust toolchain (compiler, cargo, rustfmt, rust-analyzer).
+            rust
+            # Prunes stale per-profile artifacts from target/ to reclaim disk.
+            pkgs.cargo-sweep
+            # JSON parsing for the shellHook's cargo-package listing and ad-hoc
+            # scripting in the dev shell.
+            pkgs.jq
+            # Unified formatter and per-language helpers.
+            pkgs.treefmt
+            pkgs.alejandra
+            pkgs.prettier
+            # Formats org-mode documents (treefmt delegates .org files to it).
+            org-fmt.packages.${system}.default
+            # Elm frontend toolchain.
+            pkgs.elmPackages.elm
+            pkgs.elmPackages.elm-format
+            pkgs.elm2nix
+            # Task runner.
+            pkgs.just
+          ];
         shellHook = ''
+          # The lib's audio tests are strict by default: on a machine that
+          # should have a sound card, a failure to open one is a real
+          # regression and panics.  CI runs `cargo test` through this shell on
+          # a device-less runner, so opt out here the way commonArgs does for
+          # the crane builds — with no device the tests skip instead of
+          # panicking, while a dev box with audio still runs them.
+          export sonify_health_tests_strict_audio_device=false
           ${foundation.lib.cargoHuskyHookSnippet pkgs}
           echo "sonify-health development environment"
           echo ""
@@ -119,6 +163,7 @@
       nixpkgs.lib.mapAttrs (_: p: {default = p.devShell;}) perSystem;
     packages = nixpkgs.lib.mapAttrs (_: p: p.packages) perSystem;
     apps = nixpkgs.lib.mapAttrs (_: p: p.apps) perSystem;
+    checks = nixpkgs.lib.mapAttrs (_: p: p.checks) perSystem;
 
     nixosModules = {
       daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
