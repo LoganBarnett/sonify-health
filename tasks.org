@@ -1,6 +1,54 @@
 #+title:     sonify-health Tasks
 #+language:  en
 
+* TODO Output device picker in the UI
+Let the user choose which audio output device the daemon plays through, from the
+dashboard, instead of only via the =audio_device= config field at startup.  This
+is a full-stack feature; the pieces:
+
+- *Device enumeration.* A lib-level call that lists the available cpal output
+  devices (name + whatever stable identifier the backend exposes) and marks the
+  current one.  Include a way to /refresh/ the list, since devices come and go
+  (Bluetooth, USB, HDMI) while the daemon runs.
+- *Backend state + selection.* Extend the daemon so the active output device can
+  be changed at runtime: apply the choice by rebuilding the mixer stream on the
+  chosen device (the =try_recover= path already rebuilds a stream; generalise it
+  to target an arbitrary device rather than only re-resolving the default).
+  Persist the choice back to =config.toml= when the config is writable, the way
+  the slider edits already do.
+- *Protocol / communication machinery.* Carry the device list and the current
+  selection in the WebSocket state snapshot the frontend already consumes, add a
+  client→server message to request a device change and one to trigger a refresh,
+  and thread them through the existing websocket + =PreviewState= plumbing.
+- *Frontend.* A picker in the Elm UI (a =select= over the device list, current
+  device shown, a refresh affordance), wired to the new messages, following the
+  existing no-modal / flat-CSS / no-inline-style conventions.
+
+Cross-links: the runtime device-rebuild machinery overlaps with
+[[*Audio callback-liveness watchdog]] (both rebuild the mixer stream on a new
+device); build the "rebuild on an arbitrary device" primitive once and share it.
+
+* DONE Audio callback-liveness watchdog
+The daemon could go silent indefinitely after a macOS output-device transition:
+cpal left the render callback un-pumped while reporting no stream error, so
+=stream_failed= never tripped and the error-driven recovery never fired.
+=heartbeats_played= kept climbing — it counts scheduling, not output — so
+nothing looked wrong.
+
+Added a monotonic =callbacks= counter to =MixerInner=, bumped on every
+render-callback invocation, and a =CallbackWatchdog= in the audio engine that
+runs on the ~1 s recovery tick: when the count stops advancing for
+=CALLBACK_STALL_TIMEOUT= (5 s) while =stream_errors= is still zero, it marks the
+stream failed so the existing =stream_recovery_tick= rebuilds it on the current
+default device.  The stall decision is a pure, clock-injected =observe= method
+with a unit test.  Surfaced =audio_seconds_since_last_callback= (live callback
+age) and =audio_callback_stalls_total= so a stall is visible in metrics instead
+of hiding behind a healthy-looking heartbeat count.
+
+Diagnosed from a live instance whose metrics showed the exact signature:
+=heartbeats_played= in the tens of thousands, every =audio_*= output/callback
+gauge at zero, and =audio_stream_errors=0=.
+
 * DONE Sync with rust-template (420397e..c3d6e14+)
 Forward-port changes from rust-template that landed after the last synced commit
 (=5f606c5=).  The following commits need review:

@@ -135,15 +135,18 @@ fn resolve_device(
     sample_format = %supported.sample_format(),
     "Audio device config"
   );
-  let mut stream_config: cpal::StreamConfig = supported.into();
+  let stream_config: cpal::StreamConfig = supported.into();
 
-  // macOS CoreAudio defaults to tiny buffers that underrun with
-  // the 32-channel FDN reverb.  ALSA/PipeWire defaults are already
-  // large enough and may reject arbitrary fixed sizes.
+  // macOS CoreAudio defaults to tiny buffers that underrun with the
+  // 32-channel FDN reverb.  ALSA/PipeWire defaults are already large enough
+  // and may reject arbitrary fixed sizes.  Shadow with a fixed buffer only on
+  // macOS, so the binding needs no `mut` on Linux where the field is never
+  // reassigned.
   #[cfg(target_os = "macos")]
-  {
-    stream_config.buffer_size = cpal::BufferSize::Fixed(BUFFER_FRAMES);
-  }
+  let stream_config = cpal::StreamConfig {
+    buffer_size: cpal::BufferSize::Fixed(BUFFER_FRAMES),
+    ..stream_config
+  };
 
   Ok((device, stream_config))
 }
@@ -273,6 +276,11 @@ struct MixerInner {
   stream_errors: AtomicU64,
   /// Set to `true` once `stream_errors` exceeds `STREAM_ERROR_THRESHOLD`.
   stream_failed: AtomicBool,
+  /// Monotonic count of render-callback invocations.  A live cpal stream
+  /// drives this every few milliseconds; a value that stops advancing while
+  /// the stream is open — with `stream_errors` still zero — is the signature
+  /// of a stalled callback the error path cannot see.
+  callbacks: AtomicU64,
 
   /// Per-slot peak amplitude (max |sample|) in the current window.
   /// Stored as f32 bit patterns via to_bits(); fetch_max is valid
@@ -316,6 +324,11 @@ fn mixer_callback(
 ) -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) {
   move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
     let start = std::time::Instant::now();
+
+    // Count every invocation — even ones that bail on a lock miss below — so
+    // the engine's watchdog can distinguish a live stream from one cpal has
+    // silently stopped pulling without reporting an error.
+    inner.callbacks.fetch_add(1, Ordering::Relaxed);
 
     // Zero the output buffer.
     for sample in data.iter_mut() {
@@ -513,6 +526,7 @@ impl AudioMixer {
       peak_callback_us: AtomicU64::new(0),
       stream_errors: AtomicU64::new(0),
       stream_failed: AtomicBool::new(false),
+      callbacks: AtomicU64::new(0),
       slot_peaks: std::array::from_fn(|_| AtomicU32::new(0)),
       slot_rms: std::array::from_fn(|_| AtomicU32::new(0)),
       output_peak: AtomicU32::new(0),
@@ -724,6 +738,20 @@ impl AudioMixer {
   /// the stream is broken and should be recovered.
   pub fn stream_failed(&self) -> bool {
     self.inner.stream_failed.load(Ordering::Relaxed)
+  }
+
+  /// Monotonic render-callback invocation count.  When this stops
+  /// advancing while the stream is open, the callback has stalled.
+  pub fn callback_count(&self) -> u64 {
+    self.inner.callbacks.load(Ordering::Relaxed)
+  }
+
+  /// Flag the stream failed from outside the cpal error path.  The
+  /// engine's callback watchdog calls this when the render callback
+  /// stalls with no error, so `stream_recovery_tick` rebuilds the
+  /// stream exactly as it does for an error-driven failure.
+  pub fn mark_stream_stalled(&self) {
+    self.inner.stream_failed.store(true, Ordering::Relaxed);
   }
 
   /// Peak amplitude of the mixed output buffer since last reset.
@@ -959,6 +987,11 @@ impl MixerHandle {
     self.inner.stream_failed.load(Ordering::Relaxed)
   }
 
+  /// Monotonic render-callback invocation count.
+  pub fn callback_count(&self) -> u64 {
+    self.inner.callbacks.load(Ordering::Relaxed)
+  }
+
   /// Peak amplitude of the mixed output buffer since last reset.
   pub fn output_peak_amplitude(&self) -> f32 {
     f32::from_bits(self.inner.output_peak.load(Ordering::Relaxed))
@@ -1149,6 +1182,7 @@ mod tests {
       peak_callback_us: AtomicU64::new(0),
       stream_errors: AtomicU64::new(0),
       stream_failed: AtomicBool::new(false),
+      callbacks: AtomicU64::new(0),
       slot_peaks: std::array::from_fn(|_| AtomicU32::new(0)),
       slot_rms: std::array::from_fn(|_| AtomicU32::new(0)),
       output_peak: AtomicU32::new(0),

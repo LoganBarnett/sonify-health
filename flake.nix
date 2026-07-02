@@ -12,6 +12,7 @@
     org-fmt.inputs.crane.follows = "crane";
     foundation.url = "github:LoganBarnett/rust-template";
     foundation.inputs.nixpkgs.follows = "nixpkgs";
+    changelog-roller.url = "github:LoganBarnett/changelog-roller";
   };
 
   outputs = {
@@ -21,6 +22,7 @@
     crane,
     org-fmt,
     foundation,
+    changelog-roller,
   }: let
     forAllSystems =
       nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed;
@@ -75,28 +77,41 @@
       };
     in {
       inherit (rustPackages) packages apps;
-      devShell = pkgs.mkShell {
-        buildInputs = [
-          # Rust toolchain (compiler, cargo, rustfmt, rust-analyzer).
-          rust
-          # Prunes stale per-profile artifacts from target/ to reclaim disk.
-          pkgs.cargo-sweep
-          # JSON parsing for the shellHook's cargo-package listing and ad-hoc
-          # scripting in the dev shell.
-          pkgs.jq
-          # Unified formatter and per-language helpers.
-          pkgs.treefmt
-          pkgs.alejandra
-          pkgs.prettier
-          # Formats org-mode documents (treefmt delegates .org files to it).
-          org-fmt.packages.${system}.default
-          # Elm frontend toolchain.
-          pkgs.elmPackages.elm
-          pkgs.elmPackages.elm-format
-          pkgs.elm2nix
-          # Task runner.
-          pkgs.just
-        ];
+      devShells.default = pkgs.mkShell {
+        # The audio crates (cpal → alsa-sys) need pkg-config and, on Linux,
+        # alsa-lib to compile.  Those live in commonArgs for the crane build;
+        # reuse them here so `nix develop --command cargo build/test` — the path
+        # CI's Test and Clippy jobs take — can build the workspace too.  macOS
+        # links CoreAudio and needs neither, so this gap only bit Linux CI.
+        nativeBuildInputs = commonArgs.nativeBuildInputs;
+        buildInputs =
+          commonArgs.buildInputs
+          ++ [
+            # Rust toolchain (compiler, cargo, rustfmt, rust-analyzer).
+            rust
+            # Prunes stale per-profile artifacts from target/ to reclaim disk.
+            pkgs.cargo-sweep
+            # JSON parsing for the shellHook's cargo-package listing and ad-hoc
+            # scripting in the dev shell.
+            pkgs.jq
+            # Unified formatter and per-language helpers.
+            pkgs.treefmt
+            pkgs.alejandra
+            pkgs.prettier
+            # Formats org-mode documents (treefmt delegates .org files to it).
+            org-fmt.packages.${system}.default
+            # Rolls and checks CHANGELOG.org.  Here so a dev can run
+            # `changelog-roller check-additions` locally before opening a PR;
+            # CI's changelog job uses the `ci` shell's own copy (via
+            # mkCiShell), not this one.
+            changelog-roller.packages.${system}.default
+            # Elm frontend toolchain.
+            pkgs.elmPackages.elm
+            pkgs.elmPackages.elm-format
+            pkgs.elm2nix
+            # Task runner.
+            pkgs.just
+          ];
         shellHook = ''
           ${foundation.lib.cargoHuskyHookSnippet pkgs}
           echo "sonify-health development environment"
@@ -112,11 +127,30 @@
           echo "  Build:       cd frontend && elm make src/Main.elm --output public/elm.js"
           echo "  Regenerate:  cd frontend && elm2nix convert 2>/dev/null > elm-srcs.nix && elm2nix snapshot"
         '';
+        # Runtime marker identifying the default dev shell; a compliance check
+        # reads it back with `nix eval`.  The `ci` shell carries the same
+        # marker with the value "ci".
+        RUST_TEMPLATE_SHELL = "default";
+      };
+      # The shell the reusable CI workflow runs every job through
+      # (`nix develop .#ci --command ...`).  Its baseline — the rust
+      # toolchain, changelog-roller, and cargo-semver-checks — comes from
+      # foundation's mkCiShell; we add the audio build inputs so the cpal
+      # crates compile under CI's cargo test/clippy, and set the strict-audio
+      # opt-out so the device-less runner skips the audio-device tests.  The
+      # interactive `default` shell deliberately omits that opt-out, so a dev
+      # box with a sound card runs the full audio suite for real.
+      devShells.ci = foundation.lib.mkCiShell {
+        inherit pkgs system;
+        toolchain = rust;
+        buildInputs = commonArgs.buildInputs;
+        nativeBuildInputs = commonArgs.nativeBuildInputs;
+        sonify_health_tests_strict_audio_device = "false";
       };
     });
   in {
     devShells =
-      nixpkgs.lib.mapAttrs (_: p: {default = p.devShell;}) perSystem;
+      nixpkgs.lib.mapAttrs (_: p: p.devShells) perSystem;
     packages = nixpkgs.lib.mapAttrs (_: p: p.packages) perSystem;
     apps = nixpkgs.lib.mapAttrs (_: p: p.apps) perSystem;
 
