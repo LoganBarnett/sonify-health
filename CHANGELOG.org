@@ -5,6 +5,7 @@
 ** Added
 ** Fixes
 ** Breaking
+* v0.3.0
 * v0.2.0
 ** Added
 1. A heavy sync with ~rust-template~ brings in a load of shared behavior as well
