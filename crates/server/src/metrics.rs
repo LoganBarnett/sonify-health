@@ -42,6 +42,8 @@ pub struct Metrics {
   pub audio_stream_errors: IntGauge,
   pub audio_stream_failed: IntGauge,
   pub audio_recovery_attempts: IntGauge,
+  pub audio_callback_stalls: IntGauge,
+  pub audio_seconds_since_last_callback: IntGauge,
   pub audio_output_peak_amplitude: Gauge,
   pub audio_slot_peak_amplitude: GaugeVec,
   pub audio_slot_rms_amplitude: GaugeVec,
@@ -175,6 +177,22 @@ impl Metrics {
       ),
     )?;
 
+    let audio_callback_stalls = construct(
+      "sonify_health_audio_callback_stalls_total",
+      IntGauge::new(
+        "sonify_health_audio_callback_stalls_total",
+        "Render-callback stalls detected by the liveness watchdog.",
+      ),
+    )?;
+
+    let audio_seconds_since_last_callback = construct(
+      "sonify_health_audio_seconds_since_last_callback",
+      IntGauge::new(
+        "sonify_health_audio_seconds_since_last_callback",
+        "Seconds since the audio render callback last advanced.",
+      ),
+    )?;
+
     let audio_output_peak_amplitude = construct(
       "sonify_health_audio_output_peak_amplitude",
       Gauge::new(
@@ -265,6 +283,16 @@ impl Metrics {
     )?;
     register(
       registry,
+      "sonify_health_audio_callback_stalls_total",
+      &audio_callback_stalls,
+    )?;
+    register(
+      registry,
+      "sonify_health_audio_seconds_since_last_callback",
+      &audio_seconds_since_last_callback,
+    )?;
+    register(
+      registry,
       "sonify_health_audio_output_peak_amplitude",
       &audio_output_peak_amplitude,
     )?;
@@ -300,6 +328,8 @@ impl Metrics {
       audio_stream_errors,
       audio_stream_failed,
       audio_recovery_attempts,
+      audio_callback_stalls,
+      audio_seconds_since_last_callback,
       audio_output_peak_amplitude,
       audio_slot_peak_amplitude,
       audio_slot_rms_amplitude,

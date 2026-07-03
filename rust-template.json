@@ -11,5 +11,11 @@
     "cc745d3a3a06636229454909d9821aed445c8d7d",
     "c9b177a2f52d70298c23fb1be51001bb5c8d8eb7",
     "e929cabc431b657787372fbd6fb5892d903099fc"
-  ]
+  ],
+  "workspaces": {
+    "cli": { "release-binary": false },
+    "server": { "release-binary": false },
+    "lib": { "release-binary": false },
+    "voice-derive": { "release-binary": false }
+  }
 }

@@ -6,4 +6,10 @@
 1. A heavy sync with ~rust-template~ brings in a load of shared behavior as well
    as this very change log.
 ** Fixes
+1. The daemon now recovers from a silently stalled audio stream.  After a macOS
+   output-device change that left the render callback un-pumped without a cpal
+   error, playback would stay silent indefinitely; a liveness watchdog now
+   detects the stall and rebuilds the stream on the current default device.
+   Callback health is exposed via the new ~audio_seconds_since_last_callback~
+   and ~audio_callback_stalls_total~ metrics.
 ** Breaking

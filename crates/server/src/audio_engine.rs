@@ -38,6 +38,13 @@ const HEALTH_LOG_INTERVAL: u32 = 300; // ~30 s
 /// instability).
 const CONTINUOUS_REBUILD_INTERVAL: Duration = Duration::from_secs(3600);
 
+/// How long the render callback may go without advancing before the
+/// liveness watchdog treats the stream as stalled and forces a rebuild.
+/// A live cpal stream calls back every few milliseconds, so this only
+/// trips on a genuine stall — e.g. a macOS device transition that leaves
+/// the stream open but unpumped, with no error to drive normal recovery.
+const CALLBACK_STALL_TIMEOUT: Duration = Duration::from_secs(5);
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -190,6 +197,40 @@ impl AudioRecoveryState {
   }
 }
 
+/// Liveness watchdog for the cpal render callback.  cpal drives the
+/// callback continuously while the stream is open, so the mixer's callback
+/// counter advances every few milliseconds.  A stream that goes silent
+/// without erroring (a macOS device transition can do this) leaves the
+/// counter frozen while `stream_errors` stays zero, so the error-driven
+/// recovery never fires.  This tracks the counter and reports a stall once
+/// it has not advanced for `CALLBACK_STALL_TIMEOUT`.
+struct CallbackWatchdog {
+  last_count: u64,
+  last_advance: Instant,
+}
+
+impl CallbackWatchdog {
+  fn new() -> Self {
+    Self {
+      last_count: 0,
+      last_advance: Instant::now(),
+    }
+  }
+
+  /// Record the latest callback count and report whether the stream has
+  /// stalled — the count has not advanced for at least `timeout`.  `now` is
+  /// injected rather than read internally so the decision is unit-testable
+  /// against a synthetic clock.
+  fn observe(&mut self, count: u64, now: Instant, timeout: Duration) -> bool {
+    if count != self.last_count {
+      self.last_count = count;
+      self.last_advance = now;
+      return false;
+    }
+    now.duration_since(self.last_advance) >= timeout
+  }
+}
+
 /// The audio engine: owns the mixer (when not headless), the
 /// supervised worker thread handles, and the loop-local state for
 /// stream recovery / mute tracking / tick counting.  Constructed
@@ -200,6 +241,7 @@ pub struct AudioEngine {
   mixer: Option<AudioMixer>,
   supervised: Vec<SupervisedThread>,
   audio_recovery: AudioRecoveryState,
+  callback_watchdog: CallbackWatchdog,
   was_muted: bool,
   tick: u32,
 }
@@ -285,6 +327,7 @@ impl AudioEngine {
       mixer,
       supervised,
       audio_recovery: AudioRecoveryState::new(),
+      callback_watchdog: CallbackWatchdog::new(),
       was_muted,
       tick: 0,
     })
@@ -306,6 +349,7 @@ impl AudioEngine {
       if self.tick.is_multiple_of(SUPERVISION_CHECK_INTERVAL) {
         self.supervision_tick()?;
         self.rebalance_play_threads();
+        self.callback_watchdog_tick();
         self.stream_recovery_tick();
       }
       if self.tick > 0 && self.tick.is_multiple_of(HEALTH_LOG_INTERVAL) {
@@ -505,6 +549,49 @@ impl AudioEngine {
           ));
         }
       }
+    }
+  }
+
+  /// Detect a silently-stalled render callback and hand it to recovery.
+  /// cpal pulls buffers continuously while the stream is live, so the
+  /// mixer's callback counter advances every few milliseconds; when it
+  /// freezes with `stream_errors` still zero, CoreAudio has stopped
+  /// pulling without erroring (e.g. after a device transition) and the
+  /// error-driven recovery would never trigger.  Marking the stream failed
+  /// hands it to `stream_recovery_tick`, which rebuilds it like any other
+  /// failure.  Also publishes the callback age so a stall is visible in
+  /// metrics rather than hiding behind a healthy-looking heartbeat count.
+  fn callback_watchdog_tick(&mut self) {
+    let Some(mixer) = self.mixer.as_ref() else {
+      return;
+    };
+    // A stream already flagged failed is on the recovery path; leave the
+    // watchdog dormant until the rebuild clears the flag.
+    if mixer.stream_failed() {
+      return;
+    }
+    let now = Instant::now();
+    let count = mixer.callback_count();
+    let stalled =
+      self
+        .callback_watchdog
+        .observe(count, now, CALLBACK_STALL_TIMEOUT);
+    let age = now
+      .duration_since(self.callback_watchdog.last_advance)
+      .as_secs() as i64;
+    self
+      .preview
+      .metrics
+      .audio_seconds_since_last_callback
+      .set(age);
+    if stalled {
+      warn!(
+        last_callback_count = count,
+        stalled_for_secs = CALLBACK_STALL_TIMEOUT.as_secs(),
+        "Audio render callback stalled with no stream error; forcing rebuild"
+      );
+      mixer.mark_stream_stalled();
+      self.preview.metrics.audio_callback_stalls.inc();
     }
   }
 
@@ -1279,6 +1366,24 @@ fn send_probe_log(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn callback_watchdog_flags_stall_only_after_timeout() {
+    let timeout = Duration::from_secs(5);
+    let mut wd = CallbackWatchdog::new();
+    let t0 = Instant::now();
+
+    // First observation seeds the baseline; never a stall.
+    assert!(!wd.observe(100, t0, timeout));
+    // An advancing count stays healthy and resets the clock to t0+4s.
+    assert!(!wd.observe(101, t0 + Duration::from_secs(4), timeout));
+    // Frozen count still within the timeout is not yet a stall.
+    assert!(!wd.observe(101, t0 + Duration::from_secs(8), timeout));
+    // Frozen for the full timeout since the last advance is a stall.
+    assert!(wd.observe(101, t0 + Duration::from_secs(9), timeout));
+    // A fresh advance clears it again.
+    assert!(!wd.observe(102, t0 + Duration::from_secs(10), timeout));
+  }
 
   #[test]
   fn extract_panic_message_str() {
