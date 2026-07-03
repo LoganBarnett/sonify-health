@@ -3,6 +3,10 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+* v0.2.0
+** Added
 1. A heavy sync with ~rust-template~ brings in a load of shared behavior as well
    as this very change log.
 2. Releases now ship prebuilt ~sonify-health~ and ~sonify-health-server~
@@ -20,4 +24,3 @@
    detects the stall and rebuilds the stream on the current default device.
    Callback health is exposed via the new ~audio_seconds_since_last_callback~
    and ~audio_callback_stalls_total~ metrics.
-** Breaking
