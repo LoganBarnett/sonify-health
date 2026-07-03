@@ -221,3 +221,11 @@ opt-level = 3
 
 [profile.release]
 debug = false
+# These binaries ship as release artifacts, so optimize them for the end user
+# rather than for build speed.  lto and a single codegen unit let the optimizer
+# work across crate boundaries (faster runtime, smaller code), and strip removes
+# symbols to shrink the download.  opt-level stays at the default 3 — tuned for
+# speed, not size.
+lto = true
+codegen-units = 1
+strip = true

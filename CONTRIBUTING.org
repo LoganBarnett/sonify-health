@@ -29,13 +29,12 @@ direnv allow
 
 ** Semantic error handling
 
-This project uses *semantic error types* with ~thiserror~ rather than
-generic error wrapping with ~anyhow~.  Every error variant must include
-sufficient context to diagnose the problem without access to the source
-code or the running environment.
+This project uses *semantic error types* with ~thiserror~ rather than generic
+error wrapping with ~anyhow~.  Every error variant must include sufficient
+context to diagnose the problem without access to the source code or the running
+environment.
 
-See ~crates/cli/src/config.rs~ for examples of well-structured error
-types.
+See ~crates/cli/src/config.rs~ for examples of well-structured error types.
 
 ** Comments
 
@@ -240,8 +239,8 @@ view model =
 
 * Systemd secrets
 
-The NixOS module uses systemd's ~LoadCredential~ to pass secret files to
-the service without granting the service user direct read access.  See
+The NixOS module uses systemd's ~LoadCredential~ to pass secret files to the
+service without granting the service user direct read access.  See
 =docs/systemd.org= for the full pattern.
 
 * Logging levels
@@ -249,8 +248,8 @@ the service without granting the service user direct read access.  See
 Use appropriate log levels for different severity:
 
 - ~error!()~ — errors that prevent normal operation.
-- ~warn!()~  — recoverable issues or degraded functionality.
-- ~info!()~  — important state changes.
+- ~warn!()~ — recoverable issues or degraded functionality.
+- ~info!()~ — important state changes.
 - ~debug!()~ — detailed diagnostic information.
 - ~trace!()~ — very verbose debugging.
 
@@ -274,59 +273,52 @@ Tests must exit with a proper error code.
 
 * UI philosophy: no modals
 
-Do not use modals anywhere in the UI.  Replace every modal with an
-inline expansion that keeps surrounding context visible.
+Do not use modals anywhere in the UI.  Replace every modal with an inline
+expansion that keeps surrounding context visible.
 
 ** Why
 
-Modals block the UI — which may contain information relevant to the
-decision at hand — and they are an accessibility nightmare (backdrop
-divs, tab-index trapping, z-index layering).  As an interface matures,
-the probability of needing a modal inside a modal trends to 1.  Powerful
-UIs do not use modals.
+Modals block the UI — which may contain information relevant to the decision at
+hand — and they are an accessibility nightmare (backdrop divs, tab-index
+trapping, z-index layering).  As an interface matures, the probability of
+needing a modal inside a modal trends to 1.  Powerful UIs do not use modals.
 
 ** Patterns
 
-- *Export / large output*: clicking the trigger button slides the
-  surrounding content down and reveals the output inline, in the normal
-  document flow.
-- *Destructive confirmations*: replace the triggering button in-place
-  with a "Confirm delete?  Yes / No" prompt.  When the user decides (or
-  clicks elsewhere), restore the original button.
-- *Progressive disclosure*: expand a section in-place rather than
-  overlaying.
+- *Export / large output*: clicking the trigger button slides the surrounding
+  content down and reveals the output inline, in the normal document flow.
+- *Destructive confirmations*: replace the triggering button in-place with a
+  "Confirm delete?  Yes / No" prompt.  When the user decides (or clicks
+  elsewhere), restore the original button.
+- *Progressive disclosure*: expand a section in-place rather than overlaying.
 
-Every piece of revealed UI must live in the normal document flow.  No
-backdrop divs, no tab-index trapping, no z-index layering.
+Every piece of revealed UI must live in the normal document flow.  No backdrop
+divs, no tab-index trapping, no z-index layering.
 
 * UI philosophy: every label earns a help entry
 
-The dashboard carries a lot of specialised vocabulary — metric
-tiers, patches, notes, playback modes, transitions — and a
-contributor (or a returning user) cannot realistically remember
-what each one means.  The bottom-of-page Help panel exists to
-answer that question in place, without navigating away.
+The dashboard carries a lot of specialised vocabulary — metric tiers, patches,
+notes, playback modes, transitions — and a contributor (or a returning user)
+cannot realistically remember what each one means.  The bottom-of-page Help
+panel exists to answer that question in place, without navigating away.
 
 ** Definition of Done for UI changes
 
-Any new or renamed UI label, section header, or control caption
-is not considered done until it has a corresponding entry in
-~frontend/src/Help.elm~.  That means:
+Any new or renamed UI label, section header, or control caption is not
+considered done until it has a corresponding entry in ~frontend/src/Help.elm~.
+That means:
 
-1. Pick a stable kebab-case ~Key~ (e.g. ~"metric-tiers"~,
-   ~"patch-detune"~).  Prefer names that survive cosmetic
-   renames.
-2. Add a case to ~Help.lookup~ returning one or two sentences.
-   Keep it short — the panel is small by design.  Longer
-   explanations belong in ~docs/~.
-3. Render the label with ~class "help-label"~ on a ~button~
-   element (not a plain ~span~ or ~label~) so keyboard and
-   screen-reader users get proper semantics for free.  Wire its
-   ~onClick~ to ~HelpClicked "your-key"~.
+1. Pick a stable kebab-case ~Key~ (e.g. ~"metric-tiers"~, ~"patch-detune"~).
+   Prefer names that survive cosmetic renames.
+2. Add a case to ~Help.lookup~ returning one or two sentences.  Keep it short —
+   the panel is small by design.  Longer explanations belong in ~docs/~.
+3. Render the label with ~class "help-label"~ on a ~button~ element (not a plain
+   ~span~ or ~label~) so keyboard and screen-reader users get proper semantics
+   for free.  Wire its ~onClick~ to ~HelpClicked "your-key"~.
 
-If a label has no explanation beyond "it does what it says," that
-is still a one-sentence help entry — write it anyway, because
-what seems obvious to the author is rarely obvious to a newcomer.
+If a label has no explanation beyond "it does what it says," that is still a
+one-sentence help entry — write it anyway, because what seems obvious to the
+author is rarely obvious to a newcomer.
 
 * Commit workflow
 
@@ -334,6 +326,34 @@ what seems obvious to the author is rarely obvious to a newcomer.
 2. Ensure ~cargo fmt~ and ~cargo clippy --workspace~ produce no warnings.
 3. Run ~cargo test --workspace~ and confirm all tests pass.
 4. Open a pull request against ~main~.
+
+* Release binaries
+
+A release builds your binary crates for the mainstream targets and attaches them
+to the GitHub release.  The macOS binaries are *cross-compiled on Linux* (via
+zig) rather than on a macOS runner, so a release never waits on scarce macOS CI
+capacity.  This is automatic — ~mkDarwinCrossPackages~ is already wired into
+~flake.nix~ and needs no configuration.
+
+The one exception is a crate that links Apple frameworks — anything that
+(transitively) pulls ~cpal~, ~objc2-*~, ~core-foundation~, ~security-framework~,
+~coreaudio-sys~, and similar.  This is not CLI-specific; the ~server~ crate can
+link them just as readily.  Such a crate needs Apple's framework headers and
+link stubs, which come from the (unfree) Apple SDK.  To enable it, touch two
+spots in ~flake.nix~:
+
+1. add ~config.allowUnfree = true~ and ~config.allowUnsupportedSystem = true~ to
+   the ~nixpkgs~ import (the latter is needed whenever that ~pkgs~ is
+   non-darwin, i.e. in Linux CI), because ~apple-sdk~ is unfree and
+   darwin-gated; and
+2. pass ~appleSdk = pkgs.apple-sdk.src~ to the ~mkDarwinCrossPackages~ call.
+
+~apple-sdk.src~ is a plain fetch of the SDK's inert data (headers and ~.tbd~
+stubs); the full ~apple-sdk~ package does not build on Linux, but its ~.src~
+does.  Keeping the ~allowUnfree~ acceptance in your own ~flake.nix~ is
+deliberate — the licence consent is visible in your project, not hidden in the
+foundation library.  A pure-libSystem executable does nothing: zig bundles the
+libSystem stubs, so it cross-compiles licence-free.
 
 * Changelog conventions
 
@@ -359,3 +379,8 @@ of the surface the adopter sees, not the implementation.
 
 Write each entry as a numbered list item (~1.~, ~2.~, …) under its subheading,
 not a dash bullet.
+
+Every pull request must add at least one entry under ~* Upcoming~; CI rejects a
+pull request that adds none.  This keeps the changelog written incrementally,
+while the context is fresh, rather than reconstructed from the diff at release
+time.

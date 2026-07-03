@@ -31,6 +31,15 @@
       pkgs = import nixpkgs {
         inherit system;
         overlays = [(import rust-overlay)];
+        # apple-sdk, consumed below as apple-sdk.src for the macOS cross
+        # builds, is unfree and darwin-gated, so evaluating pkgs.apple-sdk.src
+        # on the x86_64-linux cross builder requires both acceptances.  The
+        # licence consent stays visible here in the project rather than hidden
+        # in the foundation library.
+        config = {
+          allowUnfree = true;
+          allowUnsupportedSystem = true;
+        };
       };
       craneLib =
         (crane.mkLib pkgs).overrideToolchain
@@ -75,8 +84,40 @@
       rustPackages = foundation.lib.mkRustPackages {
         inherit self pkgs craneLib crates commonArgs;
       };
+      # On Linux each binary also gets a statically-linked `<name>-musl`
+      # variant; empty on other systems.
+      #
+      # The musl build links everything statically (`-static-pie`), so it needs
+      # a static `libasound.a` — which the dynamic `pkgs.alsa-lib` does not
+      # provide.  Swap in `pkgsStatic.alsa-lib` (built for the musl target with
+      # a static archive and the `hw`/`dmix` core plugins compiled in, so the
+      # binary needs no dlopen) for the musl build only; the native and darwin
+      # builds keep the dynamic alsa via the unmodified `commonArgs`.
+      muslPackages = foundation.lib.mkMuslPackages {
+        inherit self pkgs system crates crane;
+        commonArgs =
+          commonArgs
+          // {
+            buildInputs = nixpkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.pkgsStatic.alsa-lib
+            ];
+          };
+      };
+      # The x86_64-linux build cross-compiles the macOS `<key>-<arch>-darwin`
+      # variants via zig so a release needs no macOS runner; empty on other
+      # systems.  appleSdk supplies the CoreAudio framework headers and link
+      # stubs cpal needs — see CONTRIBUTING.org's Release binaries section.
+      darwinCrossPackages = foundation.lib.mkDarwinCrossPackages {
+        inherit self pkgs system crates crane commonArgs;
+        appleSdk = pkgs.apple-sdk.src;
+      };
+      packages =
+        rustPackages.packages
+        // muslPackages
+        // darwinCrossPackages;
     in {
-      inherit (rustPackages) packages apps;
+      inherit packages;
+      inherit (rustPackages) apps checks;
       devShells.default = pkgs.mkShell {
         # The audio crates (cpal → alsa-sys) need pkg-config and, on Linux,
         # alsa-lib to compile.  Those live in commonArgs for the crane build;
@@ -153,6 +194,7 @@
       nixpkgs.lib.mapAttrs (_: p: p.devShells) perSystem;
     packages = nixpkgs.lib.mapAttrs (_: p: p.packages) perSystem;
     apps = nixpkgs.lib.mapAttrs (_: p: p.apps) perSystem;
+    checks = nixpkgs.lib.mapAttrs (_: p: p.checks) perSystem;
 
     nixosModules = {
       daemon = import ./nix/modules/nixos-daemon.nix {inherit self;};
