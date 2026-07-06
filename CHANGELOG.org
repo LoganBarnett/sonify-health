@@ -3,7 +3,15 @@
 
 * Upcoming
 ** Added
+1. A ~nix run .#quickstart~ app for anyone who has Nix: it runs the daemon
+   against the Star Trek bridge preset with zero flags, laying down a writable
+   ~config.toml~ in the working directory on first run so edits persist.
 ** Fixes
+1. Linux release downloads now run on non-Nix hosts.  The published
+   ~x86_64-linux-gnu~ and ~aarch64-linux-gnu~ binaries are portable dynamic
+   glibc builds (~mkGnuPortablePackages~, zig against a glibc 2.17 floor) that
+   link the host's ~libasound~, so they play through a desktop's PulseAudio or
+   PipeWire; the static ~-musl~ builds remain the headless option.
 ** Breaking
 * v0.3.0
 * v0.2.0

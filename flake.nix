@@ -103,6 +103,17 @@
             ];
           };
       };
+      # On Linux each binary also gets a portable `<name>-gnu` variant: a
+      # dynamic glibc build that runs off the Nix store (standard FHS
+      # interpreter, glibc 2.17 floor via zig) and links the host's shared
+      # libraries at runtime.  Unlike the static musl variant it can use the
+      # host's libasound and its dlopen'd PCM plugins, so it is the right
+      # download for a desktop that routes audio via PulseAudio or PipeWire.
+      # It threads the unmodified commonArgs, so the alsa build inputs reach it
+      # the same way.  Empty on non-Linux systems.
+      gnuPortablePackages = foundation.lib.mkGnuPortablePackages {
+        inherit self pkgs system crates crane commonArgs;
+      };
       # The x86_64-linux build cross-compiles the macOS `<key>-<arch>-darwin`
       # variants via zig so a release needs no macOS runner; empty on other
       # systems.  appleSdk supplies the CoreAudio framework headers and link
@@ -114,10 +125,45 @@
       packages =
         rustPackages.packages
         // muslPackages
+        // gnuPortablePackages
         // darwinCrossPackages;
+      # A zero-argument "paste and it works" entry point for Nix users:
+      # `nix run .#quickstart` runs the server against the Star Trek preset,
+      # the counterpart to the curl installer for anyone who has Nix.  On the
+      # first run it copies the preset into the working directory as a writable
+      # config.toml, since the bundled preset lives read-only in the Nix store;
+      # a re-run keeps any existing config rather than clobbering edits.  The
+      # preset's heartbeats shell out to `ip`, `awk`, and `ping`, so put those
+      # on PATH for minimal hosts (containers, fresh installs) that lack them.
+      # Those tools are Linux-only in nixpkgs, so gate them and let macOS use
+      # its own system tools.
+      quickstartApp = pkgs.writeShellApplication {
+        name = "sonify-health-quickstart";
+        runtimeInputs = nixpkgs.lib.optionals pkgs.stdenv.isLinux [
+          pkgs.iproute2
+          pkgs.gawk
+          pkgs.iputils
+        ];
+        text = ''
+          if [ ! -e config.toml ]; then
+            cp ${self}/examples/connectivity-and-cpu-star-trek.toml config.toml
+            chmod +w config.toml
+          fi
+          exec ${rustPackages.packages.server}/bin/sonify-health-server \
+            --config config.toml
+        '';
+      };
     in {
       inherit packages;
-      inherit (rustPackages) apps checks;
+      apps =
+        rustPackages.apps
+        // {
+          quickstart = {
+            type = "app";
+            program = "${quickstartApp}/bin/sonify-health-quickstart";
+          };
+        };
+      inherit (rustPackages) checks;
       devShells.default = pkgs.mkShell {
         # The audio crates (cpal → alsa-sys) need pkg-config and, on Linux,
         # alsa-lib to compile.  Those live in commonArgs for the crane build;
