@@ -5,6 +5,8 @@
 ** Added
 ** Fixes
 ** Breaking
+** Maintenance
+1. build(deps): Bump syn from 2.0.117 to 2.0.118 (https://github.com/LoganBarnett/sonify-health/pull/3)
 * v0.4.0
 ** Added
 1. A ~nix run .#quickstart~ app for anyone who has Nix: it runs the daemon
