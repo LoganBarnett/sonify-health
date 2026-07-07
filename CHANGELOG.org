@@ -4,6 +4,12 @@
 * Upcoming
 ** Added
 ** Fixes
+1. Releases publish again, and the binary crates leave crates.io.  The v0.12.0
+   publish failed because the server crate embeds the dashboard and so cannot be
+   packaged for crates.io.  Both ~sonify-health-server~ and ~sonify-health-cli~
+   are now unpublished — binary applications shipped as self-contained release
+   binaries and via ~nix run~, not crates.io source — so crates.io carries only
+   the libraries, ~sonify-health-lib~ and ~sonify-health-voice-derive~.
 ** Breaking
 ** Maintenance
 * v0.12.0

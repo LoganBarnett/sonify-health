@@ -85,23 +85,6 @@ which audio-capable desktops already have; a bare server may need it installed
 (see /Speakerless host (headless)/).  Each asset ships a =.sha256= digest and a
 build-provenance attestation you can check with =gh attestation verify=.
 
-** From GitHub (cargo install)
-
-A source build that needs only =cargo=: =cargo install --git= builds a binary
-from =main='s HEAD with no clone and no crates.io release required (the
-workspace is not published to crates.io; cargo compiles straight from the
-repository):
-
-#+begin_src sh :results none :exports code
-# The daemon (installs the sonify-health-server binary).
-cargo install --git https://github.com/LoganBarnett/sonify-health --branch main sonify-health-server
-# The preview/print CLI (installs the sonify-health binary).
-cargo install --git https://github.com/LoganBarnett/sonify-health --branch main sonify-health-cli
-#+end_src
-
-On Linux this needs ALSA headers and =pkg-config= for the audio backend; on
-macOS the system CoreAudio framework is used directly.
-
 ** From source (inside Nix devshell)
 
 #+begin_src sh :results none :exports code
@@ -166,15 +149,10 @@ curl --fail --silent --location --output config.toml \
 
 Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
 
-Prefer to build it yourself?  Both of these compile from =main='s HEAD and need
-only their own toolchain; point either at the same =config.toml=:
+Prefer to build it yourself?  Nix compiles it from =main='s HEAD with no Rust
+toolchain to install; point it at the same =config.toml=:
 
 #+begin_src sh :results none :exports code
-# With cargo (on Linux also needs ALSA headers and pkg-config).
-cargo install --git https://github.com/LoganBarnett/sonify-health --branch main sonify-health-server
-sonify-health-server --config config.toml
-
-# Or with Nix, skipping a Rust toolchain entirely.
 nix run github:LoganBarnett/sonify-health#server -- --config config.toml
 #+end_src
 
