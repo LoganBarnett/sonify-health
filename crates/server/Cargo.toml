@@ -6,7 +6,12 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Infrastructure sonification daemon"
-publish = true
+# The server embeds the compiled Elm dashboard (see build.rs / frontend.rs),
+# which lives at the workspace root and so cannot travel in a crates.io
+# tarball — cargo's publish-verify build then fails to find it.  The daemon
+# ships as a self-contained release binary and via nix instead, not as
+# crates.io source.  (lib, cli, and voice-derive still publish.)
+publish = false
 
 [lib]
 name = "sonify_health_server"

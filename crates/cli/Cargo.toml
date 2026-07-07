@@ -6,7 +6,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Infrastructure sonification CLI"
-publish = true
+# The cli is a binary application, distributed as a self-contained release
+# binary and via nix — not as crates.io source.  Like the server, it is not
+# published; crates.io carries only the libraries something might depend on
+# (lib and voice-derive).
+publish = false
 
 [lib]
 name = "sonify_health_cli"
