@@ -145,7 +145,7 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 fundsp = "0.23"
 # Cross-platform audio output: enumerates devices and streams the
 # synthesized samples to the selected speaker.
-cpal = "0.17"
+cpal = "0.18"
 
 # Installs the Ctrl-C handler that stops continuous preview playback and
 # drives graceful shutdown.
