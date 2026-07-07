@@ -10,6 +10,7 @@
 
 pub mod audio_engine;
 pub mod config;
+pub mod frontend;
 pub mod metrics;
 pub mod preview_state;
 pub mod remote_source;

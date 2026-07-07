@@ -57,8 +57,7 @@
   execLine =
     "${cfg.package}/bin/sonify-health-server"
     + " --config ${configFile}"
-    + " ${listenArg}"
-    + " --frontend-path ${cfg.frontendPath}";
+    + " ${listenArg}";
 
   # The TOML config file carries heartbeat and patch settings.
   # Listen address is passed via --listen on the command line so the
@@ -515,16 +514,6 @@ in {
       description = ''
         System group the daemon runs as.  The leading underscore follows
         the macOS convention for daemon groups.
-      '';
-    };
-
-    frontendPath = lib.mkOption {
-      type = lib.types.str;
-      default = "${cfg.package}/share/sonify-health/frontend";
-      defaultText = lib.literalExpression ''"''${cfg.package}/share/sonify-health/frontend"'';
-      description = ''
-        Path to the compiled Elm frontend assets directory.  The default
-        points at the Nix store output from the cli package build.
       '';
     };
 

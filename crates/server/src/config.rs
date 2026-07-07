@@ -79,10 +79,6 @@ pub struct Config {
   )]
   pub listen_address: ListenerAddress,
 
-  /// Path to compiled frontend static assets.
-  #[merge_config(env, default = "PathBuf::from(\"frontend/public\")")]
-  pub frontend_path: PathBuf,
-
   /// Base URL of this service (e.g. https://sonify.example.com),
   /// used by foundation to construct the OIDC redirect URI and
   /// shared with the OIDC handlers.
@@ -291,7 +287,6 @@ impl ServerApp for Config {
     vec![ServerRunConfig {
       app_name: Self::app_name().to_string(),
       listen_address: self.listen_address.clone(),
-      frontend_path: Some(self.frontend_path.clone()),
       base_url: self.base_url.clone(),
       oidc: self.oidc.clone(),
     }]
