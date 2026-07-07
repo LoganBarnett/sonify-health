@@ -6,23 +6,36 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+1. Realigned the foundation runtime crate with the build infrastructure and
+   synced the template to v0.33.0.  ~rust-template-foundation~ had drifted to
+   0.13.0 while the Nix flake tracked a far newer template; both now pin
+   v0.33.0, so the shipped binaries run current foundation code.  The sync also
+   adds a release-build guard that the cross-compiled arm64 macOS binaries carry
+   a valid ad-hoc signature — the kernel SIGKILLs an invalidly-signed one with
+   no output.
 * v0.10.0
 ** Maintenance
-1. build(deps): Bump serde_json from 1.0.149 to 1.0.150 (https://github.com/LoganBarnett/sonify-health/pull/2)
+1. build(deps): Bump serde_json from 1.0.149 to 1.0.150
+   (https://github.com/LoganBarnett/sonify-health/pull/2)
 * v0.9.0
 * v0.8.0
 ** Maintenance
-1. build(deps): Bump tokio-tungstenite from 0.26.2 to 0.29.0 (https://github.com/LoganBarnett/sonify-health/pull/1)
-2. build(deps): Bump toml from 0.8.23 to 1.1.2+spec-1.1.0 (https://github.com/LoganBarnett/sonify-health/pull/6)
+1. build(deps): Bump tokio-tungstenite from 0.26.2 to 0.29.0
+   (https://github.com/LoganBarnett/sonify-health/pull/1)
+2. build(deps): Bump toml from 0.8.23 to 1.1.2+spec-1.1.0
+   (https://github.com/LoganBarnett/sonify-health/pull/6)
 * v0.7.0
 ** Maintenance
-1. build(deps): Bump axum from 0.8.8 to 0.8.9 (https://github.com/LoganBarnett/sonify-health/pull/7)
+1. build(deps): Bump axum from 0.8.8 to 0.8.9
+   (https://github.com/LoganBarnett/sonify-health/pull/7)
 * v0.6.0
 ** Maintenance
-1. build(deps): Bump clap from 4.6.0 to 4.6.1 (https://github.com/LoganBarnett/sonify-health/pull/8)
+1. build(deps): Bump clap from 4.6.0 to 4.6.1
+   (https://github.com/LoganBarnett/sonify-health/pull/8)
 * v0.5.0
 ** Maintenance
-1. build(deps): Bump syn from 2.0.117 to 2.0.118 (https://github.com/LoganBarnett/sonify-health/pull/3)
+1. build(deps): Bump syn from 2.0.117 to 2.0.118
+   (https://github.com/LoganBarnett/sonify-health/pull/3)
 * v0.4.0
 ** Added
 1. A ~nix run .#quickstart~ app for anyone who has Nix: it runs the daemon

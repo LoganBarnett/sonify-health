@@ -127,6 +127,14 @@
         // muslPackages
         // gnuPortablePackages
         // darwinCrossPackages;
+      # The arm64 subset of the darwin cross outputs — the only ones
+      # mkDarwinCrossPackages re-signs after the release profile's strip would
+      # invalidate zig's link-time signature, and so the only ones the signature
+      # guard below verifies.  Empty except on x86_64-linux.
+      aarch64DarwinPackages =
+        nixpkgs.lib.filterAttrs
+        (name: _: nixpkgs.lib.hasSuffix "-aarch64-darwin" name)
+        darwinCrossPackages;
       # A zero-argument "paste and it works" entry point for Nix users:
       # `nix run .#quickstart` runs the server against the Star Trek preset,
       # the counterpart to the curl installer for anyone who has Nix.  On the
@@ -163,7 +171,21 @@
             program = "${quickstartApp}/bin/sonify-health-quickstart";
           };
         };
-      inherit (rustPackages) checks;
+      # Add the darwin ad-hoc signature guard to the workspace's checks on
+      # x86_64-linux, where the zig-cross darwin binaries are produced.  An arm64
+      # Mach-O with an invalid signature is SIGKILLed by the kernel with no
+      # output, so this check proves the shipped signature survived the strip
+      # that mkDarwinCrossPackages re-signs around.  Only the arm64 outputs are
+      # checked — x86_64 macOS does not enforce signatures.  Empty (and so
+      # absent) on every other system.
+      checks =
+        rustPackages.checks
+        // nixpkgs.lib.optionalAttrs (aarch64DarwinPackages != {}) {
+          darwinSignatures = foundation.lib.mkDarwinSignatureCheck {
+            inherit pkgs;
+            darwinPackages = aarch64DarwinPackages;
+          };
+        };
       devShells.default = pkgs.mkShell {
         # The audio crates (cpal → alsa-sys) need pkg-config and, on Linux,
         # alsa-lib to compile.  Those live in commonArgs for the crane build;
