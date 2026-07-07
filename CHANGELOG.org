@@ -9,6 +9,7 @@
 * v0.8.0
 ** Maintenance
 1. build(deps): Bump tokio-tungstenite from 0.26.2 to 0.29.0 (https://github.com/LoganBarnett/sonify-health/pull/1)
+2. build(deps): Bump toml from 0.8.23 to 1.1.2+spec-1.1.0 (https://github.com/LoganBarnett/sonify-health/pull/6)
 * v0.7.0
 ** Maintenance
 1. build(deps): Bump axum from 0.8.8 to 0.8.9 (https://github.com/LoganBarnett/sonify-health/pull/7)
