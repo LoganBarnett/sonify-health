@@ -1,7 +1,7 @@
 //! Application state for the daemon, plus the mute REST API.
 //!
 //! `AppState` wraps foundation's `BaseServerState` (health registry,
-//! metrics registry, OIDC client, frontend path) with the
+//! metrics registry, OIDC client) with the
 //! sonify-specific runtime state the WebSocket handler and the mute
 //! API need.  `impl_server_state!` generates the `FromRef` impls
 //! foundation's built-in handlers (health, metrics, auth, /me)

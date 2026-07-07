@@ -3,8 +3,16 @@
 
 * Upcoming
 ** Added
+1. The web dashboard is now embedded in the server binary.  A downloaded release
+   runs the full UI with nothing alongside it — no separate asset directory and
+   no ~--frontend-path~.  Development builds still read the assets live from
+   ~frontend/public~, so ~elm make~ output is picked up without recompiling the
+   server.
 ** Fixes
 ** Breaking
+1. Removed the ~frontend_path~ config field and the ~--frontend-path~ flag.  The
+   dashboard is embedded in the binary now (see Added), so there is no asset
+   directory to point at; configs and unit files that set either must drop it.
 ** Maintenance
 * v0.11.0
 ** Maintenance

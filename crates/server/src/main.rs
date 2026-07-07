@@ -3,8 +3,9 @@
 //! `#[foundation_main]` generates the real `fn main()` with CLI
 //! parsing, config resolution, logging init, tokio runtime, and
 //! `BaseServerState::init` (OIDC discovery, metrics registry,
-//! request counter, frontend path).  This file owns only the
-//! application-specific glue: building `PreviewState`, registering
+//! request counter).  This file owns only the application-specific
+//! glue: building `PreviewState`, embedding the Elm dashboard via
+//! `.spa::<Frontend>()`, registering
 //! sonify's audio metrics against the foundation registry, spawning
 //! the audio engine + the remote-source connector tasks, and racing
 //! `Server::listen()` against the audio engine so either exiting
@@ -15,6 +16,7 @@ use rust_template_foundation::{Server, ServerError};
 use sonify_health_lib::config::ConfigError as LibConfigError;
 use sonify_health_server::audio_engine::{self, AudioEngineError};
 use sonify_health_server::config::{Config, ConfigError};
+use sonify_health_server::frontend::Frontend;
 use sonify_health_server::metrics::{self, Metrics};
 use sonify_health_server::preview_state::{self, PreviewState};
 use sonify_health_server::remote_source;
@@ -155,7 +157,10 @@ pub async fn main(
       metrics: app_state_metrics,
     })
     .merge(web_base::mute_api())
-    .merge(ws_routes);
+    .merge(ws_routes)
+    // Serve the embedded Elm dashboard as an SPA, falling back to
+    // `index.html` for client-side routes.
+    .spa::<Frontend>();
 
   // Spawn the blocking audio-engine loop in a separate thread.
   let audio_device = config.audio_device.clone();

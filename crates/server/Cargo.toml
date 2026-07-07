@@ -22,6 +22,8 @@ sonify-health-lib = { workspace = true }
 # `auth` implies `cli` + `server`, giving us MergeConfig + Server +
 # BaseServerState + the OIDC handlers all in one feature gate.
 rust-template-foundation = { workspace = true, features = ["auth"] }
+# Bakes the compiled Elm bundle into the binary; see build.rs and frontend.rs.
+rust-embed = { workspace = true }
 # The `#[derive(clap::Args)]` on CliExtraFields and the MergeConfig-
 # generated CliRaw parser both need clap visible here.
 clap = { workspace = true }

@@ -45,7 +45,6 @@ pub fn stub_base() -> BaseServerState {
     metrics_registry: Arc::new(registry),
     request_counter,
     oidc_client: None::<Arc<CoreClient>>,
-    frontend_path: None,
   }
 }
 

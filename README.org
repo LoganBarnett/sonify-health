@@ -181,10 +181,11 @@ nix run github:LoganBarnett/sonify-health#server -- --config config.toml
 That preset sonifies three probes out of the box — gateway reachability,
 internet reachability, and CPU load — so the bridge comes alive immediately;
 edit =config.toml= to tune it.  For a blank slate instead, =config.example.toml=
-documents every field with all heartbeats commented out.  The bundled web
-dashboard additionally needs the built Elm assets at =frontend_path= (default
-=frontend/public=), so it appears when you run from a checkout.  See
-/Configuration/ below.
+documents every field with all heartbeats commented out.  The web dashboard is
+embedded in the server binary, so a release download serves it with nothing
+alongside; a debug build run from a checkout reads the assets live from
+=frontend/public=, picking up =elm make= output without recompiling the server.
+See /Configuration/ below.
 
 ** Preview a patch
 

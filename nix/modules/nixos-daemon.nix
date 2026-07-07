@@ -545,16 +545,6 @@ in {
       default = "sonify-health";
       description = "System group the daemon runs as.";
     };
-
-    frontendPath = lib.mkOption {
-      type = lib.types.str;
-      default = "${cfg.package}/share/sonify-health/frontend";
-      defaultText = lib.literalExpression ''"''${cfg.package}/share/sonify-health/frontend"'';
-      description = ''
-        Path to the compiled Elm frontend assets directory.  The default
-        points at the Nix store output from the cli package build.
-      '';
-    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -641,8 +631,7 @@ in {
             if cfg.socket != null
             then " --listen sd-listen"
             else " --listen ${cfg.host}:${toString cfg.port}"
-          )
-          + " --frontend-path ${cfg.frontendPath}";
+          );
 
         LoadCredential =
           lib.mkIf (cfg.oidc.clientSecretFile != null)
