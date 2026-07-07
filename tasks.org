@@ -908,3 +908,30 @@ an inherited ~title~, or a stray class) and ensure the mute button shows the
 normal ~cursor: pointer~ with no phantom tooltip.
 
 Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~.
+
+* TODO Accept both "load average:" and "load averages:" in uptime examples
+Example heartbeats that scrape ~uptime~ for the system load key off its label,
+but the wording is platform-specific: Linux prints ~load average:~ (singular)
+and macOS/BSD prints ~load averages:~ (plural).  Every example that parses
+~uptime~ must accept both spellings so the presets work on either platform.
+
+* TODO Ensure the master volume — and every config field — is in the examples
+Confirm whether the master volume is a ~config.toml~ field; if it is, it is
+missing from the example presets and should be added.  Rather than auditing by
+hand and risking further omissions, teach ~sonify-health~ to re-emit its
+fully-resolved config (a ~--print-config~ / dump mode) and regenerate the
+examples from that source of truth, so no field is ever silently missed.
+
+* TODO Show real --listen examples instead of host:port
+The ~--listen~ help labels its argument ~host:port~, but the first half is a
+bind address / interface, not a hostname.  Replace the placeholder with a couple
+of valid examples — ~0.0.0.0:3000~ to bind every interface and ~127.0.0.1:3000~
+for loopback (confirm whether ~*~ is also accepted by ~tokio_listener~).  Keep
+it terse: just the examples, no extra prose.
+
+* TODO Confirm install.sh is truly POSIX-sh safe, or document bash
+The quick-start one-liner and ~install.sh~ both run under ~/bin/sh~, not ~bash~.
+The script carries a ~#!/bin/sh~ shebang and was written to POSIX sh, but verify
+it really runs under any ~/bin/sh~ (dash, busybox ash, …) with no bashisms — or
+switch the documented pipe to ~bash~.  Raised as a concern to investigate later,
+not yet confirmed broken.
