@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.7.0
+** Maintenance
 1. build(deps): Bump axum from 0.8.8 to 0.8.9 (https://github.com/LoganBarnett/sonify-health/pull/7)
 * v0.6.0
 ** Maintenance
