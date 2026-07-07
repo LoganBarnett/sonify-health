@@ -172,12 +172,12 @@
           };
         };
       # Add the darwin ad-hoc signature guard to the workspace's checks on
-      # x86_64-linux, where the zig-cross darwin binaries are produced.  An arm64
-      # Mach-O with an invalid signature is SIGKILLed by the kernel with no
-      # output, so this check proves the shipped signature survived the strip
-      # that mkDarwinCrossPackages re-signs around.  Only the arm64 outputs are
-      # checked — x86_64 macOS does not enforce signatures.  Empty (and so
-      # absent) on every other system.
+      # x86_64-linux, where the zig-cross darwin binaries are produced.  An
+      # arm64 Mach-O with an invalid signature is SIGKILLed by the kernel with
+      # no output, so this check proves the shipped signature survived the
+      # strip that mkDarwinCrossPackages re-signs around.  Only the arm64
+      # outputs are checked — x86_64 macOS does not enforce signatures.  Empty
+      # (and so absent) on every other system.
       checks =
         rustPackages.checks
         // nixpkgs.lib.optionalAttrs (aarch64DarwinPackages != {}) {
