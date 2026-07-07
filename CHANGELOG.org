@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.11.0
+** Maintenance
 1. Realigned the foundation runtime crate with the build infrastructure and
    synced the template to v0.33.0.  ~rust-template-foundation~ had drifted to
    0.13.0 while the Nix flake tracked a far newer template; both now pin
