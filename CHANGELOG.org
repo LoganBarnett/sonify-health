@@ -6,6 +6,7 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+1. build(deps): Bump rust-template-foundation from 0.34.0 to 0.37.0 (https://github.com/LoganBarnett/sonify-health/pull/20)
 * v0.14.0
 ** Maintenance
 1. Upgraded ~cpal~ from 0.17 to 0.18.  The 0.18 release folds the per-operation
