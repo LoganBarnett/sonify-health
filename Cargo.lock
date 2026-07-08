@@ -2891,9 +2891,9 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation"
-version = "0.34.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10582481c6525d119c7c1d2952680419875faaf1e873b27e7607fb49e71f1482"
+checksum = "5f8a59bb45e37b0fc22f9565d6dd9a721aa2e878458082224a6f5c1d6f620f30"
 dependencies = [
  "aide",
  "axum",
@@ -2924,9 +2924,9 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation-derive"
-version = "0.34.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b60407604dac26aa88f72a6b1dbdd053725c8098ec9866d50146dc8cbabe37f0"
+checksum = "2bb610867fcf98e8551cfe3d95fc704447ec3dc7acab89da7d61135fd9e2887b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3160,9 +3160,9 @@ dependencies = [
 
 [[package]]
 name = "sd-notify"
-version = "0.4.5"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b943eadf71d8b69e661330cb0e2656e31040acf21ee7708e2c238a0ec6af2bf4"
+checksum = "3e4ef7359e694bfaf1dd27a30f9d760b54c00dfae9f19bd0c05a39bc9128fe76"
 dependencies = [
  "libc",
 ]
