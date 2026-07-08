@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.15.0
+** Maintenance
 1. build(deps): Bump trybuild from 1.0.116 to 1.0.117 (https://github.com/LoganBarnett/sonify-health/pull/18)
 * v0.14.0
 ** Maintenance
