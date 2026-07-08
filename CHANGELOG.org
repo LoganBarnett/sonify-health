@@ -6,6 +6,12 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+1. Upgraded ~cpal~ from 0.17 to 0.18.  The 0.18 release folds the per-operation
+   audio error types into one ~cpal::Error~/~ErrorKind~, makes
+   ~build_output_stream~ take its ~StreamConfig~ by value, and privatizes
+   ~DeviceId~'s fields behind ~id()~/~host()~ accessors, so the audio backend
+   was updated to match.  Behavior is unchanged — the mixer already called
+   ~play()~ explicitly, which 0.18 now requires.
 * v0.13.0
 ** Fixes
 1. Releases publish again, and the binary crates leave crates.io.  The v0.12.0

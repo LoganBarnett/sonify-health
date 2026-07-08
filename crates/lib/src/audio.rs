@@ -45,16 +45,16 @@ pub enum AudioError {
   DeviceNotFound(String),
 
   #[error("Failed to enumerate audio output devices: {0}")]
-  DeviceEnumeration(#[source] cpal::DevicesError),
+  DeviceEnumeration(#[source] cpal::Error),
 
   #[error("Cannot determine default audio output format: {0}")]
-  OutputConfigUnavailable(#[source] cpal::DefaultStreamConfigError),
+  OutputConfigUnavailable(#[source] cpal::Error),
 
   #[error("Failed to build audio output stream: {0}")]
-  StreamBuildFailed(#[source] cpal::BuildStreamError),
+  StreamBuildFailed(#[source] cpal::Error),
 
   #[error("Failed to start audio playback: {0}")]
-  PlaybackStartFailed(#[source] cpal::PlayStreamError),
+  PlaybackStartFailed(#[source] cpal::Error),
 }
 
 /// Resolve the cpal device and stream config for the given device
@@ -81,8 +81,9 @@ fn resolve_device(
       // field restores PCM-string addressability while keeping
       // the friendly-name match for operators on macOS/Windows
       // who never see a PCM path.
-      let id_string =
-        |d: &cpal::Device| -> Option<String> { d.id().ok().map(|id| id.1) };
+      let id_string = |d: &cpal::Device| -> Option<String> {
+        d.id().ok().map(|id| id.id().to_string())
+      };
       let desc_name = |d: &cpal::Device| -> Option<String> {
         d.description().ok().map(|desc| desc.name().to_string())
       };
@@ -182,7 +183,7 @@ impl AudioOutput {
 
     let stream = device
       .build_output_stream(
-        &stream_config,
+        stream_config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
           let frames = data.len() / channels;
           left_buf.resize(frames, 0.0);
@@ -489,9 +490,7 @@ fn mixer_callback(
 /// `stream_errors` on every call, logs the first `STREAM_ERROR_THRESHOLD`
 /// errors individually, then sets `stream_failed` and sleeps to throttle
 /// the spin-loop.
-fn build_error_callback(
-  inner: Arc<MixerInner>,
-) -> impl FnMut(cpal::StreamError) {
+fn build_error_callback(inner: Arc<MixerInner>) -> impl FnMut(cpal::Error) {
   move |err| {
     let n = inner.stream_errors.fetch_add(1, Ordering::Relaxed) + 1;
     if n <= STREAM_ERROR_THRESHOLD {
@@ -538,7 +537,7 @@ impl AudioMixer {
     // if the hardware rejects it.
     let stream = device
       .build_output_stream(
-        &stream_config,
+        stream_config,
         mixer_callback(Arc::clone(&inner), channels),
         build_error_callback(Arc::clone(&inner)),
         None,
@@ -551,7 +550,7 @@ impl AudioMixer {
         );
         stream_config.buffer_size = cpal::BufferSize::Default;
         device.build_output_stream(
-          &stream_config,
+          stream_config,
           mixer_callback(Arc::clone(&inner), channels),
           build_error_callback(Arc::clone(&inner)),
           None,
@@ -812,7 +811,7 @@ impl AudioMixer {
 
     let stream = device
       .build_output_stream(
-        &stream_config,
+        stream_config,
         mixer_callback(Arc::clone(&self.inner), channels),
         build_error_callback(Arc::clone(&self.inner)),
         None,
@@ -826,7 +825,7 @@ impl AudioMixer {
         );
         stream_config.buffer_size = cpal::BufferSize::Default;
         device.build_output_stream(
-          &stream_config,
+          stream_config,
           mixer_callback(Arc::clone(&self.inner), channels),
           build_error_callback(Arc::clone(&self.inner)),
           None,
@@ -1498,7 +1497,7 @@ mod tests {
 
     // Fire errors up to threshold — flag should be set.
     for _ in 0..STREAM_ERROR_THRESHOLD {
-      cb(cpal::StreamError::DeviceNotAvailable);
+      cb(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
     }
     assert!(
       inner.stream_failed.load(Ordering::Relaxed),
