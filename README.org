@@ -35,11 +35,21 @@ See [[file:sonification.org][sonification.org]] for the full design rationale.
 No toolchain, no configuration, no choices.  Paste this and a Star Trek bridge
 sonification of your gateway, internet, and CPU starts playing — it downloads
 the latest released daemon for your platform, lays down a working config you can
-edit later, and runs it:
+edit later, and runs it.
+
+On Linux, macOS, or a Windows POSIX shell (Git Bash, MSYS2, Cygwin):
 
 #+begin_src sh :results none :exports code
 curl --fail --silent --show-error --location \
   https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/install.sh | sh
+#+end_src
+
+On Windows, paste this into PowerShell instead.  It needs no administrator step
+and no execution-policy change: piping through =iex= runs the downloaded text
+directly, and the execution policy governs only script /files/ on disk.
+
+#+begin_src powershell :results none :exports code
+irm https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/install.ps1 | iex
 #+end_src
 
 Stop with =SIGINT= (Ctrl-C).  To see exactly what it does — or to install
@@ -84,6 +94,35 @@ Linux.  Either way the binary is dynamically linked against ~libasound.so.2~,
 which audio-capable desktops already have; a bare server may need it installed
 (see /Speakerless host (headless)/).  Each asset ships a =.sha256= digest and a
 build-provenance attestation you can check with =gh attestation verify=.
+
+** Prebuilt binary (Windows)
+
+Native Windows builds ship for both =x86_64= and =aarch64= as a =.zip= with the
+=.exe= inside, and a stock Windows install runs them with no Cygwin or MSYS2
+layer.  The PowerShell installer detects your architecture, resolves the latest
+release, unpacks the daemon, writes a working config, and starts it:
+
+#+begin_src powershell :results none :exports code
+irm https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/install.ps1 | iex
+#+end_src
+
+To install without running — or to read each step first — the equivalent by hand
+uses only cmdlets that ship with Windows PowerShell 5.1 (=Expand-Archive=
+unpacks the =.zip=, so there is no =unzip= to install):
+
+#+begin_src powershell :results none :exports code
+$repo = 'LoganBarnett/sonify-health'
+$label = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64-windows' } else { 'x86_64-windows' }
+$tag = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
+$asset = "sonify-health-server-$tag-$label.zip"
+Invoke-WebRequest "https://github.com/$repo/releases/download/$tag/$asset" -OutFile $asset
+Expand-Archive -LiteralPath $asset -DestinationPath . -Force
+#+end_src
+
+A Windows POSIX shell (Git Bash, MSYS2, or Cygwin) can take the =install.sh=
+route above instead: it recognises the =MINGW*=/=MSYS*=/=CYGWIN*= environment
+and fetches the same =.zip=.  Either way the audio plays through WASAPI, so no
+sound library needs installing the way a headless Linux host does.
 
 ** From source (inside Nix devshell)
 
