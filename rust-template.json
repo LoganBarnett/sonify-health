@@ -15,7 +15,8 @@
     "c1e0d4037c5afc951670aa545ff8438c8fb40e5f",
     "df722e9946929a3f62acce3456ae80597fe3f818",
     "3ea0c10d1c842603ad080cd9df53cc73aa17e059",
-    "980a51433fd28f3160f86fba29943027fb5a235c"
+    "980a51433fd28f3160f86fba29943027fb5a235c",
+    "9b7ac3726e73ca5a8f29093859fa57144fa5ed2f"
   ],
   "workspaces": {
     "cli": { "release-binary": true },

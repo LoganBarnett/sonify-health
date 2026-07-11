@@ -943,7 +943,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2945,9 +2945,9 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation"
-version = "0.34.0"
+version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10582481c6525d119c7c1d2952680419875faaf1e873b27e7607fb49e71f1482"
+checksum = "e8ad5d9a01b068ca4ceba2fe9cd228fc28ac3588acaad3c5cfe0e0d646c5f3a5"
 dependencies = [
  "aide",
  "axum",
@@ -2978,9 +2978,9 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation-derive"
-version = "0.34.0"
+version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b60407604dac26aa88f72a6b1dbdd053725c8098ec9866d50146dc8cbabe37f0"
+checksum = "c46a464ecee33229a36823e972ca083d6810cefdc6d91e5aace4797621c2664e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3026,7 +3026,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3214,9 +3214,9 @@ dependencies = [
 
 [[package]]
 name = "sd-notify"
-version = "0.4.5"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b943eadf71d8b69e661330cb0e2656e31040acf21ee7708e2c238a0ec6af2bf4"
+checksum = "3e4ef7359e694bfaf1dd27a30f9d760b54c00dfae9f19bd0c05a39bc9128fe76"
 dependencies = [
  "libc",
 ]
@@ -3968,7 +3968,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4780,7 +4780,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
