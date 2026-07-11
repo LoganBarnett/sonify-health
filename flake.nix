@@ -122,11 +122,45 @@
         inherit self pkgs system crates crane commonArgs;
         appleSdk = pkgs.apple-sdk.src;
       };
+      # Native Windows PE variants (`<key>-{x86_64,aarch64}-windows`),
+      # cross-compiled via llvm-mingw for the gnullvm targets — no Microsoft
+      # SDK, no Cygwin/MSYS2 runtime; the audio backend is WASAPI (a windows-sys
+      # FFI binding, so no alsa), leaving only the OS Universal CRT (Windows
+      # 10+).  Unlike the darwin cross build this is host-agnostic (llvm-mingw
+      # ships a per-host toolchain), so it builds on the Linux CI runners and on
+      # a contributor's Mac alike.  Requires a toolchain ≥ Rust 1.91 for the
+      # aarch64 gnullvm std — see CONTRIBUTING.org.  commonArgs is threaded
+      # unmodified, exactly as the darwin cross build does: cpal selects its
+      # backend by target, so the host alsa/pkg-config inputs are inert here.
+      windowsCrossPackages = foundation.lib.mkWindowsCrossPackages {
+        inherit self pkgs system crates crane commonArgs;
+      };
+      # The opt-in MSVC-ABI Windows variant (`<key>-x86_64-windows-msvc`), for a
+      # dependency that requires the MSVC ABI rather than the default gnullvm
+      # path above.  sonify-health has no such dependency, so it stays off:
+      # `windows-msvc` is absent from rust-template.json, `windowsMsvcEnabled`
+      # is false, and the helper produces nothing.  The wiring is kept so the
+      # flake matches the emitted template and flipping the flag on is a
+      # one-line change — enabling it would accept Microsoft's SDK licence in
+      # this project's own flake (via foundation.lib.xwinSdk), the visible
+      # consent exactly as `appleSdk` surfaces the Apple SDK licence.
+      windowsMsvcEnabled =
+        (builtins.fromJSON (builtins.readFile ./rust-template.json)).windows-msvc
+        or false;
+      windowsMsvcCrossPackages = foundation.lib.mkWindowsMsvcCrossPackages {
+        inherit self pkgs system crates crane commonArgs;
+        xwinSdk =
+          if windowsMsvcEnabled
+          then foundation.lib.xwinSdk {inherit pkgs;}
+          else null;
+      };
       packages =
         rustPackages.packages
         // muslPackages
         // gnuPortablePackages
-        // darwinCrossPackages;
+        // darwinCrossPackages
+        // windowsCrossPackages
+        // windowsMsvcCrossPackages;
       # The arm64 subset of the darwin cross outputs — the only ones
       # mkDarwinCrossPackages re-signs after the release profile's strip would
       # invalidate zig's link-time signature, and so the only ones the signature
@@ -135,6 +169,14 @@
         nixpkgs.lib.filterAttrs
         (name: _: nixpkgs.lib.hasSuffix "-aarch64-darwin" name)
         darwinCrossPackages;
+      # The x86_64 subset of the Windows cross outputs, smoke-tested under wine.
+      # These are non-empty on every host (the Windows helper is host-agnostic),
+      # so the wine check below is gated on `system == "x86_64-linux"` rather
+      # than on emptiness: wine runs a win64 PE reliably only there.
+      windowsX86Packages =
+        nixpkgs.lib.filterAttrs
+        (name: _: nixpkgs.lib.hasSuffix "-x86_64-windows" name)
+        windowsCrossPackages;
       # A zero-argument "paste and it works" entry point for Nix users:
       # `nix run .#quickstart` runs the server against the Star Trek preset,
       # the counterpart to the curl installer for anyone who has Nix.  On the
@@ -184,6 +226,16 @@
           darwinSignatures = foundation.lib.mkDarwinSignatureCheck {
             inherit pkgs;
             darwinPackages = aarch64DarwinPackages;
+          };
+        }
+        # Run the x86_64 Windows cross binaries under wine to prove they
+        # execute, not merely link.  Gated to x86_64-linux: wine cannot exec an
+        # aarch64 PE and is unreliable on Apple Silicon, so aarch64 Windows is
+        # build-verified only.
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          windowsSmoke = foundation.lib.mkWindowsSmokeCheck {
+            inherit pkgs;
+            windowsPackages = windowsX86Packages;
           };
         };
       devShells.default = pkgs.mkShell {
