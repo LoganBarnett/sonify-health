@@ -3,6 +3,11 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.17.0
+** Added
 1. Windows release binaries.  Releases now attach native Windows executables for
    both ~x86_64~ and ~aarch64~, cross-compiled on Linux via ~llvm-mingw~ (the
    ~*-pc-windows-gnullvm~ triples), so a download runs on a stock Windows
@@ -10,8 +15,6 @@
    unchanged: ~cpal~ selects its WASAPI backend, a ~windows-sys~ FFI binding
    that needs no SDK.  The x86_64 binary is smoke-tested under ~wine~ in CI; the
    aarch64 binary is build-verified.
-** Fixes
-** Breaking
 ** Maintenance
 1. Synced the template to v0.39.0 and bumped ~rust-template-foundation~ from
    0.34.0 to 0.39.0.  The bump carries the foundation crate's migration to
