@@ -4,6 +4,11 @@
 * Upcoming
 ** Added
 ** Fixes
+1. Windows release binaries build and run.  v0.17.0 advertised them but shipped
+   none: the cross toolchain failed to build on the Linux release runner, and
+   the binary it would have produced imported a non-system DLL and could not
+   start.  The next release attaches working ~x86_64~ and ~aarch64~ Windows
+   executables; no adopter action is needed.
 ** Breaking
 ** Maintenance
 * v0.17.0
