@@ -6,6 +6,7 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.23.0
 * v0.22.0
 ** Maintenance
 1. build(deps): Bump quote from 1.0.45 to 1.0.46 (https://github.com/LoganBarnett/sonify-health/pull/23)
