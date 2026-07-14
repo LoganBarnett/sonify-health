@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.26.0
+** Maintenance
 1. build(deps): Bump rustls from 0.23.41 to 0.23.42 (https://github.com/LoganBarnett/sonify-health/pull/33)
 * v0.25.0
 ** Maintenance
