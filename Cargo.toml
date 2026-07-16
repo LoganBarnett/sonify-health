@@ -78,7 +78,7 @@ repository = "https://gitea.proton/logan/sonify-health"
 # flake's `foundation` input still tracks the template by commit for
 # the Nix build helpers, and template_sync_hashes still records the
 # doc/infra sync points.
-rust-template-foundation = "0.49.0"
+rust-template-foundation = "0.52.0"
 # Embeds the compiled Elm bundle into the server binary so a downloaded release
 # is self-contained.  The server crate's build.rs resolves the asset directory
 # and exports it as SONIFY_HEALTH_FRONTEND_DIR for the `Frontend` derive.
