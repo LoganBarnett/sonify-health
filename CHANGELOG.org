@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.29.0
+** Maintenance
 1. build(deps): Bump proc-macro2 from 1.0.106 to 1.0.107 (https://github.com/LoganBarnett/sonify-health/pull/42)
 * v0.28.0
 ** Maintenance

@@ -62,7 +62,7 @@ collapsible_match = "warn"
 redundant_pattern_matching = "warn"
 
 [workspace.package]
-version = "0.28.0"
+version = "0.29.0"
 edition = "2021"
 authors = ["Logan Barnett <logustus@gmail.com>"]
 license = "AGPL-3.0-or-later"
@@ -195,9 +195,9 @@ proc-macro2 = "1.0"
 # Workspace library crate: patch model, audio synthesis, and config.  The
 # version specifier is required for crates.io publishing — a published crate's
 # path deps must also carry a version that crates.io can resolve.
-sonify-health-lib = { path = "crates/lib", version = "0.28.0" }
+sonify-health-lib = { path = "crates/lib", version = "0.29.0" }
 # Workspace proc-macro crate backing the patch/voice derives.
-sonify-health-voice-derive = { path = "crates/voice-derive", version = "0.28.0" }
+sonify-health-voice-derive = { path = "crates/voice-derive", version = "0.29.0" }
 
 # ============================================================================
 # BUILD PROFILES
