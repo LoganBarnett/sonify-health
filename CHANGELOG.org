@@ -6,6 +6,7 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+1. build(deps): Bump thiserror from 2.0.18 to 2.0.19 (https://github.com/LoganBarnett/sonify-health/pull/41)
 * v0.28.0
 ** Maintenance
 1. build(deps): Bump clap from 4.6.1 to 4.6.2 (https://github.com/LoganBarnett/sonify-health/pull/37)
