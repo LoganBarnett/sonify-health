@@ -6,6 +6,7 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+1. build(deps): Bump serde_json from 1.0.150 to 1.0.151 (https://github.com/LoganBarnett/sonify-health/pull/47)
 * v0.29.0
 ** Maintenance
 1. build(deps): Bump proc-macro2 from 1.0.106 to 1.0.107 (https://github.com/LoganBarnett/sonify-health/pull/42)
