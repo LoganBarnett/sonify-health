@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.30.0
+** Maintenance
 1. build(deps): Bump clap from 4.6.2 to 4.6.3 (https://github.com/LoganBarnett/sonify-health/pull/45)
 * v0.29.0
 ** Maintenance
