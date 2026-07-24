@@ -3650,7 +3650,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-cli"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -3665,7 +3665,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-lib"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "cargo-husky",
  "cpal",
@@ -3683,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-server"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "aide",
  "axum",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-voice-derive"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "proc-macro2",
  "quote",
