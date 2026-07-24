@@ -6,6 +6,7 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+1. build(deps): Bump rust-template-foundation from 0.49.0 to 0.60.0 (https://github.com/LoganBarnett/sonify-health/pull/51)
 * v0.31.0
 ** Maintenance
 1. build(deps): Bump clap from 4.6.3 to 4.6.4 (https://github.com/LoganBarnett/sonify-health/pull/49)
