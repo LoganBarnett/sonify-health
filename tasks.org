@@ -1,7 +1,21 @@
 #+title:     sonify-health Tasks
 #+language:  en
 
+* DONE Windows PowerShell probe support and example presets
+Heartbeat probe commands previously ran only under ~sh~
+(=crates/lib/src/probe.rs=), which does not exist on a stock Windows host, so
+the native Windows build and its PowerShell quick start could not execute any
+probe.  The daemon now selects the shell at runtime: ~sh~ on Unix and inside a
+Windows POSIX layer (Git Bash, MSYS2, Cygwin — detected via the ~MSYSTEM~
+environment variable or ~sh~ on ~PATH~), and Windows PowerShell otherwise.
+
+Each bundled preset gained a =-windows= sibling (=examples/*-windows.toml=)
+carrying the PowerShell equivalents of its gateway, internet, and CPU probes,
+and =install.ps1= now lays down the Windows Star Trek preset.  The two preset
+families exist because the ~command~ dialect must match the shell that runs it.
+
 * TODO Output device picker in the UI
+
 Let the user choose which audio output device the daemon plays through, from the
 dashboard, instead of only via the =audio_device= config field at startup.  This
 is a full-stack feature; the pieces:
@@ -415,6 +429,7 @@ Files: ~crates/cli/src/preview_state.rs~, ~crates/cli/src/websocket.rs~,
 ~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~
 
 * TODO Clickable cross-references inside help text
+
 Descriptions in the bottom help panel use backtick-delimited monospace spans to
 refer to related fields (e.g. ~`attack_ms`~ inside the ~duration~ description).
 Right now they're purely decorative — the reader has to hunt for the referenced
@@ -434,6 +449,7 @@ Files: ~frontend/src/Main.elm~, ~frontend/src/Help.elm~,
 ~frontend/public/style.css~.
 
 * TODO Glossary help entries for general audio/music-theory terms
+
 Add ~Help.lookup~ entries for terms that aren't attached to a specific UI label:
 ~cents~, ~dB~, ~Hz~, ~ADSR~, ~FM~, and so on.  Backtick-referencing these inside
 existing help text (e.g.  referring to ~cents~ from the ~detune~ description)
@@ -445,6 +461,7 @@ it.
 Files: ~frontend/src/Help.elm~.
 
 * TODO Multi-instance support: remote sources of heartbeat state
+
 Today a single ~sonify-health~ process owns both halves of the system: the
 *poller* (runs commands, computes severity, holds the runtime config) and the
 *sounder* (resolves notes, drives the mixer, emits audio).  They are entangled
@@ -744,6 +761,7 @@ Authentication is deliberately out of scope for this TODO and is tracked as its
 own follow-up below.
 
 * TODO Authenticated remote sources
+
 Follow-up to /Multi-instance support: remote sources of heartbeat state/.  Once
 that lands, the local instance connects to remotes unauthenticated, which is
 fine for trusted networks (loopback, VPN, SSH tunnel, firewalled LAN) but not
@@ -768,6 +786,7 @@ Add authenticated outbound connections:
   the user knows whether to re-login versus check the network.
 
 * TODO Local override layer for remote source config
+
 Follow-up to /Multi-instance support: remote sources of heartbeat state/.  By
 default the local instance renders a remote Source exactly the way the remote
 would have rendered itself — same patches, same tiers, same volumes.  Sometimes
@@ -802,6 +821,7 @@ mode, with clear visual distinction between "this is what the remote actually
 has" and "this is your local override of it".
 
 * TODO Macro for wire-mirror structs
+
 The remote-source connector defines wire-format structs (e.g.  ~WireHeartbeat~,
 ~WireNoteConfig~) that mirror the corresponding ~HeartbeatConfig~/~NoteConfig~
 structures field-for-field plus a few wire-only additions (~metric~,
@@ -824,6 +844,7 @@ Trigger to do this work: when a third or fourth wire mirror struct shows up, not
 before.
 
 * TODO Allow removing the last metric tier from the UI
+
 The ~RemoveTier~ Msg, its update branch, and the per-row × button are already
 wired, but the button is gated by ~tierCount > 1~ in ~viewTierRow~
 (≈Main.elm:2274).  That guard was copied from note-row code where a heartbeat
@@ -835,6 +856,7 @@ remaining tier can be removed.
 Files: ~frontend/src/Main.elm~.
 
 * TODO Per-source volume control
+
 Today the only volume knobs are the global *master volume*
 (~PreviewState.master_volume~, the "Master" slider in the toolbar) and *per-note
 volume* (~NoteConfig.volume~).  There is no volume control scoped to a single
@@ -866,6 +888,7 @@ Files: ~crates/server/src/preview_state.rs~, ~crates/server/src/websocket.rs~,
 ~frontend/src/Protocol.elm~, ~frontend/src/Main.elm~.
 
 * TODO Mute button does not actually silence audio
+
 Clicking *Mute* (the ~ToggleMute~ button in ~viewToolbar~, ≈Main.elm:2110)
 produces a brief audible hiccup but audio keeps playing — it never truly ceases.
 The button does round-trip correctly (frontend ~set_muted~ → ~mute_changed~
@@ -894,6 +917,7 @@ Files: ~crates/server/src/preview_state.rs~,
 ~crates/server/src/audio_engine.rs~, ~crates/lib/src/heartbeat.rs~.
 
 * TODO Mute button shows a help (?) cursor
+
 Hovering the *Mute* button shows a "?" help cursor, implying a tooltip or help
 affordance that does not exist — clicking it only toggles mute, it never reveals
 anything.  The ~?~ cursor is the ~cursor: help~ style, which in
@@ -910,12 +934,14 @@ normal ~cursor: pointer~ with no phantom tooltip.
 Files: ~frontend/src/Main.elm~, ~frontend/public/style.css~.
 
 * TODO Accept both "load average:" and "load averages:" in uptime examples
+
 Example heartbeats that scrape ~uptime~ for the system load key off its label,
 but the wording is platform-specific: Linux prints ~load average:~ (singular)
 and macOS/BSD prints ~load averages:~ (plural).  Every example that parses
 ~uptime~ must accept both spellings so the presets work on either platform.
 
 * TODO Ensure the master volume — and every config field — is in the examples
+
 Confirm whether the master volume is a ~config.toml~ field; if it is, it is
 missing from the example presets and should be added.  Rather than auditing by
 hand and risking further omissions, teach ~sonify-health~ to re-emit its
@@ -923,6 +949,7 @@ fully-resolved config (a ~--print-config~ / dump mode) and regenerate the
 examples from that source of truth, so no field is ever silently missed.
 
 * TODO Show real --listen examples instead of host:port
+
 The ~--listen~ help labels its argument ~host:port~, but the first half is a
 bind address / interface, not a hostname.  Replace the placeholder with a couple
 of valid examples — ~0.0.0.0:3000~ to bind every interface and ~127.0.0.1:3000~
@@ -930,6 +957,7 @@ for loopback (confirm whether ~*~ is also accepted by ~tokio_listener~).  Keep
 it terse: just the examples, no extra prose.
 
 * TODO Confirm install.sh is truly POSIX-sh safe, or document bash
+
 The quick-start one-liner and ~install.sh~ both run under ~/bin/sh~, not ~bash~.
 The script carries a ~#!/bin/sh~ shebang and was written to POSIX sh, but verify
 it really runs under any ~/bin/sh~ (dash, busybox ash, …) with no bashisms — or

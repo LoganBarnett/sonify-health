@@ -54,7 +54,7 @@ Remove-Item -LiteralPath $asset
 # re-run does not clobber edits.
 if (-not (Test-Path -LiteralPath 'config.toml')) {
   Invoke-WebRequest `
-    -Uri "https://raw.githubusercontent.com/$repo/main/examples/connectivity-and-cpu-star-trek.toml" `
+    -Uri "https://raw.githubusercontent.com/$repo/main/examples/connectivity-and-cpu-star-trek-windows.toml" `
     -OutFile 'config.toml'
 }
 

@@ -124,6 +124,12 @@ route above instead: it recognises the =MINGW*=/=MSYS*=/=CYGWIN*= environment
 and fetches the same =.zip=.  Either way the audio plays through WASAPI, so no
 sound library needs installing the way a headless Linux host does.
 
+The two routes differ in one thing that matters for the config: the daemon runs
+a heartbeat's =command= under Windows PowerShell when launched from a stock
+Windows session, but under =sh= when launched from a POSIX shell.  Use a
+=-windows= example preset (PowerShell probes) in the first case and a plain
+preset (POSIX probes) in the second — see /Run the daemon/ under /Usage/.
+
 ** From source (inside Nix devshell)
 
 #+begin_src sh :results none :exports code
@@ -184,6 +190,22 @@ curl --fail --silent --location --output config.toml \
   https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/examples/connectivity-and-cpu-star-trek.toml
 
 ./sonify-health-server --config config.toml
+#+end_src
+
+On a stock Windows host, fetch the Windows preset instead and run the =.exe=.  A
+heartbeat's =command= is a shell one-liner, and the daemon runs it under the
+shell that fits the host: POSIX =sh= on Linux, macOS, and a Windows POSIX shell
+(Git Bash, MSYS2, Cygwin), but Windows PowerShell on a stock Windows host.  The
+=-windows= presets carry the PowerShell equivalents of the same probes — hence
+the two families of example configs — so pick the one that matches how you
+launch the daemon:
+
+#+begin_src powershell :results none :exports code
+Invoke-WebRequest `
+  -Uri https://raw.githubusercontent.com/LoganBarnett/sonify-health/main/examples/connectivity-and-cpu-star-trek-windows.toml `
+  -OutFile config.toml
+
+.\sonify-health-server.exe --config config.toml
 #+end_src
 
 Stop with =SIGINT= (Ctrl-C) or =SIGTERM=.
