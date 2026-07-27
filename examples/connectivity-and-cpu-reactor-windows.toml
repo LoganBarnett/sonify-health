@@ -1,0 +1,183 @@
+# Reactor preset, Windows edition.  Identical sound to
+# connectivity-and-cpu-reactor.toml; only the probe commands differ,
+# using Windows PowerShell 5.1 cmdlets (Get-NetRoute, Test-Connection,
+# Get-CimInstance) rather than POSIX sh.  On a stock Windows host the
+# daemon runs each command through powershell.exe; from Git Bash, MSYS2,
+# or Cygwin it uses sh instead, so run the POSIX preset there.
+[[heartbeats]]
+command = '''$gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty NextHop); if ($gw -and (Test-Connection -ComputerName $gw -Count 1 -Quiet)) { exit 0 } else { exit 1 }'''
+crossfade_ms = 6.0
+cycle_offset_secs = 0.0
+cycle_secs = 15.0
+name = "gateway"
+phrase_gap = 0.0
+playback = "clock"
+poll_interval_secs = 10.0
+repeat_rate = 1.0
+result_mode = "exit-code"
+tiers = []
+
+[[heartbeats.notes]]
+offset = 0.0
+volume = 1.0
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+patch = "reactor-ok"
+threshold = 0.5
+
+[[heartbeats.notes.transition.states]]
+patch = "reactor-error"
+threshold = 1.01
+
+[[heartbeats]]
+command = "if (Test-Connection -ComputerName 208.67.222.222 -Count 1 -Quiet) { exit 0 } else { exit 1 }"
+crossfade_ms = 6.0
+cycle_offset_secs = 0.6
+cycle_secs = 15.0
+name = "internet"
+phrase_gap = 0.0
+playback = "clock"
+poll_interval_secs = 10.0
+repeat_rate = 1.0
+result_mode = "exit-code"
+tiers = []
+
+[[heartbeats.notes]]
+offset = 0.0
+volume = 1.0
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+patch = "reactor-ok"
+threshold = 0.5
+
+[[heartbeats.notes.transition.states]]
+patch = "reactor-error"
+threshold = 1.01
+
+[[heartbeats.notes]]
+offset = 0.15
+volume = 1.0
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+patch = "reactor-ok"
+threshold = 0.5
+
+[[heartbeats.notes.transition.states]]
+patch = "reactor-error"
+threshold = 1.1
+
+[[heartbeats]]
+command = "$v = (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average / 100; [math]::Round([math]::Max(0.0, [math]::Min(1.0, $v)), 3).ToString([System.Globalization.CultureInfo]::InvariantCulture)"
+crossfade_ms = 0.0
+cycle_offset_secs = 0.0
+cycle_secs = 15.0
+name = "cpu"
+phrase_gap = 0.0
+playback = "continuous"
+poll_interval_secs = 5.0
+repeat_rate = 1.0
+result_mode = "stdout"
+tiers = []
+
+[[heartbeats.notes]]
+offset = 0.0
+volume = 0.55
+
+[heartbeats.notes.transition]
+patches = [
+    "reactor-cpu-lo",
+    "reactor-cpu-hi",
+]
+type = "gradient"
+
+[[heartbeats.notes.transition.segments]]
+intensity = 2.0
+strategy = "ease-in"
+
+[patches.reactor-cpu-hi]
+freq = 18.0
+overrides = "reactor-cpu-lo"
+
+[patches.reactor-cpu-lo]
+amplitude = 0.3
+attack_ms = 0.0
+brightness = 1.47
+chirp_ratio = 1.0
+crush = 0.08
+decay_ms = 0.0
+detune = 0.0
+downsample = 0.03
+drive = 2.01
+duration = 1.95
+echo_delay = 0.01
+echo_mix = 0.18
+fm_depth = 0.7
+fm_ratio = 0.04
+freq = 15.0
+gap = 0.0
+harshness_offset = 0.0
+highpass = 0.0
+noise_mix = 1.0
+release_ms = 0.0
+resonance = 3.78
+reverb_mix = 0.0
+saw_ratio = 0.0
+sine_ratio = 0.0
+square_ratio = 1.0
+stereo_pan = 0.0
+sub_octave = 0.26
+sustain = 1.0
+tremolo_depth = 0.55
+tremolo_rate = 5.0
+tri_ratio = 0.0
+vibrato_depth = 0.0
+vibrato_rate = 0.0
+
+[patches.reactor-error]
+amplitude = 0.54
+chirp_ratio = 0.8
+overrides = "reactor-ok"
+
+[patches.reactor-ok]
+amplitude = 0.23
+attack_ms = 6.0
+brightness = 0.23
+chirp_ratio = 1.01
+crush = 0.21
+decay_ms = 0.0
+detune = 0.0
+downsample = 0.21
+drive = 0.01
+duration = 0.22
+echo_delay = 0.16
+echo_mix = 0.43
+fm_depth = 0.0
+fm_ratio = 0.0
+freq = 149.0
+gap = 0.0
+harshness_offset = 0.0
+highpass = 0.0
+noise_mix = 0.0
+release_ms = 22.0
+resonance = 3.82
+reverb_mix = 0.83
+saw_ratio = 0.0
+sine_ratio = 0.0
+square_ratio = 3.0
+stereo_pan = 0.0
+sub_octave = 0.0
+sustain = 1.0
+tremolo_depth = 0.0
+tremolo_rate = 0.0
+tri_ratio = 0.0
+vibrato_depth = 0.0
+vibrato_rate = 0.0

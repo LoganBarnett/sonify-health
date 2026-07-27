@@ -1,0 +1,90 @@
+# Heartbeats: internet connectivity, gateway reachability, and CPU
+# load.  The Windows counterpart to connectivity-and-cpu.toml — same
+# sound, but the probe commands are PowerShell rather than POSIX sh.
+#
+# Gateway and internet use discrete transitions (sine when healthy,
+# alarm when down).  CPU uses a gradient transition between warm and
+# sharp patches, driven by CPU load.
+#
+# Run with:
+#   .\sonify-health-server.exe `
+#     --config examples\connectivity-and-cpu-windows.toml
+#
+# Uses only cmdlets present in Windows PowerShell 5.1 (Get-NetRoute,
+# Test-Connection, Get-CimInstance), so it needs no MSYS2/Cygwin layer
+# and no PowerShell 7 install.  On a stock Windows host the daemon runs
+# each command through powershell.exe; launched instead from Git Bash,
+# MSYS2, or Cygwin it runs them through sh, so use connectivity-and-cpu.toml
+# (the POSIX preset) there.
+
+log_level = "info"
+log_format = "text"
+
+# Gateway reachability.  Get-NetRoute resolves the default route
+# (0.0.0.0/0); ties are broken by the lowest RouteMetric, matching how
+# Windows itself picks the active gateway.  Test-Connection -Quiet
+# returns a bare boolean instead of throwing, so a missing route or an
+# unreachable gateway maps cleanly to a non-zero exit — the "down"
+# signal, which is correct.
+[[heartbeats]]
+name = "gateway"
+command = '''$gw = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty NextHop); if ($gw -and (Test-Connection -ComputerName $gw -Count 1 -Quiet)) { exit 0 } else { exit 1 }'''
+result_mode = "exit-code"
+cycle_secs = 15
+cycle_offset_secs = 0
+
+[[heartbeats.notes]]
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+threshold = 0.5
+patch = "sine"
+
+[[heartbeats.notes.transition.states]]
+threshold = 1.01
+patch = "alarm"
+
+# Internet connectivity via OpenDNS (208.67.222.222).
+[[heartbeats]]
+name = "internet"
+command = "if (Test-Connection -ComputerName 208.67.222.222 -Count 1 -Quiet) { exit 0 } else { exit 1 }"
+result_mode = "exit-code"
+cycle_secs = 15
+cycle_offset_secs = 5
+
+[[heartbeats.notes]]
+
+[heartbeats.notes.transition]
+type = "discrete"
+
+[[heartbeats.notes.transition.states]]
+threshold = 0.5
+patch = "sine"
+
+[[heartbeats.notes.transition.states]]
+threshold = 1.01
+patch = "alarm"
+
+# CPU load as a 0.0-1.0 value.  Windows has no load average, so this
+# reports instantaneous utilization instead: the mean of every
+# processor's Win32_Processor.LoadPercentage (0-100), divided by 100 and
+# clamped.  ToString with the invariant culture forces a "." decimal
+# separator so the value parses on locales that would otherwise print
+# "0,5".
+[[heartbeats]]
+name = "cpu"
+command = "$v = (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average / 100; [math]::Round([math]::Max(0.0, [math]::Min(1.0, $v)), 3).ToString([System.Globalization.CultureInfo]::InvariantCulture)"
+result_mode = "stdout"
+continuous = true
+poll_interval_secs = 5
+cycle_secs = 15
+cycle_offset_secs = 10
+
+[[heartbeats.notes]]
+volume = 0.2
+
+[heartbeats.notes.transition]
+type = "gradient"
+patches = ["warm", "sharp"]

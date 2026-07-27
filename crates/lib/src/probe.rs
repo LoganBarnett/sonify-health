@@ -38,6 +38,67 @@ pub enum ProbeError {
   },
 }
 
+/// Build the OS-appropriate shell invocation for a probe command.
+///
+/// Probe commands are shell one-liners rather than bare executables, so
+/// they run through an interpreter instead of being exec'd directly.  On
+/// Unix that is always POSIX `sh`.  On Windows it depends on how the
+/// process was launched — see `in_posix_shell` — because the same native
+/// binary is started both from a stock PowerShell session (the
+/// `install.ps1` route, whose preset is authored in PowerShell) and from a
+/// MinGW/MSYS2/Cygwin shell (the `install.sh` route, whose preset is
+/// authored in POSIX `sh`).
+#[cfg(not(windows))]
+fn shell_command(command: &str) -> Command {
+  let mut shell = Command::new("sh");
+  shell.args(["-c", command]);
+  shell
+}
+
+#[cfg(windows)]
+fn shell_command(command: &str) -> Command {
+  if in_posix_shell() {
+    let mut shell = Command::new("sh");
+    shell.args(["-c", command]);
+    shell
+  } else {
+    // `-Command` runs the text as an expression rather than a script file,
+    // so the default Restricted execution policy — which governs script
+    // *files* on disk — does not apply, the same reason `install.ps1` can
+    // be piped through `iex`.
+    let mut shell = Command::new("powershell.exe");
+    shell.args(["-NoProfile", "-NonInteractive", "-Command", command]);
+    shell
+  }
+}
+
+/// Whether this Windows process is running inside a POSIX shell layer (Git
+/// Bash, MSYS2/MinGW, or Cygwin), in which case probe commands are POSIX
+/// and must run through `sh` rather than PowerShell.
+///
+/// The launching environment is the proxy for which dialect the config was
+/// authored in: `install.sh` recognises exactly the
+/// `MINGW*`/`MSYS*`/`CYGWIN*` environments and lays down the POSIX preset
+/// there, while `install.ps1` targets a stock PowerShell session and lays
+/// down the PowerShell preset.  Git Bash and MSYS2/MinGW export `MSYSTEM`
+/// (e.g. `MINGW64`); Cygwin does not, but every one of these layers — and
+/// no stock PowerShell/cmd session — puts `sh` on `PATH`.  The environment
+/// is fixed for the process lifetime, so the answer is computed once.
+#[cfg(windows)]
+fn in_posix_shell() -> bool {
+  use std::sync::LazyLock;
+  static POSIX_SHELL: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var_os("MSYSTEM").is_some()
+      || std::env::var_os("PATH")
+        .map(|path| {
+          std::env::split_paths(&path)
+            .any(|dir| dir.join("sh.exe").is_file() || dir.join("sh").is_file())
+        })
+        .unwrap_or(false)
+  });
+  *POSIX_SHELL
+}
+
 /// Run a probe command and return a normalized metric (0.0..=1.0)
 /// along with any stderr the command produced.
 pub fn run_probe(
@@ -45,14 +106,12 @@ pub fn run_probe(
   command: &str,
   result_mode: &ResultMode,
 ) -> Result<ProbeOutput, ProbeError> {
-  let output =
-    Command::new("sh")
-      .args(["-c", command])
-      .output()
-      .map_err(|source| ProbeError::ProbeExecution {
-        heartbeat: name.to_string(),
-        source,
-      })?;
+  let output = shell_command(command).output().map_err(|source| {
+    ProbeError::ProbeExecution {
+      heartbeat: name.to_string(),
+      source,
+    }
+  })?;
 
   let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
@@ -86,7 +145,12 @@ pub fn run_probe(
   }
 }
 
-#[cfg(test)]
+// POSIX `sh` probe syntax, so these run wherever `shell_command` selects
+// `sh`: every non-Windows host, and a Windows host inside a POSIX shell
+// layer.  Gating them off Windows keeps a stock-Windows `cargo test` —
+// which would route them through PowerShell — from failing on syntax it
+// cannot parse.
+#[cfg(all(test, not(windows)))]
 mod tests {
   use super::*;
 
@@ -132,5 +196,44 @@ mod tests {
     let out =
       run_probe("test", "echo ok >&2; true", &ResultMode::ExitCode).unwrap();
     assert_eq!(out.stderr, "ok");
+  }
+}
+
+// PowerShell mirrors of the probe contract, exercising the Windows branch
+// of `shell_command`.  These are not run in CI — the Windows targets are
+// cross-compiled and the `windowsSmoke` check runs the binary under wine,
+// not `cargo test` — but they document the expected behavior and pass on a
+// real Windows host.  Each skips when a POSIX layer is present, since
+// `shell_command` would then route the PowerShell syntax through `sh`.
+#[cfg(all(test, windows))]
+mod windows_tests {
+  use super::*;
+
+  #[test]
+  fn exit_code_zero_is_healthy() {
+    if in_posix_shell() {
+      return;
+    }
+    let out = run_probe("test", "exit 0", &ResultMode::ExitCode).unwrap();
+    assert!((out.metric - 0.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn exit_code_nonzero_is_down() {
+    if in_posix_shell() {
+      return;
+    }
+    let out = run_probe("test", "exit 1", &ResultMode::ExitCode).unwrap();
+    assert!((out.metric - 1.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn stdout_float_parsing() {
+    if in_posix_shell() {
+      return;
+    }
+    let out =
+      run_probe("test", "Write-Output 0.75", &ResultMode::Stdout).unwrap();
+    assert!((out.metric - 0.75).abs() < 0.001);
   }
 }
