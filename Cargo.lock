@@ -3001,9 +3001,9 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation"
-version = "0.60.0"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f872e6da920d68621e6f56cdedee6e78b2240ba745883e782fd4d6fb988234d"
+checksum = "cf057faa8278a9362c37419c7d7fe11190d939486ef1d84486c35c7cbabc5463"
 dependencies = [
  "aide",
  "axum",
@@ -3036,9 +3036,9 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation-derive"
-version = "0.60.0"
+version = "0.67.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a36636ad0cce0a7eb594a90b89ca2981cb5e1ab36f5c75de7461302adcde49d6"
+checksum = "79062280548a31498e29c2f1a433da882948687f92b64af1e4e8497f5777f590"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3650,7 +3650,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-cli"
-version = "0.33.0"
+version = "0.32.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -3665,7 +3665,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-lib"
-version = "0.33.0"
+version = "0.32.0"
 dependencies = [
  "cargo-husky",
  "cpal",
@@ -3683,7 +3683,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-server"
-version = "0.33.0"
+version = "0.32.0"
 dependencies = [
  "aide",
  "axum",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "sonify-health-voice-derive"
-version = "0.33.0"
+version = "0.32.0"
 dependencies = [
  "proc-macro2",
  "quote",

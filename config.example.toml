@@ -20,12 +20,7 @@ listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # release_ms = 300.0
 
 # Each [[heartbeats]] entry defines a probe command and one or more
-# notes that map its metric to patches from the library.  A command is
-# a shell one-liner: the daemon runs it under sh on Linux, macOS, and a
-# Windows POSIX shell (Git Bash, MSYS2, Cygwin), but under Windows
-# PowerShell on a stock Windows host.  Write commands in the dialect
-# that matches the host, or start from the examples/*-windows.toml
-# presets, which carry PowerShell equivalents of the sh examples.
+# notes that map its metric to patches from the library.
 #
 # playback modes:
 #   "clock"      — one-shot on a wall-clock cycle (default)
