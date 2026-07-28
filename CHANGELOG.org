@@ -4,11 +4,13 @@
 * Upcoming
 ** Added
 ** Fixes
+** Breaking
+** Maintenance
+* v0.34.0
+** Fixes
 1. Restore the Windows example presets and =config.example.toml= changes that an
    automated dependency-combine run (#54) accidentally reverted.  No action
    needed.
-** Breaking
-** Maintenance
 * v0.33.0
 ** Added
 1. Heartbeat probe commands now run on a stock Windows host (using PowerShell)
