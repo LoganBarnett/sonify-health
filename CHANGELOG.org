@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.33.0
+** Maintenance
 1. Bump rust-template-foundation from 0.60.0 to 0.67.0
 2. Bump rust-template-foundation-derive from 0.60.0 to 0.67.0
 * v0.33.0
