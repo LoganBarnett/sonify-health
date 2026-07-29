@@ -3,15 +3,17 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.35.0
+** Added
 1. The patch editor has a Play button that auditions a patch on its own, without
    editing it.  Previously the only way to hear a patch was to nudge one of its
    parameters.  No action needed.
 2. Play on change is now enabled by default for every patch, so editing a
    parameter plays the result immediately.  Uncheck it on a patch to adjust that
    one in silence.
-** Fixes
-** Breaking
-** Maintenance
 * v0.34.0
 ** Fixes
 1. Restore the Windows example presets and =config.example.toml= changes that an
