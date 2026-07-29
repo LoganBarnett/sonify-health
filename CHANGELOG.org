@@ -3,6 +3,12 @@
 
 * Upcoming
 ** Added
+1. The patch editor has a Play button that auditions a patch on its own, without
+   editing it.  Previously the only way to hear a patch was to nudge one of its
+   parameters.  No action needed.
+2. Play on change is now enabled by default for every patch, so editing a
+   parameter plays the result immediately.  Uncheck it on a patch to adjust that
+   one in silence.
 ** Fixes
 ** Breaking
 ** Maintenance
@@ -19,22 +25,28 @@
    Windows users should consider adopting patterns seen in the new examples.
 * v0.32.0
 ** Maintenance
-1. build(deps): Bump rust-template-foundation from 0.49.0 to 0.60.0 (https://github.com/LoganBarnett/sonify-health/pull/51)
+1. build(deps): Bump rust-template-foundation from 0.49.0 to 0.60.0
+   (https://github.com/LoganBarnett/sonify-health/pull/51)
 * v0.31.0
 ** Maintenance
-1. build(deps): Bump clap from 4.6.3 to 4.6.4 (https://github.com/LoganBarnett/sonify-health/pull/49)
+1. build(deps): Bump clap from 4.6.3 to 4.6.4
+   (https://github.com/LoganBarnett/sonify-health/pull/49)
 * v0.30.0
 ** Maintenance
-1. build(deps): Bump clap from 4.6.2 to 4.6.3 (https://github.com/LoganBarnett/sonify-health/pull/45)
+1. build(deps): Bump clap from 4.6.2 to 4.6.3
+   (https://github.com/LoganBarnett/sonify-health/pull/45)
 * v0.29.0
 ** Maintenance
-1. build(deps): Bump proc-macro2 from 1.0.106 to 1.0.107 (https://github.com/LoganBarnett/sonify-health/pull/42)
+1. build(deps): Bump proc-macro2 from 1.0.106 to 1.0.107
+   (https://github.com/LoganBarnett/sonify-health/pull/42)
 * v0.28.0
 ** Maintenance
-1. build(deps): Bump clap from 4.6.1 to 4.6.2 (https://github.com/LoganBarnett/sonify-health/pull/37)
+1. build(deps): Bump clap from 4.6.1 to 4.6.2
+   (https://github.com/LoganBarnett/sonify-health/pull/37)
 * v0.27.0
 ** Maintenance
-1. build(deps): Bump toml from 1.1.2+spec-1.1.0 to 1.1.3+spec-1.1.0 (https://github.com/LoganBarnett/sonify-health/pull/34)
+1. build(deps): Bump toml from 1.1.2+spec-1.1.0 to 1.1.3+spec-1.1.0
+   (https://github.com/LoganBarnett/sonify-health/pull/34)
 * v0.26.0
 ** Maintenance
 1. build(deps): Bump rustls from 0.23.41 to 0.23.42

@@ -49,6 +49,9 @@ design; long prose belongs in `docs/`.
 lookup : Key -> Maybe String
 lookup key =
     case key of
+        "patch-playback" ->
+            Just "Play auditions this patch on its own, without changing it. Play on change re-auditions it after every parameter edit, and is on by default — uncheck it if you would rather adjust in silence."
+
         "metric-tiers" ->
             Just "Cosmetic thresholds for the metric badge — labels and colors only. They don't affect audio; the metric value itself drives synthesis through each note's transition."
 

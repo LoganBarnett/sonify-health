@@ -319,6 +319,17 @@ fn handle_client_message(
       None
     }
 
+    // Audition a patch without changing it, for the patch editor's
+    // Play button.  Play-on-change covers the "did my edit sound
+    // right" case; this covers hearing a patch you have not just
+    // edited, which is otherwise only reachable by nudging a slider
+    // and undoing it.
+    "play_patch" => {
+      let patch_name = msg.get("patch_name").and_then(|v| v.as_str())?;
+      preview.play_patch_immediate(patch_name);
+      None
+    }
+
     // Atomic "update and preview" used by play-on-change.  This
     // exists as a dedicated message instead of a `set_patch_param`
     // + `play_patch` batch because Elm's `Cmd.batch` reverses port
@@ -1201,6 +1212,51 @@ mod tests {
     handle_client_message(&preview, &msg);
 
     assert_eq!(get_param(&preview, "sine", "freq"), new_val);
+  }
+
+  /// `play_patch` auditions without editing, so it must leave the
+  /// library exactly as it found it.  That separation is the whole
+  /// reason the handler is distinct from `set_patch_param_and_play`,
+  /// which deliberately mutates before playing.
+  #[test]
+  fn play_patch_does_not_mutate_library() {
+    let preview = test_preview();
+    let before = get_param(&preview, "sine", "freq");
+
+    let msg = json!({
+      "type": "play_patch",
+      "patch_name": "sine",
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(
+      get_param(&preview, "sine", "freq"),
+      before,
+      "auditioning a patch must not change it"
+    );
+  }
+
+  /// A `play_patch` naming a patch that is not in the library must
+  /// leave state untouched rather than panic, since the front end can
+  /// race a rename against an in-flight click.  It is not silent —
+  /// `play_patch_immediate` logs the miss at `warn!` — but nothing
+  /// observable through this handler changes.
+  #[test]
+  fn play_patch_unknown_patch_is_noop() {
+    let preview = test_preview();
+    let before = get_param(&preview, "sine", "freq");
+
+    let msg = json!({
+      "type": "play_patch",
+      "patch_name": "no-such-patch",
+    })
+    .to_string();
+
+    handle_client_message(&preview, &msg);
+
+    assert_eq!(get_param(&preview, "sine", "freq"), before);
   }
 
   /// A `set_patch_param_and_play` targeting an unknown patch must
