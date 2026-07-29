@@ -98,7 +98,7 @@ type alias Model =
     , addSourceForm : Maybe AddSourceForm
     , pendingRemoveSource : Set String
     , saveStatus : Maybe String
-    , playOnChange : Set String
+    , playOnChangeDisabled : Set String
     , metricHistory : Dict Int (List Float)
     , timezone : Time.Zone
     , collapsedHeartbeats : Set Int
@@ -166,6 +166,7 @@ type Msg
     | DismissSaveStatus
     | DismissProtocolError
     | TogglePlayOnChange String
+    | PlayPatch String
     | GotTimezone Time.Zone
     | ToggleHeartbeatCollapse Int
     | SetHeartbeatName Int String
@@ -229,7 +230,12 @@ init _ url key =
       , addSourceForm = Nothing
       , pendingRemoveSource = Set.empty
       , saveStatus = Nothing
-      , playOnChange = Set.empty
+
+      -- Play-on-change is on by default, so this set holds the
+      -- patches it has been switched *off* for.  Tracking the
+      -- exceptions rather than the enabled patches means patches
+      -- created later inherit the default with no extra wiring.
+      , playOnChangeDisabled = Set.empty
       , metricHistory = Dict.empty
       , timezone = Time.utc
       , collapsedHeartbeats = Set.empty
@@ -383,13 +389,13 @@ update msg model =
                 -- backend's `set_patch_param_and_play` handler
                 -- applies the change and plays atomically.
                 ( model
-                , if Set.member patchName model.playOnChange then
+                , if Set.member patchName model.playOnChangeDisabled then
                     Ports.websocketSend
-                        (encodeSetPatchParamAndPlay patchName param val)
+                        (encodeSetPatchParam patchName param val)
 
                   else
                     Ports.websocketSend
-                        (encodeSetPatchParam patchName param val)
+                        (encodeSetPatchParamAndPlay patchName param val)
                 )
 
             else
@@ -1028,15 +1034,18 @@ update msg model =
 
         TogglePlayOnChange patchName ->
             ( { model
-                | playOnChange =
-                    if Set.member patchName model.playOnChange then
-                        Set.remove patchName model.playOnChange
+                | playOnChangeDisabled =
+                    if Set.member patchName model.playOnChangeDisabled then
+                        Set.remove patchName model.playOnChangeDisabled
 
                     else
-                        Set.insert patchName model.playOnChange
+                        Set.insert patchName model.playOnChangeDisabled
               }
             , Cmd.none
             )
+
+        PlayPatch patchName ->
+            ( model, Ports.websocketSend (encodePlayPatch patchName) )
 
         GotTimezone zone ->
             ( { model | timezone = zone }, Cmd.none )
@@ -3390,14 +3399,27 @@ viewPatchEditor model =
                     div [ class "section patch-editor" ]
                         [ h2 [] [ text patchName ]
                         , headerExtra
-                        , label [ class "play-on-change" ]
-                            [ input
-                                [ type_ "checkbox"
-                                , Html.Attributes.checked (Set.member patchName model.playOnChange)
-                                , onClick (TogglePlayOnChange patchName)
+                        , div [ class "patch-playback" ]
+                            [ button
+                                [ class "help-label"
+                                , onClick (HelpClicked (Help.Registered "patch-playback"))
                                 ]
-                                []
-                            , text " Play on change"
+                                [ text "Playback" ]
+                            , button
+                                [ class "btn btn-sm"
+                                , onClick (PlayPatch patchName)
+                                ]
+                                [ text "Play" ]
+                            , label [ class "play-on-change" ]
+                                [ input
+                                    [ type_ "checkbox"
+                                    , Html.Attributes.checked
+                                        (not (Set.member patchName model.playOnChangeDisabled))
+                                    , onClick (TogglePlayOnChange patchName)
+                                    ]
+                                    []
+                                , text " Play on change"
+                                ]
                             ]
                         , div [ class "param-grid" ]
                             (List.map

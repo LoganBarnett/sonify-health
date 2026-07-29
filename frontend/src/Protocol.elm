@@ -29,6 +29,7 @@ module Protocol exposing
     , encodeLerpStrategy
     , encodeNoteSlider
     , encodeOverrideHeartbeat
+    , encodePlayPatch
     , encodeRemoveNote
     , encodeRemoveRemoteSource
     , encodeRenamePatch
@@ -900,6 +901,15 @@ encodeTriggerHeartbeat index =
     E.object
         [ ( "type", E.string "trigger_heartbeat" )
         , ( "index", E.int index )
+        ]
+        |> E.encode 0
+
+
+encodePlayPatch : String -> String
+encodePlayPatch patchName =
+    E.object
+        [ ( "type", E.string "play_patch" )
+        , ( "patch_name", E.string patchName )
         ]
         |> E.encode 0
 

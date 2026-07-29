@@ -734,6 +734,13 @@ a:hover {
 .patch-editor {
 }
 
+.patch-playback {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
 .param-grid {
   display: flex;
   flex-direction: column;

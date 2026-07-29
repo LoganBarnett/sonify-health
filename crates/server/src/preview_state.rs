@@ -424,11 +424,20 @@ impl PreviewState {
   /// one-shot sound.  Spawns a fire-and-forget thread that removes
   /// the mixer slot after the sound finishes.
   pub fn play_patch_immediate(&self, name: &str) {
+    // Both early returns are silent to the user — the audition simply
+    // does not sound — so they log rather than leaving a dead button
+    // with no trace.  The missing-mixer case is `debug!` because it is
+    // the normal state before audio starts and would otherwise fire on
+    // every play-on-change edit; an unknown patch is `warn!` because it
+    // means the front end asked for something the library does not
+    // have.
     let Some(handle) = self.mixer_handle.read().clone() else {
+      tracing::debug!(patch = name, "Patch audition skipped: no mixer");
       return;
     };
 
     let Some(patch) = self.local().library.read().get(name).cloned() else {
+      tracing::warn!(patch = name, "Patch audition skipped: unknown patch");
       return;
     };
 
