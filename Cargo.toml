@@ -182,7 +182,7 @@ prometheus = "0.13"
 # Scalar API explorer.
 aide = { version = "0.15", features = ["axum", "axum-json", "axum-query", "scalar", "macros"] }
 # JSON Schema generation that aide uses to describe the documented routes.
-schemars = "0.9"
+schemars = "1.2"
 
 # Parses the annotated input in the voice-derive proc-macro; full +
 # extra-traits give the macro the syntax detail it inspects.
