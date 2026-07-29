@@ -176,7 +176,7 @@ openidconnect = { version = "3", features = ["reqwest"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
 
 # Metrics registry and the Prometheus text exposition served at /metrics.
-prometheus = "0.13"
+prometheus = "0.14"
 
 # Builds the OpenAPI document from the annotated routes and serves the
 # Scalar API explorer.
