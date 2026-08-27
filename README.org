@@ -168,8 +168,8 @@ configurations:
   (=nix run .#server= / =nix run .#cli=).
 - =devShells.${system}.default= — development shell with Rust toolchain, Elm,
   formatters, and task runner.
-- =nixosModules.daemon= — NixOS service module.
-- =darwinModules.daemon= — nix-darwin service module.
+- =nixosModules.server= — NixOS service module.
+- =darwinModules.server= — nix-darwin service module.
 
 * Usage
 

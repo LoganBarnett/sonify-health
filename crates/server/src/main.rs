@@ -175,12 +175,16 @@ pub async fn main(
   });
 
   // Race the web server against the audio engine: if either exits,
-  // the other is torn down.  Dropping `server.listen()` on
+  // the other is torn down.  Dropping the listen future on
   // cancellation drops the inner axum::serve future and its
   // listener.  Flipping `running` to false tells the audio engine's
-  // main loop to exit gracefully when the server-arm wins.
+  // main loop to exit gracefully when the server-arm wins.  The
+  // future is bound outside the select! because a macro invocation's
+  // token tree is invisible to syntax-tree analysis, and the
+  // compliance check asserting this delegation reads the AST.
+  let listen = server.listen();
   tokio::select! {
-    result = server.listen() => {
+    result = listen => {
       running.store(false, Ordering::Relaxed);
       result?;
       info!("Web server shut down, waiting for audio engine");

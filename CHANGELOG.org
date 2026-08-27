@@ -5,7 +5,17 @@
 ** Added
 ** Fixes
 ** Breaking
+1. The flake's service modules are now ~nixosModules.server~ and
+   ~darwinModules.server~; the ~.daemon~ attribute names are gone.  Nix adopters
+   must update their imports (~.default~ still works).
+2. The darwin service logs to flat ~/var/log/sonify-health-*.log~ files (rotated
+   via newsyslog) instead of a ~/var/log/sonify-health/~ directory, which macOS
+   updates delete.  Darwin adopters should look for logs at the new paths; the
+   ~logPathStdout~ / ~logPathStderr~ options override them.
 ** Maintenance
+1. Synced the project to rust-template v0.102.0, including a daily scheduled
+   dependency-bump workflow and a rebuilt contributor code-review gate.  No
+   action needed.
 * v0.35.0
 ** Added
 1. The patch editor has a Play button that auditions a patch on its own, without

@@ -3001,9 +3001,8 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation"
-version = "0.60.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f872e6da920d68621e6f56cdedee6e78b2240ba745883e782fd4d6fb988234d"
+version = "0.102.0"
+source = "git+https://github.com/LoganBarnett/rust-template.git#7429f551bbafa25d9de80479105e4c21aac8173b"
 dependencies = [
  "aide",
  "axum",
@@ -3036,9 +3035,8 @@ dependencies = [
 
 [[package]]
 name = "rust-template-foundation-derive"
-version = "0.60.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a36636ad0cce0a7eb594a90b89ca2981cb5e1ab36f5c75de7461302adcde49d6"
+version = "0.102.0"
+source = "git+https://github.com/LoganBarnett/rust-template.git#7429f551bbafa25d9de80479105e4c21aac8173b"
 dependencies = [
  "proc-macro2",
  "quote",

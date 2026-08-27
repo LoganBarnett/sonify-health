@@ -1,6 +1,6 @@
 # Darwin (macOS/launchd) module for the sonify-health daemon.
-# Exported from the flake as darwinModules.daemon.
-# See nixos-daemon.nix for the Linux/systemd equivalent.
+# Exported from the flake as darwinModules.server.
+# See nixos-server.nix for the Linux/systemd equivalent.
 #
 # Minimal usage (defaults to Unix domain socket):
 #
@@ -48,6 +48,18 @@
 }: let
   cfg = config.services.sonify-health;
   tomlFormat = pkgs.formats.toml {};
+
+  # Shared tail for every log path description.  Each option renders on its
+  # own in the generated docs, so the caveat has to appear in all of them; it
+  # is bound once here rather than copied into each option's description.
+  logPathCaveat = ''
+    Beware using directories that aren't ensured by macOS.  The directories
+    cannot be created by the LaunchDaemon declaration nor by the user it runs
+    under.  The convention of writing to files directly under `/var/log` is
+    quite standard in the ecosystem.  The typical `/var/log/<service-name>` you
+    might expect from a Linux systemd unit will not persist beyond OS cleanup
+    events (restarts, and maybe reboots).
+  '';
 
   listenArg =
     if cfg.socket != null
@@ -536,6 +548,26 @@ in {
       '';
     };
 
+    logPathStdout = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/log/sonify-health-stdout.log";
+      description = ''
+        File launchd writes the daemon's captured stdout to.
+
+        ${logPathCaveat}
+      '';
+    };
+
+    logPathStderr = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/log/sonify-health-stderr.log";
+      description = ''
+        File launchd writes the daemon's captured stderr to.
+
+        ${logPathCaveat}
+      '';
+    };
+
     healthCheck = {
       enable = lib.mkEnableOption "periodic health-check agent for the daemon";
 
@@ -548,6 +580,26 @@ in {
           URL to probe for health.  The agent runs curl against this
           endpoint every 30 seconds and kills the daemon if it fails,
           letting launchd's KeepAlive restart it.
+        '';
+      };
+
+      logPathStdout = lib.mkOption {
+        type = lib.types.path;
+        default = "/var/log/sonify-health-healthcheck-stdout.log";
+        description = ''
+          File launchd writes the health-check agent's captured stdout to.
+
+          ${logPathCaveat}
+        '';
+      };
+
+      logPathStderr = lib.mkOption {
+        type = lib.types.path;
+        default = "/var/log/sonify-health-healthcheck-stderr.log";
+        description = ''
+          File launchd writes the health-check agent's captured stderr to.
+
+          ${logPathCaveat}
         '';
       };
     };
@@ -586,27 +638,51 @@ in {
     users.knownUsers = [cfg.user];
     users.knownGroups = [cfg.group];
 
-    # Create log and socket directories.  macOS has no tmpfiles equivalent,
-    # so we use nix-darwin activation scripts.  Activation runs against the
-    # system PATH, which on macOS resolves to BSD coreutils — `mkdir -p`
-    # is required (BSD `mkdir` does not accept GNU's `--parents`).
+    # Create the socket directory.  macOS has no tmpfiles equivalent, so we
+    # use a nix-darwin activation script.  Activation runs against the system
+    # PATH, which on macOS resolves to BSD coreutils — `mkdir -p` is required
+    # (BSD `mkdir` does not accept GNU's `--parents`).  Logs need no directory:
+    # they are flat files directly under /var/log, because macOS updates delete
+    # unowned /var/log subdirectories and launchd cannot recreate them, which
+    # silently kills the service.
     system.activationScripts.postActivation.text = let
-      logDir = "/var/log/sonify-health";
       sockDir =
         if cfg.socket != null
         then dirOf cfg.socket
         else null;
     in
-      ''
-        mkdir -p ${logDir}
-        chown ${cfg.user}:${cfg.group} ${logDir}
-        chmod 0750 ${logDir}
-      ''
-      + lib.optionalString (sockDir != null) ''
+      lib.optionalString (sockDir != null) ''
         mkdir -p ${sockDir}
         chown ${cfg.user}:${cfg.group} ${sockDir}
         chmod 0750 ${sockDir}
       '';
+
+    # Rotate launchd-captured logs via newsyslog.  Without this, stdout
+    # and stderr grow without bound — launchd does not rotate the files
+    # it opens for StandardOutPath / StandardErrorPath.  Flags:
+    #   N — no signal.  The service is not syslogd and does not handle
+    #       SIGHUP for log re-open; launchd owns the file descriptors
+    #       and continues writing to the rotated file's inode until the
+    #       service restarts.  Acceptable for low-volume launchd logs;
+    #       high-volume services should restart on rotation or write
+    #       their own logs via a rotating sink.
+    #   J — bzip2-compress archived rotations.
+    # size is in KB (10240 = 10 MB); count is archives retained.
+    environment.etc."newsyslog.d/sonify-health.conf".text = let
+      rotateLine = file: "${file} ${cfg.user}:${cfg.group} 640 5 10240 * NJ";
+    in
+      lib.concatStringsSep "\n" (
+        [
+          "# logfilename [owner:group] mode count size when flags"
+          (rotateLine cfg.logPathStdout)
+          (rotateLine cfg.logPathStderr)
+        ]
+        ++ lib.optionals cfg.healthCheck.enable [
+          (rotateLine cfg.healthCheck.logPathStdout)
+          (rotateLine cfg.healthCheck.logPathStderr)
+        ]
+      )
+      + "\n";
 
     launchd.daemons.sonify-health = {
       serviceConfig = {
@@ -638,8 +714,8 @@ in {
         # Darwin has no LoadCredential equivalent, so the secret file
         # path is passed directly via the sonify_health_oidc_client_secret_file
         # env var above.
-        StandardOutPath = "/var/log/sonify-health/stdout.log";
-        StandardErrorPath = "/var/log/sonify-health/stderr.log";
+        StandardOutPath = cfg.logPathStdout;
+        StandardErrorPath = cfg.logPathStderr;
       };
     };
 
@@ -656,8 +732,8 @@ in {
         StartInterval = 30;
         RunAtLoad = false;
         ProcessType = "Background";
-        StandardOutPath = "/var/log/sonify-health/healthcheck-stdout.log";
-        StandardErrorPath = "/var/log/sonify-health/healthcheck-stderr.log";
+        StandardOutPath = cfg.healthCheck.logPathStdout;
+        StandardErrorPath = cfg.healthCheck.logPathStderr;
       };
     };
   };
