@@ -1,6 +1,6 @@
 # NixOS (Linux/systemd) module for the sonify-health daemon.
-# Exported from the flake as nixosModules.daemon.
-# See darwin-daemon.nix for the macOS/launchd equivalent.
+# Exported from the flake as nixosModules.server.
+# See darwin-server.nix for the macOS/launchd equivalent.
 #
 # Minimal usage (defaults to Unix domain socket with socket activation):
 #
