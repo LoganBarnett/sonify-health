@@ -12,8 +12,60 @@ pub struct ResolvedNote {
   pub offset: f64,
 }
 
-/// Maximum lowpass cutoff to avoid filter instability near Nyquist.
+/// Maximum lowpass cutoff in Hz; equals the `lowpass` parameter's `max` in
+/// patch.rs (enforced by a test there), where the top of the range means "off".
 pub const MAX_CUTOFF: f32 = 18000.0;
+
+/// Maximum highpass cutoff in Hz; equals the `highpass` parameter's `max` in
+/// patch.rs (enforced by a test there).  Sits far enough below
+/// `CUTOFF_RATE_FRACTION` of any real device rate that a highpass stage never
+/// needs rate-aware handling.
+pub const MAX_HIGHPASS: f32 = 2000.0;
+
+/// Fraction of the sample rate above which a cutoff cannot be realized:
+/// fundsp's filters compute `tan(pi * cutoff / rate)`, which is only meaningful
+/// below Nyquist (rate / 2); 0.45 leaves headroom before the asymptote.
+const CUTOFF_RATE_FRACTION: f64 = 0.45;
+
+/// Highest stable filter cutoff in Hz at the given sample rate.
+pub(crate) fn cutoff_ceiling(sample_rate: f64) -> f32 {
+  MAX_CUTOFF.min((CUTOFF_RATE_FRACTION * sample_rate) as f32)
+}
+
+/// Effective highpass cutoff in Hz, or `None` when the filter is off.  `0 =
+/// off` means the filter stage is absent from the graph rather than parked at
+/// an inaudible sentinel cutoff, so "off" is bit-exact on every device.  The
+/// comparison also routes a NaN value to off.
+pub(crate) fn highpass_cutoff(patch: &Patch) -> Option<f32> {
+  (patch.highpass > 0.0).then_some((patch.highpass as f32).min(MAX_HIGHPASS))
+}
+
+/// Effective lowpass cutoff in Hz, or `None` when the filter is off.  Off sits
+/// at the top of the range: at or above the stable ceiling the requested
+/// passband already covers everything the device can represent, so omitting the
+/// stage renders the setting exactly.  On 44.1/48 kHz devices the ceiling is
+/// `MAX_CUTOFF`, making the slider's top position a true bypass; only degraded
+/// low-rate devices (Bluetooth HFP, 22.05/16 kHz) pull it lower.  The
+/// comparison routes a NaN value to off; the 20 Hz floor matches the
+/// parameter's `min` in patch.rs, guarding values that arrive through config
+/// files, which bypass `set_param`'s clamping.
+pub(crate) fn lowpass_cutoff(patch: &Patch, sample_rate: f64) -> Option<f32> {
+  let cutoff = patch.lowpass as f32;
+  (cutoff < cutoff_ceiling(sample_rate)).then_some(cutoff.max(20.0))
+}
+
+/// Append the engaged filter stages to a mono chain.  A disengaged filter
+/// contributes no node at all, so "off" is a true bypass.
+fn with_filter_stages(mono: Net, patch: &Patch, sample_rate: f64) -> Net {
+  [
+    highpass_cutoff(patch).map(|hz| Net::wrap(Box::new(highpass_hz(hz, 0.7)))),
+    lowpass_cutoff(patch, sample_rate)
+      .map(|hz| Net::wrap(Box::new(lowpass_hz(hz, 0.7)))),
+  ]
+  .into_iter()
+  .flatten()
+  .fold(mono, |acc, stage| acc >> stage)
+}
 
 /// Total wall-clock duration of a multi-note heartbeat.  Each note
 /// is independently timed from its offset, so the duration is the
@@ -73,6 +125,7 @@ fn note_graph(
   patch: &Patch,
   offset: f64,
   external_volume: Option<&Shared>,
+  sample_rate: f64,
 ) -> Box<dyn AudioUnit> {
   let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
   let amp = patch.amplitude as f32;
@@ -195,7 +248,7 @@ fn note_graph(
   let sub_osc = sub_freq_env >> sub_waveform;
 
   // Drive, noise, filter, effects.
-  let cutoff = dc((freq * 13.0 * brightness).min(MAX_CUTOFF));
+  let cutoff = dc((freq * 13.0 * brightness).min(cutoff_ceiling(sample_rate)));
   let q_val = dc(0.5 * resonance * 0.2);
 
   let ext = external_volume
@@ -204,11 +257,6 @@ fn note_graph(
 
   let echo_delay = patch.echo_delay as f32;
   let echo_mix = patch.echo_mix as f32;
-  let hp_cutoff = if patch.highpass > 0.0 {
-    patch.highpass as f32
-  } else {
-    1.0
-  };
 
   let driven = (main_osc + (sub_osc * sub_mix))
     >> (shape(Tanh(drive)) * drive_norm)
@@ -216,14 +264,13 @@ fn note_graph(
   let mono = (driven | cutoff | q_val)
     >> (moog() * amp_env * ext_vol)
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0)
-    >> highpass_hz(hp_cutoff, 0.7);
-  let with_echo =
-    mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix));
-  let stereo = with_echo
+    >> hold_hz(ds_rate, 0.0);
+  let filtered =
+    with_filter_stages(Net::wrap(Box::new(mono)), patch, sample_rate);
+  let tail = (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix))
     >> pan(patch.stereo_pan as f32)
     >> reverb_stereo(0.3, 0.8, patch.reverb_mix as f32);
-  Box::new(stereo)
+  Box::new(filtered >> Net::wrap(Box::new(tail)))
 }
 
 /// Build a multi-note heartbeat audio graph.  Each note is rendered
@@ -234,11 +281,12 @@ fn note_graph(
 pub fn heartbeat_graph_with_notes(
   notes: &[ResolvedNote],
   external_volume: Option<&Shared>,
+  sample_rate: f64,
 ) -> Box<dyn AudioUnit> {
   let mut iter = notes.iter().map(|n| {
     let mut p = n.patch.clone();
     p.amplitude *= n.volume;
-    Net::wrap(note_graph(&p, n.offset, external_volume))
+    Net::wrap(note_graph(&p, n.offset, external_volume, sample_rate))
   });
   let Some(first) = iter.next() else {
     // Empty notes — return silence with the same external-volume
@@ -253,7 +301,7 @@ pub fn heartbeat_graph_with_notes(
 
 /// Build an audio graph for a single boop.  Duration and
 /// frequency come from the patch itself.
-pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
+pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
   let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
   let amp = patch.amplitude as f32;
   let harshness = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
@@ -311,7 +359,9 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let sub_osc = (sub_freq_source >> sub_waveform) * patch.sub_octave as f32;
   let combined = main_osc + sub_osc;
 
-  let cutoff = dc((freq * 13.0 * patch.brightness as f32).min(MAX_CUTOFF));
+  let cutoff = dc(
+    (freq * 13.0 * patch.brightness as f32).min(cutoff_ceiling(sample_rate)),
+  );
   let q_val = dc((0.5 * patch.resonance as f32 * 0.2).min(0.95));
 
   let sustain_level = patch.sustain as f32;
@@ -335,11 +385,6 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
 
   let echo_delay = patch.echo_delay as f32;
   let echo_mix = patch.echo_mix as f32;
-  let hp_cutoff = if patch.highpass > 0.0 {
-    patch.highpass as f32
-  } else {
-    1.0
-  };
 
   let driven = combined
     >> (shape(Tanh(drive)) * drive_norm)
@@ -347,9 +392,11 @@ pub fn boop_graph(patch: &Patch) -> Box<dyn AudioUnit> {
   let mono = (driven | cutoff | q_val)
     >> (moog() * env)
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0)
-    >> highpass_hz(hp_cutoff, 0.7);
-  Box::new(mono >> (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix)))
+    >> hold_hz(ds_rate, 0.0);
+  let filtered =
+    with_filter_stages(Net::wrap(Box::new(mono)), patch, sample_rate);
+  let tail = pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix);
+  Box::new(filtered >> Net::wrap(Box::new(tail)))
 }
 
 #[cfg(test)]
@@ -364,10 +411,43 @@ mod tests {
     }
   }
 
+  /// Mean square of a graph's left channel over the note body (0.015-0.25 s at
+  /// 44.1 kHz), skipping the attack transient.
+  fn body_mean_square(graph: &mut Box<dyn AudioUnit>) -> f32 {
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+    let body_start = (0.015 * 44100.0) as usize;
+    let body_end = (0.25 * 44100.0) as usize;
+    for _ in 0..body_start {
+      graph.get_stereo();
+    }
+    (body_start..body_end)
+      .map(|_| {
+        let (l, _) = graph.get_stereo();
+        l * l
+      })
+      .sum::<f32>()
+      / (body_end - body_start) as f32
+  }
+
+  fn boop_body_mean_square(patch: &Patch) -> f32 {
+    body_mean_square(&mut boop_graph(patch, 44100.0))
+  }
+
+  /// Same measurement through the note_graph path the daemon plays.
+  fn note_body_mean_square(patch: &Patch) -> f32 {
+    let notes = [ResolvedNote {
+      patch: patch.clone(),
+      volume: 1.0,
+      offset: 0.0,
+    }];
+    body_mean_square(&mut heartbeat_graph_with_notes(&notes, None, 44100.0))
+  }
+
   #[test]
   fn boop_produces_sound() {
     let patch = test_patch(440.0, 0.5);
-    let mut graph = boop_graph(&patch);
+    let mut graph = boop_graph(&patch, 44100.0);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -460,7 +540,7 @@ mod tests {
         offset: i as f64 * 0.5,
       })
       .collect();
-    let mut graph = heartbeat_graph_with_notes(&notes, None);
+    let mut graph = heartbeat_graph_with_notes(&notes, None, 44100.0);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -497,7 +577,7 @@ mod tests {
         offset: i as f64 * 0.3,
       })
       .collect();
-    let mut graph = heartbeat_graph_with_notes(&notes, None);
+    let mut graph = heartbeat_graph_with_notes(&notes, None, 44100.0);
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -533,43 +613,96 @@ mod tests {
       ..full.clone()
     };
 
-    let mut g_full = boop_graph(&full);
-    g_full.set_sample_rate(44100.0);
-    g_full.allocate();
-
-    let mut g_half = boop_graph(&half);
-    g_half.set_sample_rate(44100.0);
-    g_half.allocate();
-
-    let body_start = (0.015 * 44100.0) as usize;
-    let body_end = (0.25 * 44100.0) as usize;
-
-    for _ in 0..body_start {
-      g_full.get_stereo();
-      g_half.get_stereo();
-    }
-
-    let full_rms: f32 = (body_start..body_end)
-      .map(|_| {
-        let (l, _) = g_full.get_stereo();
-        l * l
-      })
-      .sum::<f32>()
-      / (body_end - body_start) as f32;
-
-    let half_rms: f32 = (body_start..body_end)
-      .map(|_| {
-        let (l, _) = g_half.get_stereo();
-        l * l
-      })
-      .sum::<f32>()
-      / (body_end - body_start) as f32;
+    let full_ms = boop_body_mean_square(&full);
+    let half_ms = boop_body_mean_square(&half);
 
     assert!(
-      half_rms < full_rms,
-      "sustain=0.5 body RMS ({half_rms:.6}) should be lower \
-       than sustain=1.0 ({full_rms:.6})"
+      half_ms < full_ms,
+      "sustain=0.5 body mean square ({half_ms:.6}) should be lower \
+       than sustain=1.0 ({full_ms:.6})"
     );
+  }
+
+  #[test]
+  fn lowpass_attenuates_bright_patch() {
+    let bright = Patch {
+      freq: 880.0,
+      duration: 0.3,
+      sine_ratio: 0.0,
+      saw_ratio: 1.0,
+      attack_ms: 10.0,
+      release_ms: 50.0,
+      ..Default::default()
+    };
+    let dark = Patch {
+      lowpass: 200.0,
+      ..bright.clone()
+    };
+
+    let bright_ms = boop_body_mean_square(&bright);
+    let dark_ms = boop_body_mean_square(&dark);
+
+    // A 200 Hz second-order lowpass on an 880 Hz saw cuts the fundamental to
+    // roughly (200/880)^4 of its power, so 0.5 leaves a wide margin.
+    assert!(
+      dark_ms < bright_ms * 0.5,
+      "lowpass=200 body mean square ({dark_ms:.6}) should be well \
+       below the unfiltered value ({bright_ms:.6})"
+    );
+  }
+
+  #[test]
+  fn lowpass_attenuates_note_graph() {
+    let bright = Patch {
+      freq: 880.0,
+      duration: 0.3,
+      sine_ratio: 0.0,
+      saw_ratio: 1.0,
+      attack_ms: 10.0,
+      release_ms: 50.0,
+      ..Default::default()
+    };
+    let dark = Patch {
+      lowpass: 200.0,
+      ..bright.clone()
+    };
+
+    let bright_ms = note_body_mean_square(&bright);
+    let dark_ms = note_body_mean_square(&dark);
+
+    assert!(
+      dark_ms < bright_ms * 0.5,
+      "lowpass=200 note body mean square ({dark_ms:.6}) should be \
+       well below the unfiltered value ({bright_ms:.6})"
+    );
+  }
+
+  #[test]
+  fn lowpass_cutoff_bypasses_at_ceiling() {
+    let mut patch = Patch::default();
+    assert_eq!(lowpass_cutoff(&patch, 44100.0), None);
+    patch.lowpass = 5000.0;
+    assert_eq!(lowpass_cutoff(&patch, 44100.0), Some(5000.0));
+    // A device whose representable band sits entirely inside the
+    // requested passband renders the setting exactly by omitting the
+    // stage.
+    assert_eq!(lowpass_cutoff(&patch, 8000.0), None);
+    patch.lowpass = f64::NAN;
+    assert_eq!(lowpass_cutoff(&patch, 44100.0), None);
+    patch.lowpass = 0.0;
+    assert_eq!(lowpass_cutoff(&patch, 44100.0), Some(20.0));
+  }
+
+  #[test]
+  fn highpass_cutoff_bypasses_at_zero() {
+    let mut patch = Patch::default();
+    assert_eq!(highpass_cutoff(&patch), None);
+    patch.highpass = 120.0;
+    assert_eq!(highpass_cutoff(&patch), Some(120.0));
+    patch.highpass = f64::NAN;
+    assert_eq!(highpass_cutoff(&patch), None);
+    patch.highpass = 30000.0;
+    assert_eq!(highpass_cutoff(&patch), Some(MAX_HIGHPASS));
   }
 
   /// Render note_graph at various frequencies using the star-trek-ok
@@ -629,7 +762,7 @@ mod tests {
       let dur = heartbeat_notes_duration(&notes);
       let total_samples = (dur.as_secs_f32() * 44100.0) as usize;
 
-      let mut graph = heartbeat_graph_with_notes(&notes, None);
+      let mut graph = heartbeat_graph_with_notes(&notes, None, 44100.0);
       graph.set_sample_rate(44100.0);
       graph.allocate();
 

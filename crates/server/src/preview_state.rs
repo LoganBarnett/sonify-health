@@ -410,7 +410,11 @@ impl PreviewState {
         None => return,
       }
     };
-    let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
+    let graph = heartbeat::heartbeat_graph_with_notes(
+      &notes,
+      Some(&eff_vol),
+      handle.sample_rate(),
+    );
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
     let sid = handle.add(graph);
@@ -446,7 +450,8 @@ impl PreviewState {
       volume: 1.0,
       offset: 0.0,
     }];
-    let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
+    let graph =
+      heartbeat::heartbeat_graph_with_notes(&notes, None, handle.sample_rate());
     let dur = heartbeat::heartbeat_notes_duration(&notes);
 
     let sid = handle.add(graph);
@@ -646,6 +651,7 @@ impl PreviewState {
           "min": m.min,
           "max": m.max,
           "step": m.step,
+          "logarithmic": m.logarithmic,
         })
       })
       .collect();

@@ -59,6 +59,7 @@ type alias PatchParamMeta =
     , min : Float
     , max : Float
     , step : Float
+    , logarithmic : Bool
     }
 
 
@@ -476,13 +477,14 @@ defaultSliderRangesProtocol =
 
 patchParamMetaDecoder : D.Decoder PatchParamMeta
 patchParamMetaDecoder =
-    D.map5
-        (\n d mn mx s ->
+    D.map6
+        (\n d mn mx s lg ->
             { name = n
             , description = d
             , min = mn
             , max = mx
             , step = s
+            , logarithmic = lg
             }
         )
         (D.field "name" D.string)
@@ -490,6 +492,7 @@ patchParamMetaDecoder =
         (D.field "min" D.float)
         (D.field "max" D.float)
         (D.field "step" D.float)
+        (D.field "logarithmic" D.bool)
 
 
 libraryDecoder : D.Decoder (Dict String (Dict String Float))

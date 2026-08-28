@@ -9,6 +9,9 @@ pub struct PatchField {
   pub max: f64,
   /// UI slider step size (defaults to 0.01 when absent).
   pub step: f64,
+  /// UI slider maps position to value logarithmically.  Requires a
+  /// positive `min`.
+  pub logarithmic: bool,
   /// Human-readable description for the UI.
   pub description: String,
 }
@@ -41,6 +44,7 @@ impl PatchField {
     let mut min: Option<f64> = None;
     let mut max: Option<f64> = None;
     let mut step: Option<f64> = None;
+    let mut logarithmic = false;
     let mut description: Option<String> = None;
 
     attr.parse_nested_meta(|meta| {
@@ -59,6 +63,9 @@ impl PatchField {
         let lit: Lit = value.parse()?;
         step = Some(parse_float_lit(&lit, &meta)?);
         Ok(())
+      } else if meta.path.is_ident("logarithmic") {
+        logarithmic = true;
+        Ok(())
       } else if meta.path.is_ident("description") {
         let value = meta.value()?;
         let lit: Lit = value.parse()?;
@@ -70,7 +77,9 @@ impl PatchField {
           _ => Err(meta.error("description must be a string")),
         }
       } else {
-        Err(meta.error("expected `min`, `max`, `step`, or `description`"))
+        Err(meta.error(
+          "expected `min`, `max`, `step`, `logarithmic`, or `description`",
+        ))
       }
     })?;
 
@@ -78,12 +87,19 @@ impl PatchField {
       min.ok_or_else(|| syn::Error::new_spanned(attr, "missing `min`"))?;
     let max =
       max.ok_or_else(|| syn::Error::new_spanned(attr, "missing `max`"))?;
+    if logarithmic && min <= 0.0 {
+      return Err(syn::Error::new_spanned(
+        attr,
+        "`logarithmic` requires a positive `min`",
+      ));
+    }
 
     Ok(Some(PatchField {
       ident,
       min,
       max,
       step: step.unwrap_or(0.01),
+      logarithmic,
       description: description.unwrap_or_default(),
     }))
   }

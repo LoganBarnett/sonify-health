@@ -3,7 +3,18 @@
 
 * Upcoming
 ** Added
+1. Patches have a new ~lowpass~ parameter that cuts high frequencies.  No action
+   needed.
 ** Fixes
+1. The Stop-hook review gate no longer lets synthetic transcript entries (its
+   own block feedback, background task notifications) reset its per-turn round
+   budget, so its bounded-rounds escape hatch works again in harnesses that emit
+   such entries.  No action needed.
+2. Continuous playback no longer silently ignores ~highpass~; see the Breaking
+   section for the audible impact.
+3. Audio can no longer destabilize into noise or silence on devices running at
+   low sample rates (Bluetooth headsets in call mode, some USB audio).  No
+   action needed.
 ** Breaking
 1. The flake's service modules are now ~nixosModules.server~ and
    ~darwinModules.server~; the ~.daemon~ attribute names are gone.  Nix adopters
@@ -12,6 +23,17 @@
    via newsyslog) instead of a ~/var/log/sonify-health/~ directory, which macOS
    updates delete.  Darwin adopters should look for logs at the new paths; the
    ~logPathStdout~ / ~logPathStderr~ options override them.
+3. Continuous playback no longer ignores ~highpass~: an existing continuous-mode
+   patch that sets it will audibly change.  Zero the parameter to restore the
+   old sound.
+4. For library consumers, grouped by the struct or API you use:
+   - ~Patch~ / ~PatchOverrides~: gained a ~lowpass~ field; literal constructions
+     without ~..Default::default()~ must add it.
+   - ~ContinuousControls~ / ~StructuralParams~: gained fields, and their
+     constructors now take the output device's sample rate.
+   - ~PatchParamMeta~: gained a ~logarithmic~ field.
+   - Audio graph constructors and ~AudioOutput::play~ / ~play_for~: now take the
+     sample rate; ~play~ takes a graph-builder closure receiving it.
 ** Maintenance
 1. Synced the project to rust-template v0.102.0, including a daily scheduled
    dependency-bump workflow and a rebuilt contributor code-review gate.  No

@@ -1,4 +1,4 @@
-use crate::heartbeat::MAX_CUTOFF;
+use crate::heartbeat::{cutoff_ceiling, highpass_cutoff, lowpass_cutoff};
 use crate::patch::Patch;
 use fundsp::net::Net;
 use fundsp::prelude32::*;
@@ -25,6 +25,12 @@ pub struct ContinuousControls {
   pub fm_depth: Shared,
   pub filter_cutoff: Shared,
   pub filter_q: Shared,
+  /// Effective highpass cutoff in Hz.  Read only while the stage is engaged;
+  /// holds a transparent floor while bypassed (see `highpass_shared_value`).
+  pub highpass: Shared,
+  /// Effective lowpass cutoff in Hz.  Read only while the stage is engaged;
+  /// holds the stable ceiling while bypassed (see `lowpass_shared_value`).
+  pub lowpass: Shared,
   pub amplitude: Shared,
   pub noise_mix: Shared,
   pub drive: Shared,
@@ -33,9 +39,9 @@ pub struct ContinuousControls {
 
 impl ContinuousControls {
   /// Initialize all `Shared` values from a patch snapshot.
-  pub fn from_patch(patch: &Patch) -> Self {
+  pub fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
     let (sine_w, tri_w, saw_w, square_w) = normalized_weights(patch);
-    let (cutoff, q) = filter_params(patch);
+    let (cutoff, q) = filter_params(patch, sample_rate);
 
     ContinuousControls {
       freq: shared(patch.freq as f32),
@@ -52,6 +58,8 @@ impl ContinuousControls {
       fm_depth: shared(patch.fm_depth as f32),
       filter_cutoff: shared(cutoff),
       filter_q: shared(q),
+      highpass: shared(highpass_shared_value(patch)),
+      lowpass: shared(lowpass_shared_value(patch, sample_rate)),
       amplitude: shared(patch.amplitude as f32),
       noise_mix: shared(patch.noise_mix as f32),
       drive: shared(patch.drive as f32),
@@ -61,9 +69,9 @@ impl ContinuousControls {
 
   /// Write new values into all `Shared` controls.  The graph's
   /// `follow()` nodes smooth the transition at the audio rate.
-  pub fn update_from_patch(&self, patch: &Patch) {
+  pub fn update_from_patch(&self, patch: &Patch, sample_rate: f64) {
     let (sine_w, tri_w, saw_w, square_w) = normalized_weights(patch);
-    let (cutoff, q) = filter_params(patch);
+    let (cutoff, q) = filter_params(patch, sample_rate);
 
     self.freq.set_value(patch.freq as f32);
     self.sine_w.set_value(sine_w);
@@ -79,6 +87,10 @@ impl ContinuousControls {
     self.fm_depth.set_value(patch.fm_depth as f32);
     self.filter_cutoff.set_value(cutoff);
     self.filter_q.set_value(q);
+    self.highpass.set_value(highpass_shared_value(patch));
+    self
+      .lowpass
+      .set_value(lowpass_shared_value(patch, sample_rate));
     self.amplitude.set_value(patch.amplitude as f32);
     self.noise_mix.set_value(patch.noise_mix as f32);
     self.drive.set_value(patch.drive as f32);
@@ -100,11 +112,27 @@ fn normalized_weights(patch: &Patch) -> (f32, f32, f32, f32) {
 }
 
 /// Derive filter cutoff and Q from frequency, brightness, and resonance.
-fn filter_params(patch: &Patch) -> (f32, f32) {
-  let cutoff =
-    (patch.freq as f32 * 13.0 * patch.brightness as f32).min(MAX_CUTOFF);
+fn filter_params(patch: &Patch, sample_rate: f64) -> (f32, f32) {
+  let cutoff = (patch.freq as f32 * 13.0 * patch.brightness as f32)
+    .min(cutoff_ceiling(sample_rate));
   let q = 0.5 * patch.resonance as f32;
   (cutoff, q)
+}
+
+/// Value for the highpass `Shared`: the effective cutoff, or a transparent 1 Hz
+/// floor while the stage is bypassed.  The floor only sounds during the poll
+/// interval between a live edit crossing the bypass boundary and the structural
+/// rebuild that removes the stage.
+fn highpass_shared_value(patch: &Patch) -> f32 {
+  highpass_cutoff(patch).unwrap_or(1.0)
+}
+
+/// Value for the lowpass `Shared`: the effective cutoff, or the stable ceiling
+/// while the stage is bypassed (same transitional window as
+/// `highpass_shared_value`).
+fn lowpass_shared_value(patch: &Patch, sample_rate: f64) -> f32 {
+  lowpass_cutoff(patch, sample_rate)
+    .unwrap_or_else(|| cutoff_ceiling(sample_rate))
 }
 
 /// Parameters baked into the graph topology that require a rebuild
@@ -117,16 +145,22 @@ pub struct StructuralParams {
   pub reverb_mix: f32,
   pub stereo_pan: f32,
   pub downsample: f32,
+  /// Filter stages exist or don't in the topology, so crossing a bypass
+  /// boundary is a structural change.
+  pub highpass_bypassed: bool,
+  pub lowpass_bypassed: bool,
 }
 
 impl StructuralParams {
-  pub fn from_patch(patch: &Patch) -> Self {
+  pub fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
     StructuralParams {
       echo_delay: patch.echo_delay as f32,
       echo_mix: patch.echo_mix as f32,
       reverb_mix: patch.reverb_mix as f32,
       stereo_pan: patch.stereo_pan as f32,
       downsample: patch.downsample as f32,
+      highpass_bypassed: highpass_cutoff(patch).is_none(),
+      lowpass_bypassed: lowpass_cutoff(patch, sample_rate).is_none(),
     }
   }
 }
@@ -254,14 +288,29 @@ pub fn continuous_graph(
     >> dcblock()
     >> crush_map
     >> hold_hz(ds_rate, 0.0);
-  let with_echo = mono
-    >> (pass()
-      & (feedback(delay(structural.echo_delay) * 0.3) * structural.echo_mix));
-  let stereo = with_echo
+  // Filter stages are topological: a bypassed filter contributes no node (see
+  // `StructuralParams`), and an engaged one reads its smoothed Shared cutoff so
+  // live edits sweep.  `follow()` snaps on its first sample, so a fresh graph
+  // starts at the right value.
+  let filtered = [
+    (!structural.highpass_bypassed).then(|| {
+      let hp_smooth = var(&controls.highpass) >> follow(smooth);
+      Net::wrap(Box::new((pass() | hp_smooth) >> highpass_q(0.7)))
+    }),
+    (!structural.lowpass_bypassed).then(|| {
+      let lp_smooth = var(&controls.lowpass) >> follow(smooth);
+      Net::wrap(Box::new((pass() | lp_smooth) >> lowpass_q(0.7)))
+    }),
+  ]
+  .into_iter()
+  .flatten()
+  .fold(Net::wrap(Box::new(mono)), |acc, stage| acc >> stage);
+  let tail = (pass()
+    & (feedback(delay(structural.echo_delay) * 0.3) * structural.echo_mix))
     >> pan(structural.stereo_pan)
     >> reverb_stereo(0.3, 0.8, structural.reverb_mix);
 
-  Box::new(stereo)
+  Box::new(filtered >> Net::wrap(Box::new(tail)))
 }
 
 /// Multi-note continuous graph: one independent `continuous_graph`
@@ -275,6 +324,7 @@ pub fn continuous_graph_with_notes(
   patches: &[(Patch, f64)],
   smoothing_secs: f64,
   external_volume: Option<&Shared>,
+  sample_rate: f64,
 ) -> (Box<dyn AudioUnit>, Vec<ContinuousControls>, Vec<StructuralParams>) {
   let mut all_controls = Vec::with_capacity(patches.len());
   let mut all_structural = Vec::with_capacity(patches.len());
@@ -282,8 +332,8 @@ pub fn continuous_graph_with_notes(
   let mut iter = patches.iter().map(|(patch, volume)| {
     let mut p = patch.clone();
     p.amplitude *= *volume;
-    let controls = ContinuousControls::from_patch(&p);
-    let structural = StructuralParams::from_patch(&p);
+    let controls = ContinuousControls::from_patch(&p, sample_rate);
+    let structural = StructuralParams::from_patch(&p, sample_rate);
     let graph =
       continuous_graph(&controls, smoothing_secs, &structural, external_volume);
     all_controls.push(controls);
@@ -315,8 +365,8 @@ mod tests {
   #[test]
   fn continuous_graph_produces_sound() {
     let patch = Patch::default();
-    let controls = ContinuousControls::from_patch(&patch);
-    let structural = StructuralParams::from_patch(&patch);
+    let controls = ContinuousControls::from_patch(&patch, 44100.0);
+    let structural = StructuralParams::from_patch(&patch, 44100.0);
     let mut graph = continuous_graph(&controls, 0.5, &structural, None);
     graph.set_sample_rate(44100.0);
     graph.allocate();
@@ -342,14 +392,86 @@ mod tests {
     let hi = Patch {
       freq: 800.0,
       amplitude: 0.8,
+      highpass: 120.0,
+      lowpass: 4000.0,
       ..Default::default()
     };
-    let controls = ContinuousControls::from_patch(&lo);
+    let controls = ContinuousControls::from_patch(&lo, 44100.0);
     assert!((controls.freq.value() - 200.0).abs() < 0.01);
+    // Default patch: both filters are bypassed, so the Shareds hold their
+    // transitional values — the 1 Hz highpass floor and the lowpass stable
+    // ceiling.
+    assert!((controls.highpass.value() - 1.0).abs() < 0.01);
+    assert!((controls.lowpass.value() - cutoff_ceiling(44100.0)).abs() < 0.01);
 
-    controls.update_from_patch(&hi);
+    controls.update_from_patch(&hi, 44100.0);
     assert!((controls.freq.value() - 800.0).abs() < 0.01);
     assert!((controls.amplitude.value() - 0.8).abs() < 0.01);
+    assert!((controls.highpass.value() - 120.0).abs() < 0.01);
+    assert!((controls.lowpass.value() - 4000.0).abs() < 0.01);
+  }
+
+  /// Render half a second of a graph after a quarter-second warmup and return
+  /// the mean square of the left channel.  The warmup exists for the reverb
+  /// tail to build up — `follow()` needs none, since it snaps to the Shared's
+  /// value on its first sample.
+  fn rendered_mean_square(patch: &Patch) -> f32 {
+    let controls = ContinuousControls::from_patch(patch, 44100.0);
+    let structural = StructuralParams::from_patch(patch, 44100.0);
+    let mut graph = continuous_graph(&controls, 0.05, &structural, None);
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+
+    for _ in 0..11025 {
+      graph.get_stereo();
+    }
+    (0..22050)
+      .map(|_| {
+        let (l, _) = graph.get_stereo();
+        l * l
+      })
+      .sum::<f32>()
+      / 22050.0
+  }
+
+  #[test]
+  fn continuous_lowpass_attenuates() {
+    let bright = Patch {
+      freq: 880.0,
+      sine_ratio: 0.0,
+      saw_ratio: 1.0,
+      ..Default::default()
+    };
+    let dark = Patch {
+      lowpass: 150.0,
+      ..bright.clone()
+    };
+    let bright_ms = rendered_mean_square(&bright);
+    let dark_ms = rendered_mean_square(&dark);
+    assert!(
+      dark_ms < bright_ms * 0.5,
+      "lowpass=150 mean square ({dark_ms:.6}) should be well below \
+       the unfiltered mean square ({bright_ms:.6})"
+    );
+  }
+
+  #[test]
+  fn continuous_highpass_attenuates() {
+    let low_tone = Patch {
+      freq: 200.0,
+      ..Default::default()
+    };
+    let thin = Patch {
+      highpass: 2000.0,
+      ..low_tone.clone()
+    };
+    let full_ms = rendered_mean_square(&low_tone);
+    let thin_ms = rendered_mean_square(&thin);
+    assert!(
+      thin_ms < full_ms * 0.5,
+      "highpass=2000 mean square ({thin_ms:.6}) should be well below \
+       the unfiltered mean square ({full_ms:.6})"
+    );
   }
 
   #[test]
@@ -364,11 +486,21 @@ mod tests {
       reverb_mix: 0.2,
       ..Default::default()
     };
-    let a = StructuralParams::from_patch(&lo);
-    let b = StructuralParams::from_patch(&hi);
+    let a = StructuralParams::from_patch(&lo, 44100.0);
+    let b = StructuralParams::from_patch(&hi, 44100.0);
     assert_ne!(a, b);
 
-    let c = StructuralParams::from_patch(&lo);
+    let c = StructuralParams::from_patch(&lo, 44100.0);
     assert_eq!(a, c);
+
+    // Crossing a filter's bypass boundary is a structural change.
+    let engaged = Patch {
+      lowpass: 5000.0,
+      ..lo.clone()
+    };
+    let d = StructuralParams::from_patch(&engaged, 44100.0);
+    assert!(a.lowpass_bypassed);
+    assert!(!d.lowpass_bypassed);
+    assert_ne!(a, d);
   }
 }
