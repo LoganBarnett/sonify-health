@@ -11,6 +11,9 @@ pub struct PatchParamMeta {
   pub min: f64,
   pub max: f64,
   pub step: f64,
+  /// The UI slider maps position to value logarithmically, and `Patch::lerp`
+  /// interpolates geometrically.
+  pub logarithmic: bool,
 }
 
 /// A named, static sound definition.
@@ -144,7 +147,7 @@ pub struct Patch {
     min = 0.05,
     max = 2.0,
     step = 0.01,
-    description = "Lowpass cutoff scaler. 1.0 = full brightness, lower = darker tone."
+    description = "Pitch-tracking ladder filter cutoff scaler. 1.0 = full brightness, lower = darker tone."
   )]
   pub brightness: f64,
 
@@ -163,6 +166,17 @@ pub struct Patch {
     description = "Highpass filter cutoff in Hz. 0 = off, higher = cuts more low frequencies."
   )]
   pub highpass: f64,
+
+  // The bounds here must stay in sync with the constants in heartbeat.rs (a
+  // test asserts the sync); the attribute only accepts literals.
+  #[patch_param(
+    min = 20.0,
+    max = 18000.0,
+    step = 1.0,
+    logarithmic,
+    description = "Lowpass filter cutoff in Hz. 18000 = off (fully open), lower = cuts more high frequencies."
+  )]
+  pub lowpass: f64,
 
   #[patch_param(
     min = 0.0,
@@ -306,6 +320,7 @@ impl Default for Patch {
       brightness: 1.0,
       resonance: 1.0,
       highpass: 0.0,
+      lowpass: 18000.0,
       sub_octave: 0.0,
       vibrato_rate: 0.0,
       vibrato_depth: 0.0,
@@ -326,16 +341,25 @@ impl Default for Patch {
 }
 
 impl Patch {
-  /// Linearly interpolate every field between two patches.  The
-  /// parameter `t` is clamped to 0.0..=1.0, where 0.0 yields `lo`
-  /// and 1.0 yields `hi`.
+  /// Interpolate every field between two patches.  The parameter `t` is clamped
+  /// to 0.0..=1.0, where 0.0 yields `lo` and 1.0 yields `hi`.  Log-scaled
+  /// parameters interpolate geometrically so a sweep is perceptually even;
+  /// everything else is linear.
   pub fn lerp(lo: &Patch, hi: &Patch, t: f64) -> Patch {
     let t = t.clamp(0.0, 1.0);
     let mut result = lo.clone();
     for meta in Self::PARAMS {
       let lo_val = lo.get_param(meta.name).unwrap_or(0.0);
       let hi_val = hi.get_param(meta.name).unwrap_or(0.0);
-      result.set_param(meta.name, lo_val + (hi_val - lo_val) * t);
+      // Geometric interpolation needs positive endpoints; a log-scaled
+      // parameter guarantees a positive `min`, but the values themselves come
+      // from configs that bypass clamping.
+      let val = if meta.logarithmic && lo_val > 0.0 && hi_val > 0.0 {
+        lo_val * (hi_val / lo_val).powf(t)
+      } else {
+        lo_val + (hi_val - lo_val) * t
+      };
+      result.set_param(meta.name, val);
     }
     result
   }
@@ -457,7 +481,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 33);
+    assert_eq!(Patch::PARAMS.len(), 34);
   }
 
   #[test]
@@ -465,6 +489,59 @@ mod tests {
     let mut patch = Patch::default();
     patch.set_param("freq", 999.0);
     assert_eq!(patch.get_param("freq"), Some(999.0));
+  }
+
+  #[test]
+  fn set_param_clamps_to_declared_bounds() {
+    let mut patch = Patch::default();
+    patch.set_param("highpass", 30000.0);
+    assert_eq!(patch.get_param("highpass"), Some(2000.0));
+    patch.set_param("lowpass", 1.0);
+    assert_eq!(patch.get_param("lowpass"), Some(20.0));
+  }
+
+  #[test]
+  fn set_param_rejects_non_finite() {
+    let mut patch = Patch::default();
+    assert!(!patch.set_param("lowpass", f64::NAN));
+    assert!(!patch.set_param("lowpass", f64::INFINITY));
+    assert_eq!(patch.get_param("lowpass"), Some(18000.0));
+  }
+
+  #[test]
+  fn filter_bounds_match_heartbeat_constants() {
+    let meta = |name: &str| {
+      Patch::PARAMS
+        .iter()
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("missing PARAMS entry '{name}'"))
+    };
+    let lowpass = meta("lowpass");
+    assert_eq!(lowpass.max, f64::from(crate::heartbeat::MAX_CUTOFF));
+    assert_eq!(lowpass.min, 20.0);
+    assert!(lowpass.logarithmic);
+    let highpass = meta("highpass");
+    assert_eq!(highpass.max, f64::from(crate::heartbeat::MAX_HIGHPASS));
+  }
+
+  #[test]
+  fn lerp_interpolates_log_params_geometrically() {
+    let lo = Patch {
+      lowpass: 200.0,
+      ..Default::default()
+    };
+    let hi = Patch {
+      lowpass: 18000.0,
+      ..Default::default()
+    };
+    let mid = Patch::lerp(&lo, &hi, 0.5);
+    let expected = (200.0f64 * 18000.0).sqrt();
+    assert!(
+      (mid.lowpass - expected).abs() < 1.0,
+      "geometric midpoint of 200..18000 should be ~{expected:.0}, \
+       got {:.0}",
+      mid.lowpass
+    );
   }
 
   #[test]

@@ -1139,7 +1139,12 @@ fn play_continuous_tick(
   let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
   let (graph, mut all_controls, mut all_structural) =
-    continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
+    continuous_graph_with_notes(
+      &pairs,
+      smoothing,
+      Some(&eff_vol),
+      play_mix.sample_rate(),
+    );
   let mut note_count = pairs.len();
   let sid = play_mix.add(graph);
   counter.inc();
@@ -1170,8 +1175,12 @@ fn play_continuous_tick(
     // Full rebuild if note count changed.
     if pairs.len() != note_count {
       let smoothing = crossfade_ms / 1000.0;
-      let (graph, new_controls, new_structural) =
-        continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
+      let (graph, new_controls, new_structural) = continuous_graph_with_notes(
+        &pairs,
+        smoothing,
+        Some(&eff_vol),
+        play_mix.sample_rate(),
+      );
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
       play_mix.replace(sid, graph, cf);
@@ -1187,8 +1196,9 @@ fn play_continuous_tick(
     for (j, (patch, volume)) in pairs.iter().enumerate() {
       let mut p = patch.clone();
       p.amplitude *= volume;
-      all_controls[j].update_from_patch(&p);
-      let new_structural = StructuralParams::from_patch(&p);
+      all_controls[j].update_from_patch(&p, play_mix.sample_rate());
+      let new_structural =
+        StructuralParams::from_patch(&p, play_mix.sample_rate());
       if new_structural != all_structural[j] {
         all_structural[j] = new_structural;
         needs_rebuild = true;
@@ -1197,8 +1207,12 @@ fn play_continuous_tick(
 
     if needs_rebuild {
       let smoothing = crossfade_ms / 1000.0;
-      let (graph, new_controls, new_structural) =
-        continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
+      let (graph, new_controls, new_structural) = continuous_graph_with_notes(
+        &pairs,
+        smoothing,
+        Some(&eff_vol),
+        play_mix.sample_rate(),
+      );
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
       play_mix.replace(sid, graph, cf);
@@ -1217,8 +1231,12 @@ fn play_continuous_tick(
         "Periodic continuous graph rebuild to reset filter state"
       );
       let smoothing = crossfade_ms / 1000.0;
-      let (graph, new_controls, new_structural) =
-        continuous_graph_with_notes(&pairs, smoothing, Some(&eff_vol));
+      let (graph, new_controls, new_structural) = continuous_graph_with_notes(
+        &pairs,
+        smoothing,
+        Some(&eff_vol),
+        play_mix.sample_rate(),
+      );
       let cf =
         ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
       play_mix.replace(sid, graph, cf);
@@ -1253,7 +1271,11 @@ fn play_loop(
 
   let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
-  let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
+  let graph = heartbeat::heartbeat_graph_with_notes(
+    &notes,
+    Some(&eff_vol),
+    play_mix.sample_rate(),
+  );
   let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
   let sid = play_mix.add(graph);
   counter.inc();
@@ -1271,7 +1293,11 @@ fn play_loop(
     }
 
     preview.update_effective_volume(source, hb_idx);
-    let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
+    let graph = heartbeat::heartbeat_graph_with_notes(
+      &notes,
+      Some(&eff_vol),
+      play_mix.sample_rate(),
+    );
     let content_dur = heartbeat::heartbeat_notes_content_duration(&notes);
     let cf = ((crossfade_ms / 1000.0) * play_mix.sample_rate()).ceil() as usize;
     play_mix.replace(sid, graph, cf);
@@ -1308,7 +1334,11 @@ fn play_oneshot_once(
 
   let eff_vol = clone_effective_volume(source, hb_idx);
   preview.update_effective_volume(source, hb_idx);
-  let graph = heartbeat::heartbeat_graph_with_notes(&notes, Some(&eff_vol));
+  let graph = heartbeat::heartbeat_graph_with_notes(
+    &notes,
+    Some(&eff_vol),
+    play_mix.sample_rate(),
+  );
   let dur = heartbeat::heartbeat_notes_duration(&notes);
 
   let sid = play_mix.add(graph);

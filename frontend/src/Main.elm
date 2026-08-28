@@ -3429,6 +3429,27 @@ viewPatchEditor model =
                         ]
 
 
+{-| Slider-position domain for log-scaled params: the range input
+works in positions 0-1000 and maps to the param's value
+geometrically, so equal slider travel is an equal frequency ratio.
+The paired number input stays in raw value units.
+-}
+logarithmicSliderMax : Float
+logarithmicSliderMax =
+    1000
+
+
+logarithmicPositionToValue : PatchParamMeta -> Float -> Float
+logarithmicPositionToValue meta pos =
+    meta.min * ((meta.max / meta.min) ^ (pos / logarithmicSliderMax))
+
+
+logarithmicValueToPosition : PatchParamMeta -> Float -> Float
+logarithmicValueToPosition meta v =
+    logarithmicSliderMax
+        * logBase (meta.max / meta.min) (clamp meta.min meta.max v / meta.min)
+
+
 viewParamSlider :
     Model
     -> String
@@ -3490,15 +3511,49 @@ viewParamSlider model patchName patchValues maybeOverride meta =
             )
         ]
         [ labelNode
-        , input
-            [ type_ "range"
-            , Html.Attributes.min (String.fromFloat meta.min)
-            , Html.Attributes.max (String.fromFloat meta.max)
-            , step (String.fromFloat meta.step)
-            , value (String.fromFloat val)
-            , onInput (SetPatchParam patchName meta.name)
-            ]
-            []
+        , if meta.logarithmic then
+            -- The range input works in the log position domain; its
+            -- payload is converted to a value string here so the
+            -- update path stays identical to a linear slider's.  A
+            -- position that fails to parse passes through raw and is
+            -- discarded by `SetPatchParam`'s own parse.
+            input
+                [ type_ "range"
+                , Html.Attributes.min "0"
+                , Html.Attributes.max (String.fromFloat logarithmicSliderMax)
+                , step "1"
+                , value (String.fromFloat (logarithmicValueToPosition meta val))
+                , onInput
+                    (\raw ->
+                        SetPatchParam patchName
+                            meta.name
+                            (raw
+                                |> String.toFloat
+                                |> Maybe.map
+                                    (\pos ->
+                                        logarithmicPositionToValue meta pos
+                                            / meta.step
+                                            |> round
+                                            |> toFloat
+                                            |> (*) meta.step
+                                            |> String.fromFloat
+                                    )
+                                |> Maybe.withDefault raw
+                            )
+                    )
+                ]
+                []
+
+          else
+            input
+                [ type_ "range"
+                , Html.Attributes.min (String.fromFloat meta.min)
+                , Html.Attributes.max (String.fromFloat meta.max)
+                , step (String.fromFloat meta.step)
+                , value (String.fromFloat val)
+                , onInput (SetPatchParam patchName meta.name)
+                ]
+                []
         , input
             [ type_ "number"
             , class "num-input"

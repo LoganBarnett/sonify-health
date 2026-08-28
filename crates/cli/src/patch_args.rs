@@ -68,7 +68,7 @@ pub struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   echo_mix: Option<f64>,
 
-  /// Override brightness (lowpass cutoff scaler).
+  /// Override brightness (pitch-tracking ladder filter cutoff scaler).
   #[arg(long, help_heading = "Patch overrides")]
   brightness: Option<f64>,
 
@@ -79,6 +79,10 @@ pub struct CliPatchOverrides {
   /// Override highpass filter cutoff (Hz).
   #[arg(long, help_heading = "Patch overrides")]
   highpass: Option<f64>,
+
+  /// Override lowpass filter cutoff (Hz).
+  #[arg(long, help_heading = "Patch overrides")]
+  lowpass: Option<f64>,
 
   /// Override sub-octave mix.
   #[arg(long, help_heading = "Patch overrides")]
@@ -162,6 +166,7 @@ impl CliPatchOverrides {
       brightness: self.brightness,
       resonance: self.resonance,
       highpass: self.highpass,
+      lowpass: self.lowpass,
       sub_octave: self.sub_octave,
       vibrato_rate: self.vibrato_rate,
       vibrato_depth: self.vibrato_depth,

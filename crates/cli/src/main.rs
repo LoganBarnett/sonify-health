@@ -87,10 +87,15 @@ fn run_preview(
       volume: 1.0,
       offset: 0.0,
     }];
-    let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
     let dur = heartbeat::heartbeat_notes_duration(&notes);
-    AudioOutput::play_for(graph, dur, config.audio_device.as_deref())
-      .map_err(ApplicationError::AudioPlayback)
+    AudioOutput::play_for(
+      |sample_rate| {
+        heartbeat::heartbeat_graph_with_notes(&notes, None, sample_rate)
+      },
+      dur,
+      config.audio_device.as_deref(),
+    )
+    .map_err(ApplicationError::AudioPlayback)
   }
 }
 
@@ -119,7 +124,11 @@ fn run_continuous_preview(
         volume: 1.0,
         offset: 0.0,
       }];
-      let graph = heartbeat::heartbeat_graph_with_notes(&notes, None);
+      let graph = heartbeat::heartbeat_graph_with_notes(
+        &notes,
+        None,
+        handle.sample_rate(),
+      );
       let dur = heartbeat::heartbeat_notes_duration(&notes);
       let slot = handle.add(graph);
       std::thread::sleep(dur);
