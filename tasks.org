@@ -741,8 +741,8 @@ The work splits naturally:
    Plumb the option through every layer that already plumbs ~audioDevice~: the
    Rust CLI/config (~--headless~ flag and ~headless = true~ in the TOML), the
    NixOS module (~services.sonify-health.headless~ in
-   ~nix/modules/nixos-daemon.nix~), and the nix-darwin module
-   (~services.sonify-health.headless~ in ~nix/modules/darwin-daemon.nix~).  A
+   ~nix/modules/nixos-server.nix~), and the nix-darwin module
+   (~services.sonify-health.headless~ in ~nix/modules/darwin-server.nix~).  A
    speakerless server should be configurable as a one-line ~headless = true~ at
    the Nix level — without it, deploying to a server requires faking an audio
    device.

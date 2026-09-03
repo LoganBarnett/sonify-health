@@ -61,6 +61,16 @@ single_match_else = "warn"
 collapsible_match = "warn"
 redundant_pattern_matching = "warn"
 
+# Policy for the scheduled dependency-bump flow (the daily `cargo update`
+# that replaces Dependabot; see .github/workflows/dependency-bump.yml).
+# Each hold names a lockfile package the bump must not advance and the
+# reason a human needs before lifting it; every run reports the held set,
+# so a hold cannot rot silently.  Example:
+#   { package = "foo", reason = "waiting on owner/repo#123 to ship in a tag" }
+[workspace.metadata.dependency-bump]
+hold = [
+]
+
 [workspace.package]
 version = "0.35.0"
 edition = "2021"
@@ -70,15 +80,13 @@ repository = "https://gitea.proton/logan/sonify-health"
 
 [workspace.dependencies]
 # Foundation infrastructure crate (config-merge derive, logging,
-# server runner, health, metrics, OpenAPI, OIDC).  Consumed from
-# crates.io by version rather than git: this workspace's own crates
-# publish to crates.io, and crates.io rejects git dependencies, so
-# every dependency — foundation included — must be a published-version
-# dependency.  Bump this in step with the template's releases; the
-# flake's `foundation` input still tracks the template by commit for
-# the Nix build helpers, and template_sync_hashes still records the
-# doc/infra sync points.
-rust-template-foundation = "0.60.0"
+# server runner, health, metrics, OpenAPI, OIDC).  Consumed by git so
+# Cargo.lock pins the same template revision the flake's `foundation`
+# input does — the compliance checks foundation-pins-agree and
+# foundation-pins-current assert that agreement.  Publishing still
+# works: cargo strips the git source on publish and keeps the version
+# requirement, so the published crates depend on the crates.io release.
+rust-template-foundation = { git = "https://github.com/LoganBarnett/rust-template.git", version = ">=0.16" }
 # Embeds the compiled Elm bundle into the server binary so a downloaded release
 # is self-contained.  The server crate's build.rs resolves the asset directory
 # and exports it as SONIFY_HEALTH_FRONTEND_DIR for the `Frontend` derive.

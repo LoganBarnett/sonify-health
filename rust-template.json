@@ -18,7 +18,16 @@
     "980a51433fd28f3160f86fba29943027fb5a235c",
     "9b7ac3726e73ca5a8f29093859fa57144fa5ed2f",
     "8bf217080baf7905dcc0b02a83ab46d67124ef11",
-    "3aff6a8dd8a29355b7e52b0f68759fad8dc01fc0"
+    "3aff6a8dd8a29355b7e52b0f68759fad8dc01fc0",
+    "7429f551bbafa25d9de80479105e4c21aac8173b",
+    "e459313d70ea25ed15d5f78241d1cf9e8e838ec6"
+  ],
+  "apple-frameworks": true,
+  "compliance-ignores": [
+    {
+      "id": "server-integration-test-present",
+      "reason": "the server crate's integration tests live under domain-specific names (websocket_test.rs, supervision_test.rs, remote_mirror_test.rs, override_isolation_test.rs) rather than the emitted integration_test.rs"
+    }
   ],
   "workspaces": {
     "cli": { "release-binary": true },
