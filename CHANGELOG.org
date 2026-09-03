@@ -4,6 +4,10 @@
 * Upcoming
 ** Added
 ** Fixes
+** Breaking
+** Maintenance
+* v0.36.0
+** Fixes
 1. Synced the project to rust-template v0.109.0 to pull in build fix re:
    ~toml_edit~ failing to download from ~crates.io~.  No action needed.
 ** Breaking
@@ -14,7 +18,6 @@
    via newsyslog) instead of a ~/var/log/sonify-health/~ directory, which macOS
    updates delete.  Darwin adopters should look for logs at the new paths; the
    ~logPathStdout~ / ~logPathStderr~ options override them.
-** Maintenance
 * v0.35.0
 ** Added
 1. The patch editor has a Play button that auditions a patch on its own, without
