@@ -40,7 +40,7 @@ pub struct Config {
 
   /// Audio device substring for output device selection.  Used by
   /// the `preview` subcommand when it opens an `AudioOutput`.
-  #[merge_config(env, default = "None")]
+  #[merge_config(default = "None")]
   pub audio_device: Option<String>,
 
   #[merge_config(skip)]

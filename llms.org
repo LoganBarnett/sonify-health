@@ -116,9 +116,11 @@ These rules apply to comments and documentation roughly the same.
 
 Historical verbiage are such as "We used to do X, but now we do Y".  We should
 only provide such prose in the _surprising_ case.  These would be better thought
-of as "One would typically reach for X, but it fails because of Y, so instead we
-do Z".  This is the only case in which we use historical prose that refers to
-prior code that no longer exists.
+of as "Y, so the usual X does not work; instead we do Z": the fact that breaks
+the obvious approach comes first, as a claim a reader can check, and the
+deviation follows (see "Anti Pattern: Buried Problem").  This is the only case
+in which we use historical prose that refers to prior code that no longer
+exists.
 
 The easy test for this is "If you would have gotten this right on the first
 pass, would this have still needed this prose?".  If the answer is no, then do
@@ -147,6 +149,92 @@ that takes inventory must be updated.  Same goes if you add a W activity.  The
 simple answer is to not write this prose at all.  If you find yourself writing
 these remarks, they are virtually always wrong, and instead an even briefer
 summary must be written instead, or the comment must be removed entirely.
+
+**** Anti Pattern: Buried Problem
+
+A comment that justifies a surprise — a workaround, a deviation from the obvious
+approach, a step nobody would expect — opens with the problem.  The first
+sentence (or the first clause, when the sentence is short) is a falsifiable
+statement about the world: what goes wrong, or which external fact forces the
+deviation.  The mechanism and the fix follow.
+
+The anti-pattern is the comment written in discovery order: the mechanism first,
+then its consequence, with the problem itself arriving in a trailing "so",
+"since", or "because" clause, or inside a parenthetical.  A reviewer cannot
+evaluate any of it until they reach that clause, so they hold every moving part
+in their head and then read the whole thing again.  The tells:
+
+- The problem sits at the end, in a trailing "so", "since", or "because" clause,
+  or in a parenthetical.
+- The opening sentence takes inventory of the moving parts before saying why
+  they matter.
+- The opening asserts intent ("this is deliberate") or passes judgement
+  ("deliberately simple") rather than stating a fact that could be false.
+
+Bad — the problem (a leaked key) is a relative clause in the middle, and the fix
+is the last three words:
+
+#+begin_example
+reqwest's error text carries the request URL, which for a v3 key
+includes the key itself; the endpoint field already names the call,
+so every wrapped reqwest error drops its URL.
+#+end_example
+
+Good — the first sentence is the problem, and it can be checked on its own:
+
+#+begin_example
+A wrapped reqwest error would leak the API key: reqwest's message
+includes the request URL, and a v3 key travels in the URL.  The endpoint
+field already names the call, so the URL is dropped.
+#+end_example
+
+Falsifiable is the test.  The opening claim is the one thing a reviewer has to
+verify, and it is the deletion condition for the code beneath it: when the claim
+stops holding, the workaround goes.  A statement of intent gives the reader
+neither.
+
+This applies wherever a surprise is justified — a code comment, a doc comment, a
+passage in ~README.org~ or under ~docs/~.  It does not apply to summaries, whose
+first sentence is the outcome (see "How to Summarize").
+
+**** How to Summarize
+
+This covers any summarized activity (function headers, file headers, and so on).
+
+A summary details what the outcome of the activity is, and never the steps
+involved unless those steps are particularly surprising.  A "fire the nukes"
+script shouldn't include anything about arming the nukes, aiming the nukes,
+authorizing the nukes, or anything else that we _do_ to fire the nukes unless
+there's some specific quirk that truly needs calling out that is _relevant to
+that summary_.  A good summary for a ~nuke-fire.sh~ is "Fires the nukes.".
+
+***** Documenting Quirks and Surprises
+
+Most quirks in a function or script needn't make it to the summary.  Let's say
+that we generally expect these steps for any nation to fire its nukes:
+
+1. Arm the nuke.
+2. Aim the nuke.
+3. Authorize the firing of the nuke.
+4. Fire the nuke.
+
+Any nuke firing activity here wouldn't be in a summary.
+
+Let's say our nation requires the tips to be signed using the public key of the
+recipient.  So now our script looks like:
+
+1. Arm the nuke.
+2. Aim the nuke.
+3. Sign the tip with the recipient's public key.
+4. Authorize the firing of the nuke.
+5. Fire the nuke.
+
+Okay that's an odd step, and because it's an odd step, it would require a
+comment _immediately adjacent_ to that specific functionality.  That comment
+opens with the fact that forces the step (the recipient's silo rejects an
+unsigned tip), not with a description of the signing; see "Anti Pattern: Buried
+Problem".  Since this has no great impact on how our ~nuke-fire.sh~ script
+works, we should leave it out of the summary.
 
 ** Version Control
 *** Commit Messages
@@ -504,6 +592,39 @@ the most expressive available.  Maximum expressivity is the wrong default.
 Reach for the narrowest construct that fits; escalate to ~match~ or a loop only
 when the combinator form distorts the meaning.
 
+*** Functional Style
+
+Rust is an imperative language at its core, but we can still leverage functional
+principals where possible, and Rust does a lot to assist with this.
+
+Code should be written in functional style whenever possible.  Imperative style
+will be an inevitable part of working in an imperative language like Rust, but
+you can perform practically all of the data manipulation that the imperative
+bits need in a functional section.  The imperative bits are effectively
+quarantined to where it is absolutely necessary, and then reasoning about them
+becomes easy, since the imperative part of them is laid bare and not
+intermingled with data manipulation.  Typical imperative surfaces are external
+APIs, touching disk, writing to the network, emitting output, and so on.
+
+Imperative smells:
++ Early returns :: While these can be handled by just using branching ~if/else~
+  sections, having a lot of them outlines a possible need to sharpen the data
+  structure via another type in an earlier stage of execution, or moving logic
+  branches into their own functions.  A function should generally be viewed as
+  "what is this returning" and not "what alterations are being made".  An early
+  return is basically saying "no further alterations", whereas branches are
+  saying "these are the possible ways in which results are produced".
++ List building :: Adding elements to a list is firmly in imperative territory.
+  It's a sure sign that a compositor isn't being used (such as a ~filter~).
+  Rust optimizes its calls quite a bit, so you're fine to chain ~filter~
+  expressions along and that sort of thing.
++ Long lived variables :: Long living variables, especially those marked as
+  ~mut~, are frequent trademarks of imperative functions that are probably too
+  long and doing too much.  Not all ~mut~ variables are culprits but many are.
+  Keep in mind that a long lived variable carries its own cognitive load - you
+  have to be aware that it could be used at any point in the function past its
+  declaration, all the way to the end of scope.
+
 *** Code Structure
 
 **** Files and modules
@@ -595,11 +716,8 @@ reaching the reviewer or the pipeline.  It also surfaces the combinator lints
 that steer toward the least-powerful construct (see "Rule of least power") while
 the change is still in hand, rather than after the fact.
 
-Claude Code agents may skip this step: the Stop hook at
-~.claude/hooks/review-stop.sh~ runs the same clippy gate deterministically on
-~.rs~ changes and blocks the turn until it passes, so the check is already
-enforced for them.  The instruction is spelled out here for other coding agents
-and humans, whose workflow that hook does not cover.
+This applies to every contributor, human or agent.  Nothing runs it on your
+behalf.
 
 * Persistent memory
 

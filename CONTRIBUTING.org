@@ -299,41 +299,6 @@ The NixOS module uses systemd's ~LoadCredential~ to pass secret files to the
 service without granting the service user direct read access.  See
 =docs/systemd.org= for the full pattern.
 
-* Code-review Stop hook
-
-Claude Code sessions in this project run a deterministic code-review gate: the
-Stop hook at =.claude/hooks/review-stop.sh= blocks a turn from ending while
-un-reviewed changes sit in the working tree, first until the workspace passes
-the clippy gate CI enforces (for Rust changes), then until the
-=template-compliance= subagent has run and reported =COMPLIANCE: PASS=.  Plan
-mode, being read-only, never triggers it.
-
-The gate itself is the =rust-template-review-stop= binary; the hook script only
-execs it.  The binary comes from the template repository's flake — the
-=foundation= input — through this project's dev shell, so inside =nix develop=
-(or with direnv) it is already on =PATH=, and a fix to the gate reaches this
-project on a =foundation= bump rather than a file sync.  Its behaviour and tests
-live in that repository's =review-stop= crate; do not fork the logic into the
-hook script — a hook that stops delegating to the binary is flagged by
-compliance.
-
-*Running an LLM coding agent outside the Nix dev shell* — Claude Code today, and
-any other agent that honours the same hook — requires you to put
-=rust-template-review-stop= on =PATH= yourself.  The hook does not fetch or
-build it, and how it gets there is not something this project can dictate.  Two
-routes that work: the template repository's GitHub releases carry a binary for
-every mainstream target, and cargo can build the same version the flake pins:
-
-#+begin_src sh :results none :exports code
-cargo install --git https://github.com/LoganBarnett/rust-template.git \
-  --tag v<version> rust-template-review-stop
-#+end_src
-
-Whichever route, keep it at the same version as the =foundation= input so the
-gate and the reviewer agent stay in step.  When the binary is missing, the exec
-fails and Claude Code reports the hook error on every Stop rather than silently
-skipping the gate — the loud failure is deliberate.
-
 * Logging levels
 
 Use appropriate log levels for different severity:
@@ -600,3 +565,32 @@ be:
 #+begin_quote
 1. Dependabot bumps merge on their own again.  No action needed.
 #+end_quote
+
+* Code review
+
+The project ships an on-demand code review: =just review= sends the current
+change set to a nested reviewer that judges it against the project's convention
+documents and your own =~/.claude/CLAUDE.md=, and reports what stands.  Claude
+Code users are expected to run it before opening a pull request, and to address
+what it reports:
+
+#+begin_src sh :results none :exports code
+just review --diff branch
+#+end_src
+
+=--diff branch= judges everything the branch would land against the default
+branch, committed or not; =--diff head= narrows that to the uncommitted work in
+progress.  The dev shell provides the tool, but the reviewer it drives is your
+own =claude= install, which must be on =PATH=.
+
+A run that found something and a run that broke must not look alike, so the exit
+code tells them apart: 0 means the changes conform, 1 means the review ran and
+something stands against them, and 2 means it could not judge the tree in full.
+=just= reports both 1 and 2 as a failed recipe, so read the code: a 1 with
+findings printed above it is the tool working, not breaking.
+
+Verdicts are recorded per file in =review.json= (ignored by git), so a re-run
+judges only the files that changed since; pass =--priors clear= to judge the
+recorded files afresh.  =--help= covers the rest.
+
+Nothing in CI runs the review on your behalf.

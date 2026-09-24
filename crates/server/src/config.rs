@@ -73,7 +73,6 @@ pub struct Config {
   /// Unix socket, or sd-listen to inherit from systemd.
   #[merge_config(
     name = "listen",
-    env,
     default = "\"127.0.0.1:3000\".to_string()",
     parse
   )]
@@ -82,19 +81,19 @@ pub struct Config {
   /// Base URL of this service (e.g. https://sonify.example.com),
   /// used by foundation to construct the OIDC redirect URI and
   /// shared with the OIDC handlers.
-  #[merge_config(env, default = "\"http://localhost:3000\".to_string()")]
+  #[merge_config(default = "\"http://localhost:3000\".to_string()")]
   pub base_url: String,
 
   /// Audio device substring for output device selection.  Match is
   /// case-insensitive against both cpal's device ID and description.
-  #[merge_config(env, default = "None")]
+  #[merge_config(default = "None")]
   pub audio_device: Option<String>,
 
   /// Run without opening an audio device.  Pollers, WebSocket
   /// state, frontend, and metrics keep working; intended for
   /// speakerless servers whose state will be rendered by another
   /// instance subscribed to this one.
-  #[merge_config(env, default = "false")]
+  #[merge_config(default = "false")]
   pub headless: bool,
 
   #[merge_config(skip)]
