@@ -98,9 +98,8 @@ tracing = "0.1"
 # Installs the subscriber that filters and renders those logs — env-filter
 # honours RUST_LOG, and the json / fmt features select the output shape.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
-# Enables method chaining and reduces superfluous local variables that only
-# exist to name intermediate results.  Prefer .tap() over temporary variables
-# when it improves readability.
+# No crate calls `tap` today, so a dependency-pruning pass would drop it; it
+# stays so a chain can log or inspect mid-flow without breaking into locals.
 tap = "1.0"
 # Derive-based argument parsing for the cli and server binaries; the env
 # feature lets flags fall back to environment variables.

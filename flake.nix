@@ -286,11 +286,14 @@
             # template.  Run locally as `just dependency-bump` to bump and
             # compose changelog entries in the working tree for review.
             foundation.packages.${system}.dependency-bump
-            # Blocks a Claude Code turn from ending on un-reviewed changes
-            # until the template-compliance review passes.
-            foundation.packages.${system}.review-stop
             # The structural compliance checker.
             foundation.packages.${system}.compliance-cli
+            # On-demand code review that judges a change set against the
+            # project's conventions; provided by the foundation flake rather
+            # than copied in, so it stays current with the template.  Run as
+            # `just review`.  The reviewer it drives is your own `claude`
+            # install, which this shell does not provide.
+            foundation.packages.${system}.review
             # ABI baseline check used by the reusable CI workflow's `abi`
             # job.  Compares the workspace's current public API against the
             # previous version on crates.io and reports breaking changes;
