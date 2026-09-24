@@ -6,6 +6,8 @@
 ** Fixes
 ** Breaking
 ** Maintenance
+* v0.37.0
+** Maintenance
 1. Bumped the ~crane~ and ~rust-overlay~ flake inputs.  No action needed.
 2. Synced the project to rust-template v0.133.0, which retires the Claude Code
    review Stop hook in favour of an on-demand ~just review~.  No action needed.
