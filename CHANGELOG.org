@@ -3,6 +3,11 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.38.0
+** Added
 1. Patches have a new ~lowpass~ parameter that cuts high frequencies.  No action
    needed.
 ** Fixes
