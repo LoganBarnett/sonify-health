@@ -82,6 +82,7 @@ fn gen_params_const(
       let min = vf.min;
       let max = vf.max;
       let step = vf.step;
+      let logarithmic = vf.logarithmic;
       let desc = &vf.description;
       quote! {
         PatchParamMeta {
@@ -90,6 +91,7 @@ fn gen_params_const(
           min: #min,
           max: #max,
           step: #step,
+          logarithmic: #logarithmic,
         }
       }
     })
@@ -116,8 +118,13 @@ fn gen_set_get_param(
     .map(|vf| {
       let ident = &vf.ident;
       let field_name = vf.ident.to_string();
+      let min = vf.min;
+      let max = vf.max;
       quote! {
-        #field_name => self.#ident = value,
+        #field_name => {
+          self.#ident = value.clamp(#min, #max);
+          true
+        }
       }
     })
     .collect();
@@ -135,14 +142,16 @@ fn gen_set_get_param(
 
   quote! {
     impl #name {
-      /// Set a patch parameter by name.  Returns `true`
-      /// if the name matched a known parameter.
+      /// Set a patch parameter by name, clamped to the parameter's
+      /// declared bounds.  Returns `true` if the name matched a known
+      /// parameter; a non-finite value is rejected the same way an
+      /// unknown name is.
       pub fn set_param(&mut self, name: &str, value: f64) -> bool {
-        match name {
-          #(#set_arms)*
-          _ => return false,
-        }
-        true
+        value.is_finite()
+          && match name {
+            #(#set_arms)*
+            _ => false,
+          }
       }
 
       /// Get a patch parameter by name.

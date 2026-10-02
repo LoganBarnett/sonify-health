@@ -159,19 +159,23 @@ pub struct AudioOutput {
 }
 
 impl AudioOutput {
-  /// Open an audio device and play the given graph.
+  /// Open an audio device and play the graph the builder produces.  The builder
+  /// receives the device's sample rate, which graph construction needs before
+  /// the device is open (filter stages are included or bypassed
+  /// rate-dependently).
   ///
   /// When `device_name` is `Some`, the named output device is used
   /// (substring match, case-insensitive).  When `None`, the system
   /// default output device is used.
   pub fn play(
-    mut graph: Box<dyn AudioUnit>,
+    build_graph: impl FnOnce(f64) -> Box<dyn AudioUnit>,
     device_name: Option<&str>,
   ) -> Result<Self, AudioError> {
     let (device, stream_config) = resolve_device(device_name)?;
     let sample_rate = stream_config.sample_rate as f64;
     let channels = stream_config.channels as usize;
 
+    let mut graph = build_graph(sample_rate);
     graph.set_sample_rate(sample_rate);
     graph.allocate();
 
@@ -212,11 +216,11 @@ impl AudioOutput {
 
   /// Play a graph on the given device for the given duration, then stop.
   pub fn play_for(
-    graph: Box<dyn AudioUnit>,
+    build_graph: impl FnOnce(f64) -> Box<dyn AudioUnit>,
     duration: std::time::Duration,
     device_name: Option<&str>,
   ) -> Result<(), AudioError> {
-    let _output = Self::play(graph, device_name)?;
+    let _output = Self::play(build_graph, device_name)?;
     std::thread::sleep(duration);
     Ok(())
   }
