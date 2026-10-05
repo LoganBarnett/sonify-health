@@ -2,11 +2,11 @@
 # -c 1: send one packet (--count).  -W N: seconds to wait for a
 # reply (--linger).
 [[heartbeats]]
-command = '''
+command = """
 gw=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
 [ -z "$gw" ] && gw=$(route -n get default 2>/dev/null | awk '/gateway/ {print $2}')
 ping -c 1 -W 2 "$gw"
-'''
+"""
 crossfade_ms = 6.0
 cycle_offset_secs = 0.0
 cycle_secs = 15.0
@@ -16,10 +16,11 @@ playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
 result_mode = "exit-code"
+tiers = []
 
 [[heartbeats.notes]]
 offset = 0.0
-volume = 1.0
+volume = 0.33
 
 [heartbeats.notes.transition]
 type = "discrete"
@@ -34,7 +35,7 @@ threshold = 1.01
 
 [[heartbeats.notes]]
 offset = 0.2
-volume = 1.0
+volume = 0.33
 
 [heartbeats.notes.transition]
 type = "discrete"
@@ -59,10 +60,11 @@ playback = "clock"
 poll_interval_secs = 10.0
 repeat_rate = 1.0
 result_mode = "exit-code"
+tiers = []
 
 [[heartbeats.notes]]
 offset = 0.0
-volume = 1.0
+volume = 0.3
 
 [heartbeats.notes.transition]
 type = "discrete"
@@ -77,7 +79,7 @@ threshold = 1.01
 
 [[heartbeats.notes]]
 offset = 0.2
-volume = 1.0
+volume = 0.3
 
 [heartbeats.notes.transition]
 type = "discrete"
@@ -101,6 +103,7 @@ playback = "loop"
 poll_interval_secs = 5.0
 repeat_rate = 1.0
 result_mode = "stdout"
+tiers = []
 
 [[heartbeats.notes]]
 offset = 0.0
@@ -116,6 +119,7 @@ type = "gradient"
 [[heartbeats.notes.transition.segments]]
 intensity = 5.3
 strategy = "linear"
+
 [patches.star-trek-error]
 amplitude = 0.54
 chirp_ratio = 0.8
@@ -180,7 +184,7 @@ freq = 60.0
 gap = 0.0
 harshness_offset = 0.0
 highpass = 0.0
-lowpass = 18000.0
+lowpass = 321.0
 noise_mix = 1.0
 release_ms = 200.0
 resonance = 5.0

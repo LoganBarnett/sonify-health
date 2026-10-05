@@ -34,8 +34,9 @@ path explicitly.
 1. Add a ~LoadCredential~ entry in ~nix/modules/nixos-server.nix~.
 2. In ~crates/cli/src/config.rs~, follow the existing pattern: try the explicit
    option first, fall back to ~credential_secret_path~, then error.
-3. On Darwin, pass the file path via ~sonify_health_oidc_client_secret_file~ (or
-   the equivalent new variable) in ~nix/modules/darwin-server.nix~ — launchd has
-   no ~LoadCredential~ equivalent.  Env-var names follow the POSIX-conformant
-   ~<app>_<flag>~ lowercase convention emitted by ~MergeConfig~; see
-   foundation's ~USAGE.org~ for the rule.
+3. On Darwin, pass the file path through an environment variable in
+   ~nix/modules/darwin-server.nix~, the way the service helper passes
+   ~sonify_health_oidc_client_secret_file~ — launchd has no ~LoadCredential~
+   equivalent.  Env-var names follow the POSIX-conformant ~<app>_<flag>~
+   lowercase convention emitted by ~MergeConfig~; see foundation's ~USAGE.org~
+   for the rule.
