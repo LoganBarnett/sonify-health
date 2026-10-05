@@ -69,4 +69,8 @@ in
       # Referencing the derivation here also makes it a build dependency, so
       # the Elm bundle is compiled before the crate build runs.
       SONIFY_HEALTH_FRONTEND_DIR = "${elmFrontend}";
+      # `lib.getExe` falls back to the package name, with a warning, for a
+      # package that does not name its main program.  The service modules
+      # launch this package through it.
+      meta.mainProgram = "sonify-health-server";
     })

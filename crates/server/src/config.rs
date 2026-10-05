@@ -54,6 +54,14 @@ pub struct ServerCliFields {
   pub oidc_client_secret_file: Option<PathBuf>,
 }
 
+/// OIDC client settings before the redirect base joins them.
+#[derive(Debug, Clone)]
+pub struct OidcClientSettings {
+  pub issuer: String,
+  pub client_id: String,
+  pub client_secret: String,
+}
+
 // ── Config ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, MergeConfig)]
@@ -109,7 +117,7 @@ pub struct Config {
   pub slider_ranges: SliderRanges,
 
   #[merge_config(skip)]
-  pub oidc: Option<OidcConfig>,
+  pub oidc: Option<OidcClientSettings>,
 
   /// Path the config was actually loaded from (either the explicit
   /// `--config` argument or the XDG fallback).  Distinct from the
@@ -168,7 +176,7 @@ impl Config {
   fn resolve_oidc(
     cli: &CliRaw,
     file: &ConfigFileRaw,
-  ) -> Result<Option<OidcConfig>, LibConfigError> {
+  ) -> Result<Option<OidcClientSettings>, LibConfigError> {
     let file_oidc = file.extra.oidc.as_ref();
     let issuer = cli
       .extra
@@ -206,7 +214,7 @@ impl Config {
             source,
           })?;
 
-        Ok(Some(OidcConfig {
+        Ok(Some(OidcClientSettings {
           issuer: iss.clone(),
           client_id: cid.clone(),
           client_secret,
@@ -286,8 +294,15 @@ impl ServerApp for Config {
     vec![ServerRunConfig {
       app_name: Self::app_name().to_string(),
       listen_address: self.listen_address.clone(),
-      base_url: self.base_url.clone(),
-      oidc: self.oidc.clone(),
+      // A resolver for a skipped field sees only the raw flags and file,
+      // not the merged `base_url`, so `resolve_oidc` cannot build
+      // foundation's `OidcConfig` itself.  The redirect base joins here.
+      oidc: self.oidc.as_ref().map(|oidc| OidcConfig {
+        base_url: self.base_url.clone(),
+        issuer: oidc.issuer.clone(),
+        client_id: oidc.client_id.clone(),
+        client_secret: oidc.client_secret.clone(),
+      }),
     }]
   }
 }

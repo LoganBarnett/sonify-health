@@ -21,13 +21,22 @@
     "3aff6a8dd8a29355b7e52b0f68759fad8dc01fc0",
     "7429f551bbafa25d9de80479105e4c21aac8173b",
     "e459313d70ea25ed15d5f78241d1cf9e8e838ec6",
-    "e343806b07815d899897a7aab2e8604439551e59"
+    "e343806b07815d899897a7aab2e8604439551e59",
+    "25aed9a0e9559e9a4d2bb96473c8ec3e386f86ee"
   ],
   "apple-frameworks": true,
   "compliance-ignores": [
     {
       "id": "server-integration-test-present",
       "reason": "the server crate's integration tests live under domain-specific names (websocket_test.rs, supervision_test.rs, remote_mirror_test.rs, override_isolation_test.rs) rather than the emitted integration_test.rs"
+    },
+    {
+      "id": "darwin-module-calls-foundation-helper",
+      "reason": "the darwin module calls a local copy of the helper (nix/lib/mkDarwinService.nix) that launches lib.getExe cfg.package, because the foundation helper launches bin/<name> and this project's binary is not named after its service; remove once the foundation helper resolves the executable from the package"
+    },
+    {
+      "id": "nixos-module-calls-foundation-helper",
+      "reason": "the NixOS module calls a local copy of the helper (nix/lib/mkNixosService.nix) that launches lib.getExe cfg.package, because the foundation helper launches bin/<name> and this project's binary is not named after its service; remove once the foundation helper resolves the executable from the package"
     }
   ],
   "workspaces": {
