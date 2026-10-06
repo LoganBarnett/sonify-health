@@ -25,7 +25,7 @@ rust-template-foundation = { workspace = true, features = ["cli"] }
 clap = { workspace = true }
 # The Wave buffer rendered audio is collected into, and its WAV encoder.
 fundsp = { workspace = true }
-# Required by the `MergeConfig` derive — the generated `ConfigFileRaw` carries
+# Required by the `MergeConfig` derive -- the generated `ConfigFileRaw` carries
 # `#[derive(serde::Deserialize)]`, so serde must be visible to this crate even
 # though its own source does not `use` it directly.
 serde = { workspace = true }

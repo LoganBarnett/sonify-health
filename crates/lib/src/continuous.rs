@@ -1,15 +1,21 @@
-use crate::heartbeat::{cutoff_ceiling, highpass_cutoff, lowpass_cutoff};
+use crate::downsample::exact_hold_hz;
+use crate::heartbeat::{
+  cutoff_ceiling, highpass_cutoff, lowpass_cutoff, oscillator_bank, pitch_hz,
+  reverb_stage, waveform_weights, OSCILLATOR_PHASE,
+};
 use crate::patch::Patch;
 use fundsp::net::Net;
-use fundsp::prelude32::*;
+use fundsp::prelude32::{
+  dc, dcblock, delay, feedback, follow, highpass_q, lfo, lowpass_q, map, moog,
+  pan, pass, pink, shared, var, An, AudioNode, AudioUnit, Frame, U0, U1,
+};
 use fundsp::shared::Shared;
 
 /// Dynamically morphable parameters driven by `Shared` controls.
 /// The audio graph reads these via `var() >> follow()`, so changes
 /// propagate smoothly at the audio sample rate.  Parameters that
-/// only matter for finite envelopes (attack, release, sustain,
-/// duration, chirp_ratio) are omitted — the continuous graph
-/// sustains indefinitely.
+/// only shape the finite ADSR envelope are omitted -- the continuous
+/// graph sustains indefinitely.
 pub struct ContinuousControls {
   pub freq: Shared,
   pub sine_w: Shared,
@@ -40,11 +46,11 @@ pub struct ContinuousControls {
 impl ContinuousControls {
   /// Initialize all `Shared` values from a patch snapshot.
   pub fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
-    let (sine_w, tri_w, saw_w, square_w) = normalized_weights(patch);
+    let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
     let (cutoff, q) = filter_params(patch, sample_rate);
 
     ContinuousControls {
-      freq: shared(patch.freq as f32),
+      freq: shared(pitch_hz(patch)),
       sine_w: shared(sine_w),
       tri_w: shared(tri_w),
       saw_w: shared(saw_w),
@@ -70,10 +76,10 @@ impl ContinuousControls {
   /// Write new values into all `Shared` controls.  The graph's
   /// `follow()` nodes smooth the transition at the audio rate.
   pub fn update_from_patch(&self, patch: &Patch, sample_rate: f64) {
-    let (sine_w, tri_w, saw_w, square_w) = normalized_weights(patch);
+    let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
     let (cutoff, q) = filter_params(patch, sample_rate);
 
-    self.freq.set_value(patch.freq as f32);
+    self.freq.set_value(pitch_hz(patch));
     self.sine_w.set_value(sine_w);
     self.tri_w.set_value(tri_w);
     self.saw_w.set_value(saw_w);
@@ -98,22 +104,9 @@ impl ContinuousControls {
   }
 }
 
-/// Normalize waveform ratio weights so they sum to 1.0.
-fn normalized_weights(patch: &Patch) -> (f32, f32, f32, f32) {
-  let total =
-    patch.sine_ratio + patch.tri_ratio + patch.saw_ratio + patch.square_ratio;
-  let norm = if total > 0.0 { 1.0 / total } else { 1.0 } as f32;
-  (
-    patch.sine_ratio as f32 * norm,
-    patch.tri_ratio as f32 * norm,
-    patch.saw_ratio as f32 * norm,
-    patch.square_ratio as f32 * norm,
-  )
-}
-
-/// Derive filter cutoff and Q from frequency, brightness, and resonance.
+/// Derive filter cutoff and Q from pitch, brightness, and resonance.
 fn filter_params(patch: &Patch, sample_rate: f64) -> (f32, f32) {
-  let cutoff = (patch.freq as f32 * 13.0 * patch.brightness as f32)
+  let cutoff = (pitch_hz(patch) * 13.0 * patch.brightness as f32)
     .min(cutoff_ceiling(sample_rate));
   let q = 0.5 * patch.resonance as f32;
   (cutoff, q)
@@ -145,6 +138,9 @@ pub struct StructuralParams {
   pub reverb_mix: f32,
   pub stereo_pan: f32,
   pub downsample: f32,
+  /// An oscillator's start phase is fixed when it is built, so a change
+  /// needs a rebuild.
+  pub sub_phase: f32,
   /// Filter stages exist or don't in the topology, so crossing a bypass
   /// boundary is a structural change.
   pub highpass_bypassed: bool,
@@ -159,10 +155,36 @@ impl StructuralParams {
       reverb_mix: patch.reverb_mix as f32,
       stereo_pan: patch.stereo_pan as f32,
       downsample: patch.downsample as f32,
+      sub_phase: patch.sub_phase as f32,
       highpass_bypassed: highpass_cutoff(patch).is_none(),
       lowpass_bypassed: lowpass_cutoff(patch, sample_rate).is_none(),
     }
   }
+}
+
+/// Pitch in Hz, scaled by `octave_scale`, with vibrato and FM applied.  The
+/// `Shared`s are read inside the lfo so an edit takes effect at once.
+fn modulated_pitch(
+  controls: &ContinuousControls,
+  octave_scale: f32,
+) -> An<impl AudioNode<Inputs = U0, Outputs = U1>> {
+  let freq = controls.freq.clone();
+  let vib_rate = controls.vibrato_rate.clone();
+  let vib_depth = controls.vibrato_depth.clone();
+  let fm_ratio = controls.fm_ratio.clone();
+  let fm_depth = controls.fm_depth.clone();
+  lfo(move |t: f32| {
+    let base = freq.value() * octave_scale;
+    let vib = 2f64.powf(
+      vib_depth.value() as f64
+        * (std::f64::consts::TAU * vib_rate.value() as f64 * t as f64).sin()
+        / 12.0,
+    ) as f32;
+    let fm_freq = base * fm_ratio.value();
+    let fm_mod =
+      fm_depth.value() * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
+    (base * vib + fm_mod).max(0.01)
+  })
 }
 
 /// Build a continuously sustaining audio graph driven by `Shared`
@@ -177,40 +199,17 @@ pub fn continuous_graph(
   smoothing_secs: f64,
   structural: &StructuralParams,
   external_volume: Option<&Shared>,
+  noise_seed: u64,
 ) -> Box<dyn AudioUnit> {
   let smooth = smoothing_secs as f32;
-
-  // Smoothed waveform weights.
-  let sine_w_smooth = var(&controls.sine_w) >> follow(smooth);
-  let tri_w_smooth = var(&controls.tri_w) >> follow(smooth);
-  let saw_w_smooth = var(&controls.saw_w) >> follow(smooth);
-  let square_w_smooth = var(&controls.square_w) >> follow(smooth);
-
-  // Modulation parameters read directly in lfo closures — they
-  // oscillate already, so additional follow() smoothing is
-  // unnecessary.
-  let vib_rate = controls.vibrato_rate.clone();
-  let vib_depth = controls.vibrato_depth.clone();
-  let fm_ratio_s = controls.fm_ratio.clone();
-  let fm_depth_s = controls.fm_depth.clone();
-
-  // Frequency modulation via vibrato and FM synthesis.  The lfo
-  // reads the current Shared values each sample so changes appear
-  // immediately in the modulation.
-  let freq_for_lfo = controls.freq.clone();
-  let freq_mod = lfo(move |t: f32| {
-    let base = freq_for_lfo.value();
-    let vr = vib_rate.value();
-    let vd = vib_depth.value() as f64;
-    let vib = 2f64
-      .powf(vd * (std::f64::consts::TAU * vr as f64 * t as f64).sin() / 12.0)
-      as f32;
-    let fmr = fm_ratio_s.value();
-    let fmd = fm_depth_s.value();
-    let fm_freq = base * fmr;
-    let fm_mod = fmd * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
-    (base * vib + fm_mod).max(0.01)
-  });
+  let weights = || {
+    (
+      var(&controls.sine_w) >> follow(smooth),
+      var(&controls.tri_w) >> follow(smooth),
+      var(&controls.saw_w) >> follow(smooth),
+      var(&controls.square_w) >> follow(smooth),
+    )
+  };
 
   // Tremolo amplitude modulation via lfo.
   let trem_rate = controls.tremolo_rate.clone();
@@ -223,29 +222,12 @@ pub fn continuous_graph(
       as f32
   });
 
-  // Main waveform: four oscillators weighted by smoothed Shared
-  // values.  `freq_mod` drives oscillator pitch with vibrato/FM
-  // baked in.
-  let waveform = (sine() * sine_w_smooth)
-    & (triangle() * tri_w_smooth)
-    & (saw() * saw_w_smooth)
-    & (square() * square_w_smooth);
-  let main_osc = freq_mod >> waveform;
-
-  // Sub-oscillator at half frequency.
-  let sub_freq_smooth = var(&controls.freq)
-    >> follow(smooth)
-    >> map(|f: &Frame<f32, U1>| f[0] * 0.5);
-  let sub_sine_w = var(&controls.sine_w) >> follow(smooth);
-  let sub_tri_w = var(&controls.tri_w) >> follow(smooth);
-  let sub_saw_w = var(&controls.saw_w) >> follow(smooth);
-  let sub_square_w = var(&controls.square_w) >> follow(smooth);
-  let sub_waveform = (sine() * sub_sine_w)
-    & (triangle() * sub_tri_w)
-    & (saw() * sub_saw_w)
-    & (square() * sub_square_w);
+  let main_osc = modulated_pitch(controls, 1.0)
+    >> oscillator_bank(OSCILLATOR_PHASE, weights());
   let sub_mix = var(&controls.sub_octave) >> follow(smooth);
-  let sub_osc = (sub_freq_smooth >> sub_waveform) * sub_mix;
+  let sub_osc = (modulated_pitch(controls, 0.5)
+    >> oscillator_bank(OSCILLATOR_PHASE + structural.sub_phase, weights()))
+    * sub_mix;
 
   // Drive via map() closure reading Shared, since shape(Tanh(..))
   // bakes the drive value at construction.
@@ -281,13 +263,14 @@ pub fn continuous_graph(
   let ds_rate = 100_000.0_f32 / 2.0_f32.powf(structural.downsample * 8.0);
 
   // Assemble signal chain (same topology as heartbeat_graph).
-  let signal =
-    (main_osc + sub_osc) >> drive_map >> (pass() + (pink() * noise_mix_smooth));
+  let signal = (main_osc + sub_osc)
+    >> drive_map
+    >> (pass() + (pink().seed(noise_seed) * noise_mix_smooth));
   let mono = (signal | cutoff_smooth | q_smooth)
     >> (moog() * amp_smooth * trem_mod * ext_vol)
     >> dcblock()
     >> crush_map
-    >> hold_hz(ds_rate, 0.0);
+    >> exact_hold_hz(ds_rate);
   // Filter stages are topological: a bypassed filter contributes no node (see
   // `StructuralParams`), and an engaged one reads its smoothed Shared cutoff so
   // live edits sweep.  `follow()` snaps on its first sample, so a fresh graph
@@ -307,10 +290,13 @@ pub fn continuous_graph(
   .fold(Net::wrap(Box::new(mono)), |acc, stage| acc >> stage);
   let tail = (pass()
     & (feedback(delay(structural.echo_delay) * 0.3) * structural.echo_mix))
-    >> pan(structural.stereo_pan)
-    >> reverb_stereo(0.3, 0.8, structural.reverb_mix);
+    >> pan(structural.stereo_pan);
 
-  Box::new(filtered >> Net::wrap(Box::new(tail)))
+  Box::new(
+    reverb_stage(structural.reverb_mix)
+      .into_iter()
+      .fold(filtered >> Net::wrap(Box::new(tail)), |acc, stage| acc >> stage),
+  )
 }
 
 /// Multi-note continuous graph: one independent `continuous_graph`
@@ -329,13 +315,18 @@ pub fn continuous_graph_with_notes(
   let mut all_controls = Vec::with_capacity(patches.len());
   let mut all_structural = Vec::with_capacity(patches.len());
 
-  let mut iter = patches.iter().map(|(patch, volume)| {
+  let mut iter = patches.iter().enumerate().map(|(index, (patch, volume))| {
     let mut p = patch.clone();
     p.amplitude *= *volume;
     let controls = ContinuousControls::from_patch(&p, sample_rate);
     let structural = StructuralParams::from_patch(&p, sample_rate);
-    let graph =
-      continuous_graph(&controls, smoothing_secs, &structural, external_volume);
+    let graph = continuous_graph(
+      &controls,
+      smoothing_secs,
+      &structural,
+      external_volume,
+      crate::heartbeat::NOISE_SEED_BASE + index as u64,
+    );
     all_controls.push(controls);
     all_structural.push(structural);
     Net::wrap(graph)
@@ -367,7 +358,13 @@ mod tests {
     let patch = Patch::default();
     let controls = ContinuousControls::from_patch(&patch, 44100.0);
     let structural = StructuralParams::from_patch(&patch, 44100.0);
-    let mut graph = continuous_graph(&controls, 0.5, &structural, None);
+    let mut graph = continuous_graph(
+      &controls,
+      0.5,
+      &structural,
+      None,
+      crate::heartbeat::NOISE_SEED_BASE,
+    );
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -418,7 +415,13 @@ mod tests {
   fn rendered_mean_square(patch: &Patch) -> f32 {
     let controls = ContinuousControls::from_patch(patch, 44100.0);
     let structural = StructuralParams::from_patch(patch, 44100.0);
-    let mut graph = continuous_graph(&controls, 0.05, &structural, None);
+    let mut graph = continuous_graph(
+      &controls,
+      0.05,
+      &structural,
+      None,
+      crate::heartbeat::NOISE_SEED_BASE,
+    );
     graph.set_sample_rate(44100.0);
     graph.allocate();
 
@@ -502,5 +505,127 @@ mod tests {
     assert!(a.lowpass_bypassed);
     assert!(!d.lowpass_bypassed);
     assert_ne!(a, d);
+
+    // A start phase is baked into the oscillator at build time.
+    let turned = Patch {
+      sub_phase: 0.25,
+      ..lo.clone()
+    };
+    assert_ne!(a, StructuralParams::from_patch(&turned, 44100.0));
+  }
+
+  #[test]
+  fn controls_apply_detune_and_harshness() {
+    let patch = Patch {
+      freq: 200.0,
+      detune: 100.0,
+      sine_ratio: 1.0,
+      saw_ratio: 1.0,
+      harshness_offset: 1.0,
+      ..Default::default()
+    };
+    let controls = ContinuousControls::from_patch(&patch, 44100.0);
+    assert!(
+      (controls.freq.value() - 200.0 * 2f32.powf(1.0 / 12.0)).abs() < 0.01
+    );
+    assert_eq!(controls.sine_w.value(), 0.0);
+    assert_eq!(controls.saw_w.value(), 1.5);
+    assert!(
+      (controls.filter_cutoff.value() - controls.freq.value() * 13.0).abs()
+        < 0.01
+    );
+  }
+
+  /// First `count` values of a control-rate pitch node, sampled every 10 ms.
+  fn pitch_samples(
+    pitch: &mut An<impl AudioNode<Inputs = U0, Outputs = U1>>,
+    count: usize,
+  ) -> Vec<f32> {
+    pitch.set_sample_rate(44100.0);
+    pitch.reset();
+    (0..count)
+      .map(|_| (0..441).map(|_| pitch.get_mono()).last().unwrap_or(0.0))
+      .collect()
+  }
+
+  #[test]
+  fn sub_oscillator_pitch_follows_vibrato() {
+    let steady = ContinuousControls::from_patch(
+      &Patch {
+        freq: 400.0,
+        ..Default::default()
+      },
+      44100.0,
+    );
+    let flat = pitch_samples(&mut modulated_pitch(&steady, 0.5), 20);
+    assert!(flat.iter().all(|&hz| (hz - 200.0).abs() < 0.01), "{flat:?}");
+
+    let wobbling = ContinuousControls::from_patch(
+      &Patch {
+        freq: 400.0,
+        vibrato_rate: 5.0,
+        vibrato_depth: 12.0,
+        ..Default::default()
+      },
+      44100.0,
+    );
+    let moving = pitch_samples(&mut modulated_pitch(&wobbling, 0.5), 20);
+    let lowest = moving.iter().copied().fold(f32::MAX, f32::min);
+    let highest = moving.iter().copied().fold(0.0f32, f32::max);
+    assert!(lowest < 150.0 && highest > 250.0, "{moving:?}");
+  }
+
+  /// Left channel of a continuous graph over `seconds`, after a 0.1 s
+  /// settling period.
+  fn settled_left_channel(patch: &Patch, seconds: f32) -> Vec<f32> {
+    let controls = ContinuousControls::from_patch(patch, 44100.0);
+    let structural = StructuralParams::from_patch(patch, 44100.0);
+    let mut graph = continuous_graph(
+      &controls,
+      0.05,
+      &structural,
+      None,
+      crate::heartbeat::NOISE_SEED_BASE,
+    );
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+    (0..4410).for_each(|_| {
+      graph.get_stereo();
+    });
+    (0..(seconds * 44100.0) as usize)
+      .map(|_| graph.get_stereo().0)
+      .collect()
+  }
+
+  #[test]
+  fn transparent_highpass_stage_does_not_change_the_timbre() {
+    let driven = Patch {
+      freq: 110.0,
+      sine_ratio: 1.0,
+      saw_ratio: 1.0,
+      drive: 4.0,
+      sub_octave: 0.6,
+      reverb_mix: 0.0,
+      ..Default::default()
+    };
+    let plain = settled_left_channel(&driven, 0.25);
+    let staged = settled_left_channel(
+      &Patch {
+        highpass: 0.5,
+        ..driven
+      },
+      0.25,
+    );
+    let rms = |s: &[f32]| {
+      (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+    };
+    let diff: Vec<f32> =
+      plain.iter().zip(&staged).map(|(a, b)| a - b).collect();
+    let difference = rms(&diff) / rms(&plain);
+    assert!(
+      difference < 0.03,
+      "a 0.5 Hz highpass stage changed the render by {:.1}% RMS",
+      difference * 100.0
+    );
   }
 }

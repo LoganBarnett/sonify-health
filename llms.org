@@ -89,6 +89,12 @@ service from scratch.  The existing HTTP routes (=/healthz=, =/metrics=, =/me=,
 
 These are instructions for LLMs to write code more to my liking.
 
+** Character Sets
+
+Do not write using characters that are difficult to type.  Use equivalents
+instead.  Typable characters are assigned on a typical US keyboard, or reachable
+via a chord such as shift on the same type of keyboard.
+
 ** Documents
 
 When authoring new content, make them ~org-mode~ files.

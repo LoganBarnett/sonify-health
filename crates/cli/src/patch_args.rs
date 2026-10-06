@@ -88,6 +88,10 @@ pub struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   sub_octave: Option<f64>,
 
+  /// Override the sub-octave's start phase, in turns (0 to 1).
+  #[arg(long, help_heading = "Patch overrides")]
+  sub_phase: Option<f64>,
+
   /// Override vibrato rate (Hz).
   #[arg(long, help_heading = "Patch overrides")]
   vibrato_rate: Option<f64>,
@@ -168,6 +172,7 @@ impl CliPatchOverrides {
       highpass: self.highpass,
       lowpass: self.lowpass,
       sub_octave: self.sub_octave,
+      sub_phase: self.sub_phase,
       vibrato_rate: self.vibrato_rate,
       vibrato_depth: self.vibrato_depth,
       tremolo_rate: self.tremolo_rate,

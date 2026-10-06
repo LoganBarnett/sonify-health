@@ -72,7 +72,7 @@ mod tests {
   }
 
   // A search over patch parameters compares renders by their loss, which only
-  // means something when the same patch always renders the same samples —
+  // means something when the same patch always renders the same samples --
   // including through the noise generator.
   #[test]
   fn the_same_patch_renders_the_same_frames() {

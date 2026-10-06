@@ -1,6 +1,11 @@
+use crate::downsample::exact_hold_hz;
 use crate::patch::Patch;
 use fundsp::net::Net;
-use fundsp::prelude32::*;
+use fundsp::prelude32::{
+  dc, dcblock, delay, envelope, feedback, follow, highpass_hz, lfo, lowpass_hz,
+  moog, multipass, pan, pass, pink, reverb_stereo, saw, shape, sine, square,
+  triangle, var, An, AudioNode, AudioUnit, Crush, Tanh, U0, U1, U2,
+};
 use fundsp::shared::Shared;
 use std::time::Duration;
 
@@ -67,10 +72,103 @@ fn with_filter_stages(mono: Net, patch: &Patch, sample_rate: f64) -> Net {
   .fold(mono, |acc, stage| acc >> stage)
 }
 
-/// Total wall-clock duration of a multi-note heartbeat.  Each note
-/// is independently timed from its offset, so the duration is the
-/// maximum across all notes of `offset + attack + duration + release
-/// + echo_tail`, plus a safety margin.
+/// Start phase, in turns, of every oscillator in every graph.
+///
+/// Engaging a filter stage or adding a note changed a driven patch's timbre (a
+/// 20 Hz highpass stage shifted a 33 Hz partial by 7 dB): left unset, fundsp
+/// starts each oscillator at a phase drawn from a hash of the whole graph, and
+/// `Net` rehashes on every structural change, which moves every start phase
+/// and, through the drive stage, the timbre.  Zero puts every waveform at a
+/// rising zero crossing.
+pub(crate) const OSCILLATOR_PHASE: f32 = 0.0;
+
+/// Seed of the pink-noise source.  Unseeded, fundsp draws the noise sequence
+/// from the graph hash, which the same structural changes reshuffle.  Notes
+/// sounding together would otherwise share one sequence, so each adds its
+/// index.
+pub(crate) const NOISE_SEED_BASE: u64 = 1;
+
+/// Room size, in metres, of the hall every patch's reverb runs through.
+pub(crate) const REVERB_ROOM_M: f32 = 10.0;
+
+/// Decay argument handed to fundsp's reverb.  The tail it produces lasts about
+/// 1.6 times this value (measured: 1.12 s at 0.7): fundsp derives the per-pass
+/// gain from a nominal 30 ms delay line while the lines it builds average
+/// 62 ms.  `reverb_tail_decays_within_budget` keeps the realised tail inside
+/// `REVERB_TAIL_SECS`.
+pub(crate) const REVERB_TIME_S: f32 = 0.95;
+
+/// High-frequency damping of the hall, in fundsp's 0..1.
+pub(crate) const REVERB_DAMPING: f32 = 0.5;
+
+/// Gain on the wet path, fixed by `reverb_mix_preserves_sustained_loudness` so
+/// a sustained tone at `reverb_mix = 1` lands within 3 dB of the dry tone.
+pub(crate) const REVERB_WET_GAIN: f32 = 5.6;
+
+/// Seconds a note's reverb tail is given before its slot is removed.
+pub(crate) const REVERB_TAIL_SECS: f64 = 1.8;
+
+/// Pitch in Hz after `detune`, which both graphs apply to every oscillator.
+pub(crate) fn pitch_hz(patch: &Patch) -> f32 {
+  patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0)
+}
+
+/// Waveform weights as (sine, triangle, saw, square): the ratios normalised to
+/// sum to one, then `harshness_offset` moves weight from sine to saw.
+pub(crate) fn waveform_weights(patch: &Patch) -> (f32, f32, f32, f32) {
+  let total_ratio =
+    patch.sine_ratio + patch.tri_ratio + patch.saw_ratio + patch.square_ratio;
+  let norm = if total_ratio > 0.0 {
+    1.0 / total_ratio
+  } else {
+    1.0
+  } as f32;
+  let h = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
+  (
+    (patch.sine_ratio as f32 * norm * (1.0 - h)).max(0.0),
+    patch.tri_ratio as f32 * norm,
+    (patch.saw_ratio as f32 * norm + h).max(0.0),
+    patch.square_ratio as f32 * norm,
+  )
+}
+
+/// The four waveforms, each started at `phase` and scaled by its weight,
+/// summed.  Weights arrive as nodes so that constants and smoothed `Shared`s
+/// both fit.
+pub(crate) fn oscillator_bank<W>(
+  phase: f32,
+  (sine_w, tri_w, saw_w, square_w): (An<W>, An<W>, An<W>, An<W>),
+) -> An<impl AudioNode<Inputs = U1, Outputs = U1>>
+where
+  W: AudioNode<Inputs = U0, Outputs = U1>,
+{
+  // The phase builder addresses the node it is called on, so it has to reach
+  // the bare oscillator: `Binop` would route it to the weight instead.
+  (sine().phase(phase) * sine_w)
+    & (triangle().phase(phase) * tri_w)
+    & (saw().phase(phase) * saw_w)
+    & (square().phase(phase) * square_w)
+}
+
+/// Dry/wet reverb stage, or `None` when the mix is zero so that "off" is a
+/// true bypass.
+///
+/// fundsp's `reverb_stereo` is wet-only, so the dry path is mixed in here and
+/// the room is fixed.
+pub(crate) fn reverb_stage(mix: f32) -> Option<Net> {
+  (mix > 0.0).then(|| {
+    Net::wrap(Box::new(
+      (multipass::<U2>() * (1.0 - mix))
+        & (reverb_stereo(REVERB_ROOM_M, REVERB_TIME_S, REVERB_DAMPING)
+          * (mix * REVERB_WET_GAIN)),
+    ))
+  })
+}
+
+/// Total wall-clock duration of a multi-note heartbeat.  Each note is
+/// independently timed from its offset, so the duration is the maximum across
+/// all notes of its envelope plus the echo and reverb tails it has engaged,
+/// plus a safety margin.
 pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
   if notes.is_empty() {
     return Duration::ZERO;
@@ -87,7 +185,12 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
       } else {
         0.0
       };
-      n.offset + attack + decay + p.duration + release + echo_tail
+      let reverb_tail = if p.reverb_mix > 0.0 {
+        REVERB_TAIL_SECS
+      } else {
+        0.0
+      };
+      n.offset + attack + decay + p.duration + release + echo_tail + reverb_tail
     })
     .fold(0.0f64, f64::max);
   Duration::from_secs_f64(max + 0.05)
@@ -119,15 +222,16 @@ pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
 /// Build a complete stereo graph for a single note.  All synthesis
 /// parameters are read from the note's own patch — nothing is shared
 /// with other notes.  The note is silent until `offset` seconds, then
-/// plays its full ADSR envelope with drive, noise, sub-octave, FM,
-/// tremolo, echo, pan, and reverb.
+/// plays its full ADSR envelope through the same effects chain as
+/// every other mode.
 fn note_graph(
   patch: &Patch,
   offset: f64,
   external_volume: Option<&Shared>,
   sample_rate: f64,
+  noise_seed: u64,
 ) -> Box<dyn AudioUnit> {
-  let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
+  let freq = pitch_hz(patch);
   let amp = patch.amplitude as f32;
   let attack = patch.attack_ms as f32 / 1000.0;
   let decay = patch.decay_ms as f32 / 1000.0;
@@ -154,20 +258,7 @@ fn note_graph(
   let tremolo_depth = patch.tremolo_depth;
   let fm_ratio = patch.fm_ratio as f32;
   let fm_depth = patch.fm_depth as f32;
-
-  let total_ratio =
-    patch.sine_ratio + patch.tri_ratio + patch.saw_ratio + patch.square_ratio;
-  let norm = if total_ratio > 0.0 {
-    1.0 / total_ratio
-  } else {
-    1.0
-  } as f32;
-
-  let h = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
-  let sine_w = (patch.sine_ratio as f32 * norm * (1.0 - h)).max(0.0);
-  let tri_w = patch.tri_ratio as f32 * norm;
-  let saw_w = (patch.saw_ratio as f32 * norm + h).max(0.0);
-  let square_w = patch.square_ratio as f32 * norm;
+  let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
 
   // Frequency LFO with offset gating.
   let freq_env = lfo(move |t: f32| {
@@ -215,12 +306,11 @@ fn note_graph(
     level * amp * trem
   });
 
-  // Main oscillator.
-  let waveform = (sine() * sine_w)
-    & (triangle() * tri_w)
-    & (saw() * saw_w)
-    & (square() * square_w);
-  let main_osc = freq_env >> waveform;
+  let main_osc = freq_env
+    >> oscillator_bank(
+      OSCILLATOR_PHASE,
+      (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
+    );
 
   // Sub-octave oscillator with offset gating.
   let sub_freq_env = lfo(move |t: f32| {
@@ -241,11 +331,11 @@ fn note_graph(
       fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
     (base * vib + fm_mod).max(0.01)
   });
-  let sub_waveform = (sine() * sine_w)
-    & (triangle() * tri_w)
-    & (saw() * saw_w)
-    & (square() * square_w);
-  let sub_osc = sub_freq_env >> sub_waveform;
+  let sub_osc = sub_freq_env
+    >> oscillator_bank(
+      OSCILLATOR_PHASE + patch.sub_phase as f32,
+      (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
+    );
 
   // Drive, noise, filter, effects.
   let cutoff = dc((freq * 13.0 * brightness).min(cutoff_ceiling(sample_rate)));
@@ -260,17 +350,25 @@ fn note_graph(
 
   let driven = (main_osc + (sub_osc * sub_mix))
     >> (shape(Tanh(drive)) * drive_norm)
-    >> (pass() + (pink() * noise_mix));
+    >> (pass() + (pink().seed(noise_seed) * noise_mix));
+  // Asymmetric drive leaves a DC offset as large as the signal itself (a mean
+  // of -0.0068 against an RMS of 0.011 on a driven saw with a sub-octave), and
+  // the continuous graph already blocks it; the same stage here keeps the two
+  // graphs equivalent.
   let mono = (driven | cutoff | q_val)
     >> (moog() * amp_env * ext_vol)
+    >> dcblock()
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0);
+    >> exact_hold_hz(ds_rate);
   let filtered =
     with_filter_stages(Net::wrap(Box::new(mono)), patch, sample_rate);
   let tail = (pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix))
-    >> pan(patch.stereo_pan as f32)
-    >> reverb_stereo(0.3, 0.8, patch.reverb_mix as f32);
-  Box::new(filtered >> Net::wrap(Box::new(tail)))
+    >> pan(patch.stereo_pan as f32);
+  Box::new(
+    reverb_stage(patch.reverb_mix as f32)
+      .into_iter()
+      .fold(filtered >> Net::wrap(Box::new(tail)), |acc, stage| acc >> stage),
+  )
 }
 
 /// Build a multi-note heartbeat audio graph.  Each note is rendered
@@ -283,10 +381,16 @@ pub fn heartbeat_graph_with_notes(
   external_volume: Option<&Shared>,
   sample_rate: f64,
 ) -> Box<dyn AudioUnit> {
-  let mut iter = notes.iter().map(|n| {
+  let mut iter = notes.iter().enumerate().map(|(index, n)| {
     let mut p = n.patch.clone();
     p.amplitude *= n.volume;
-    Net::wrap(note_graph(&p, n.offset, external_volume, sample_rate))
+    Net::wrap(note_graph(
+      &p,
+      n.offset,
+      external_volume,
+      sample_rate,
+      NOISE_SEED_BASE + index as u64,
+    ))
   });
   let Some(first) = iter.next() else {
     // Empty notes — return silence with the same external-volume
@@ -302,26 +406,13 @@ pub fn heartbeat_graph_with_notes(
 /// Build an audio graph for a single boop.  Duration and
 /// frequency come from the patch itself.
 pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
-  let freq = patch.freq as f32 * (2.0_f32).powf(patch.detune as f32 / 1200.0);
+  let freq = pitch_hz(patch);
   let amp = patch.amplitude as f32;
-  let harshness = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
   let attack = (patch.attack_ms / 1000.0) as f32;
   let decay = (patch.decay_ms / 1000.0) as f32;
   let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
   let dur = patch.duration as f32;
-
-  let total_ratio =
-    patch.sine_ratio + patch.tri_ratio + patch.saw_ratio + patch.square_ratio;
-  let norm = if total_ratio > 0.0 {
-    1.0 / total_ratio
-  } else {
-    1.0
-  } as f32;
-
-  let sine_w = (patch.sine_ratio as f32 * norm * (1.0 - harshness)).max(0.0);
-  let tri_w = patch.tri_ratio as f32 * norm;
-  let saw_w = (patch.saw_ratio as f32 * norm + harshness).max(0.0);
-  let square_w = patch.square_ratio as f32 * norm;
+  let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
 
   let drive = (patch.drive as f32).max(0.01);
   let drive_norm = 1.0 / drive.tanh();
@@ -339,11 +430,11 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
       fm_depth * fm_freq * (std::f32::consts::TAU * fm_freq * t).sin();
     (freq + fm_mod).max(0.01)
   });
-  let waveform = (sine() * sine_w)
-    & (triangle() * tri_w)
-    & (saw() * saw_w)
-    & (square() * square_w);
-  let main_osc = freq_source >> waveform;
+  let main_osc = freq_source
+    >> oscillator_bank(
+      OSCILLATOR_PHASE,
+      (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
+    );
 
   let sub_half = freq * 0.5;
   let sub_fm_freq = sub_half * fm_ratio;
@@ -352,11 +443,12 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
       fm_depth * sub_fm_freq * (std::f32::consts::TAU * sub_fm_freq * t).sin();
     (sub_half + fm_mod).max(0.01)
   });
-  let sub_waveform = (sine() * sine_w)
-    & (triangle() * tri_w)
-    & (saw() * saw_w)
-    & (square() * square_w);
-  let sub_osc = (sub_freq_source >> sub_waveform) * patch.sub_octave as f32;
+  let sub_osc = (sub_freq_source
+    >> oscillator_bank(
+      OSCILLATOR_PHASE + patch.sub_phase as f32,
+      (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
+    ))
+    * patch.sub_octave as f32;
   let combined = main_osc + sub_osc;
 
   let cutoff = dc(
@@ -388,11 +480,12 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
 
   let driven = combined
     >> (shape(Tanh(drive)) * drive_norm)
-    >> (pass() + (pink() * noise_mix));
+    >> (pass() + (pink().seed(NOISE_SEED_BASE) * noise_mix));
   let mono = (driven | cutoff | q_val)
     >> (moog() * env)
+    >> dcblock()
     >> shape(Crush(crush_levels))
-    >> hold_hz(ds_rate, 0.0);
+    >> exact_hold_hz(ds_rate);
   let filtered =
     with_filter_stages(Net::wrap(Box::new(mono)), patch, sample_rate);
   let tail = pass() & (feedback(delay(echo_delay) * 0.3) * echo_mix);
@@ -471,6 +564,7 @@ mod tests {
       attack_ms: 0.0,
       release_ms: 150.0,
       echo_mix: 0.0,
+      reverb_mix: 0.0,
       ..Default::default()
     };
     let notes = [ResolvedNote {
@@ -705,13 +799,13 @@ mod tests {
     assert_eq!(highpass_cutoff(&patch), Some(MAX_HIGHPASS));
   }
 
-  /// Render note_graph at various frequencies using the star-trek-ok
-  /// patch shape and measure the peak amplitude in the final 256
-  /// samples (just before the mixer would hard-remove the slot).
-  /// The Moog filter leaves residual energy at certain frequencies
-  /// (notably 440 Hz and 780 Hz).  The mixer's `remove()` method
-  /// crossfades to silence over `REMOVE_FADEOUT_FRAMES` to mask
-  /// this, but this test documents which frequencies are affected.
+  /// Render note_graph at various frequencies using the star-trek-ok patch
+  /// shape and measure the peak amplitude in the final 256 samples (just before
+  /// the mixer would hard-remove the slot).  Whatever is still sounding there
+  /// comes from the echo feedback and the reverb tail, since the envelope has
+  /// already silenced the oscillators.  The mixer's `remove()` method
+  /// crossfades to silence over `REMOVE_FADEOUT_FRAMES` to mask a small
+  /// residual, and this test documents which frequencies leave one.
   #[test]
   fn tail_residual_across_frequencies() {
     let base = Patch {
@@ -814,6 +908,259 @@ mod tests {
       severe.is_empty(),
       "Frequencies with residual too large for fadeout: {:?}",
       severe
+    );
+  }
+
+  /// A driven patch with a sub-octave and no envelope movement, so that every
+  /// control signal is constant once the note is sounding and two renders can
+  /// be compared sample for sample.
+  fn flat_patch() -> Patch {
+    Patch {
+      freq: 110.0,
+      duration: 0.3,
+      attack_ms: 0.0,
+      decay_ms: 0.0,
+      release_ms: 0.0,
+      sine_ratio: 1.0,
+      saw_ratio: 1.0,
+      drive: 4.0,
+      sub_octave: 0.6,
+      reverb_mix: 0.0,
+      ..Default::default()
+    }
+  }
+
+  fn single(patch: Patch) -> Vec<ResolvedNote> {
+    vec![ResolvedNote {
+      patch,
+      volume: 1.0,
+      offset: 0.0,
+    }]
+  }
+
+  /// Left channel of a heartbeat over `seconds`, from the start.
+  fn left_channel(notes: &[ResolvedNote], seconds: f32) -> Vec<f32> {
+    let mut graph = heartbeat_graph_with_notes(notes, None, 44100.0);
+    graph.set_sample_rate(44100.0);
+    graph.allocate();
+    (0..(seconds * 44100.0) as usize)
+      .map(|_| graph.get_stereo().0)
+      .collect()
+  }
+
+  fn rms(samples: &[f32]) -> f32 {
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+  }
+
+  /// RMS of the sample-wise difference between two renders, relative to the
+  /// RMS of the first, over the body after the first 50 ms.
+  fn relative_difference(a: &[f32], b: &[f32]) -> f32 {
+    let from = 2205;
+    let diff: Vec<f32> = a[from..]
+      .iter()
+      .zip(&b[from..])
+      .map(|(x, y)| x - y)
+      .collect();
+    rms(&diff) / rms(&a[from..])
+  }
+
+  #[test]
+  fn pitch_hz_applies_detune() {
+    let up = Patch {
+      freq: 440.0,
+      detune: 100.0,
+      ..Default::default()
+    };
+    assert!((pitch_hz(&up) - 440.0 * 2f32.powf(1.0 / 12.0)).abs() < 0.01);
+    assert_eq!(pitch_hz(&Patch::default()), 440.0);
+  }
+
+  #[test]
+  fn waveform_weights_normalise_then_shift_sine_towards_saw() {
+    let even = Patch {
+      sine_ratio: 1.0,
+      saw_ratio: 1.0,
+      ..Default::default()
+    };
+    assert_eq!(waveform_weights(&even), (0.5, 0.0, 0.5, 0.0));
+    let harsh = Patch {
+      harshness_offset: 1.0,
+      ..even
+    };
+    assert_eq!(waveform_weights(&harsh), (0.0, 0.0, 1.5, 0.0));
+    let soft = Patch {
+      harshness_offset: -2.0,
+      sine_ratio: 1.0,
+      saw_ratio: 1.0,
+      ..Default::default()
+    };
+    // The offset is clamped to -1, and a negative saw weight floors at zero.
+    assert_eq!(waveform_weights(&soft), (1.0, 0.0, 0.0, 0.0));
+  }
+
+  #[test]
+  fn later_note_does_not_change_the_first_note() {
+    let alone = left_channel(&single(flat_patch()), 0.25);
+    let with_later = [0.0, 5.0].map(|offset| ResolvedNote {
+      patch: flat_patch(),
+      volume: 1.0,
+      offset,
+    });
+    let accompanied = left_channel(&with_later, 0.25);
+    assert_eq!(alone, accompanied);
+  }
+
+  #[test]
+  fn transparent_highpass_stage_does_not_change_the_timbre() {
+    let plain = left_channel(&single(flat_patch()), 0.3);
+    let staged = left_channel(
+      &single(Patch {
+        highpass: 0.5,
+        ..flat_patch()
+      }),
+      0.3,
+    );
+    let difference = relative_difference(&plain, &staged);
+    assert!(
+      difference < 0.03,
+      "a 0.5 Hz highpass stage changed the render by {:.1}% RMS",
+      difference * 100.0
+    );
+  }
+
+  #[test]
+  fn sub_phase_changes_the_driven_timbre() {
+    let aligned = left_channel(&single(flat_patch()), 0.3);
+    let shifted = left_channel(
+      &single(Patch {
+        sub_phase: 0.5,
+        ..flat_patch()
+      }),
+      0.3,
+    );
+    let difference = relative_difference(&aligned, &shifted);
+    assert!(
+      difference > 0.05,
+      "sub_phase=0.5 changed the render by only {:.1}% RMS",
+      difference * 100.0
+    );
+  }
+
+  #[test]
+  fn note_graph_output_has_no_dc_offset() {
+    let body = &left_channel(
+      &single(Patch {
+        sine_ratio: 0.0,
+        saw_ratio: 0.0,
+        square_ratio: 1.0,
+        drive: 6.0,
+        sub_octave: 0.5,
+        ..flat_patch()
+      }),
+      0.3,
+    )[2205..];
+    let mean = body.iter().sum::<f32>() / body.len() as f32;
+    assert!(
+      mean.abs() < 0.05 * rms(body),
+      "mean {mean:.5} against rms {:.5}",
+      rms(body)
+    );
+  }
+
+  /// Peak of the reverb stage's response to a stereo impulse, per sample.
+  fn reverb_impulse_response(mix: f32, seconds: f32) -> Vec<f32> {
+    let mut stage = reverb_stage(mix).expect("a non-zero mix engages reverb");
+    stage.set_sample_rate(44100.0);
+    stage.allocate();
+    let mut out = [0.0f32; 2];
+    (0..(seconds * 44100.0) as usize)
+      .map(|i| {
+        let x = if i == 0 { 1.0 } else { 0.0 };
+        stage.tick(&[x, x], &mut out);
+        out[0].abs().max(out[1].abs())
+      })
+      .collect()
+  }
+
+  #[test]
+  fn reverb_tail_decays_within_budget() {
+    let response = reverb_impulse_response(1.0, 4.0);
+    let loudest = response.iter().copied().fold(0.0f32, f32::max);
+    let last_audible = response
+      .iter()
+      .rposition(|&y| y > loudest * 0.001)
+      .map_or(0.0, |i| i as f64 / 44100.0);
+    eprintln!("reverb tail reaches -60 dB after {last_audible:.2} s");
+    assert!(
+      last_audible <= REVERB_TAIL_SECS,
+      "the tail ({last_audible:.2} s) outlasts REVERB_TAIL_SECS"
+    );
+    assert!(
+      last_audible >= 0.5,
+      "the tail ({last_audible:.2} s) is too short to be a hall"
+    );
+  }
+
+  #[test]
+  fn reverb_mix_preserves_sustained_loudness() {
+    let tone = Patch {
+      freq: 440.0,
+      duration: 1.5,
+      attack_ms: 0.0,
+      decay_ms: 0.0,
+      release_ms: 0.0,
+      ..Default::default()
+    };
+    let dry = left_channel(
+      &single(Patch {
+        reverb_mix: 0.0,
+        ..tone.clone()
+      }),
+      1.4,
+    );
+    let wet = left_channel(
+      &single(Patch {
+        reverb_mix: 1.0,
+        ..tone
+      }),
+      1.4,
+    );
+    let window = 35280..61740;
+    let ratio = rms(&wet[window.clone()]) / rms(&dry[window]);
+    eprintln!("wet/dry sustained rms ratio {ratio:.3}");
+    assert!(
+      (0.7..1.4).contains(&ratio),
+      "reverb_mix=1 changes sustained loudness by a factor of {ratio:.3}"
+    );
+  }
+
+  #[test]
+  fn reverb_mix_zero_is_a_true_bypass() {
+    assert!(reverb_stage(0.0).is_none());
+    assert!(reverb_stage(f32::NAN).is_none());
+    assert!(reverb_stage(0.2).is_some());
+  }
+
+  #[test]
+  fn notes_duration_includes_reverb_tail() {
+    let base = Patch {
+      duration: 1.0,
+      attack_ms: 0.0,
+      release_ms: 0.0,
+      echo_mix: 0.0,
+      ..Default::default()
+    };
+    let without = heartbeat_notes_duration(&single(Patch {
+      reverb_mix: 0.0,
+      ..base.clone()
+    }));
+    let with = heartbeat_notes_duration(&single(Patch {
+      reverb_mix: 0.2,
+      ..base
+    }));
+    assert!(
+      (with.as_secs_f64() - without.as_secs_f64() - REVERB_TAIL_SECS).abs()
+        < 1e-10
     );
   }
 }
