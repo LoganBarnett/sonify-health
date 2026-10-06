@@ -3,13 +3,15 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.40.0
+** Added
 1. A new tool, ~sonify-health-fit~, searches for the patch parameters that
    reproduce a recorded tone, measuring every candidate through the synthesis
    graph the daemon plays; releases attach it as a prebuilt binary beside the
    daemon and the CLI.  No action needed.
-** Fixes
-** Breaking
-** Maintenance
 * v0.39.0
 ** Fixes
 1. The nix-darwin service now starts in its default Unix-socket mode.  No action
