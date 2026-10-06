@@ -3,8 +3,46 @@
 
 * Upcoming
 ** Added
+1. Patches have a new ~sub_phase~ parameter: where the sub-octave starts in its
+   cycle relative to the main oscillators, which shapes the tone once ~drive~ is
+   above 1.  No action needed.
 ** Fixes
+1. A patch now sounds the same every time it is built: engaging a filter, adding
+   a note, or a periodic rebuild no longer changes its tone.  No action needed.
+2. Clock and loop playback no longer carry a DC offset from heavy ~drive~;
+   continuous playback already blocked it.  No action needed.
+3. Continuous playback now honours ~detune~ and ~harshness_offset~ and applies
+   vibrato and FM to the sub-oscillator, as clock and loop playback already did.
+   See Breaking for the audible effect.
+4. ~downsample~ now runs at its nominal rate on every output device, so a patch
+   no longer buzzes differently on 44.1 kHz and 48 kHz devices.  No action
+   needed.
+5. ~reverb_mix~ is now the wet/dry blend its description promised, and
+   ~reverb_mix = 0~ is dry.  See Breaking.
 ** Breaking
+1. Every patch sounds quieter and darker: ~reverb_mix~ is now a dry/wet blend
+   over a fixed hall and ~reverb_mix = 0~ is dry.  Raise ~amplitude~ or the
+   master volume and lower ~reverb_mix~ (0.1-0.3 is a typical room); one-shot
+   heartbeats play about 1.8 s longer for the tail.
+2. A patch with ~drive~ above 1 and ~sub_octave~ above 0 may sound slightly
+   different from an earlier session: oscillators now start from a fixed phase
+   rather than one that varied with the graph.  There is no single old sound to
+   restore.
+3. Clock and loop patches with heavy ~drive~ lose their DC offset and about 1 dB
+   at 20 Hz, matching continuous playback.  Nothing restores the offset.
+4. A continuous-mode patch that sets ~detune~ or ~harshness_offset~, or combines
+   ~sub_octave~ with vibrato or FM, will audibly change.  Zero ~detune~ and
+   ~harshness_offset~ to restore those two; the sub-oscillator change has no
+   opt-out short of zeroing the modulation.
+5. Patches tuned by ear with ~downsample~ between roughly 0.1 and 0.5 change the
+   most, because those settings were silently rounded to a whole-number
+   decimation.  To keep an old rate, set ~downsample~ to ~log2(100000 /
+   (device_rate / N)) / 8~ for the N it was rounding to; about 0.27 keeps the
+   22.05 kHz that 0.21 produced on a 44.1 kHz device.
+6. For library consumers: ~Patch~, ~PatchOverrides~, and ~StructuralParams~
+   gained a ~sub_phase~ field, so literal constructions without
+   ~..Default::default()~ must add it, and ~continuous_graph~ takes a noise seed
+   as its last argument.
 ** Maintenance
 * v0.40.0
 ** Added

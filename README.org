@@ -166,8 +166,8 @@ configurations:
 
 - =packages.${system}.server= — the =sonify-health-server= daemon.
 - =packages.${system}.cli= — the =sonify-health= preview/print CLI.
-- =packages.${system}.fit= — the =sonify-health-fit= patch-fitting tool.
-- =apps.${system}.server= / =apps.${system}.cli= / =apps.${system}.fit= —
+- =packages.${system}.fit= -- the =sonify-health-fit= patch-fitting tool.
+- =apps.${system}.server= / =apps.${system}.cli= / =apps.${system}.fit= --
   runnable app entry points (=nix run .#server= and so on).
 - =devShells.${system}.default= — development shell with Rust toolchain, Elm,
   formatters, and task runner.

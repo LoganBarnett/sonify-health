@@ -76,8 +76,7 @@ pub const SPACE: &[Dimension] = &[
   Dimension::linear("saw_ratio", 0.0, 1.0),
   Dimension::linear("square_ratio", 0.0, 1.0),
   Dimension::linear("sub_octave", 0.0, 1.0),
-  // Put this back in when the sub_phase is added.
-  // Dimension::linear("sub_phase", 0.0, 1.0),
+  Dimension::linear("sub_phase", 0.0, 1.0),
   Dimension::logarithmic("drive", 0.3, 10.0),
   Dimension::logarithmic("brightness", 0.08, 2.0),
   Dimension::linear("resonance", 0.3, 5.0),

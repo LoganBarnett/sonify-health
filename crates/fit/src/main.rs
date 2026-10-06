@@ -1,4 +1,4 @@
-//! sonify-health-fit — entry point.
+//! sonify-health-fit -- entry point.
 //!
 //! The `#[foundation_main]` macro handles CLI parsing, config resolution, and
 //! logging init.  This file only dispatches the chosen subcommand to its

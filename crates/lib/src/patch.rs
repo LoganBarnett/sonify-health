@@ -37,7 +37,10 @@ pub struct Patch {
     min = 0.01,
     max = 5.0,
     step = 0.01,
-    description = "Length of the sustain phase in seconds. The note holds at `sustain` level for this long, between the `attack_ms` + `decay_ms` ramp-up and the `release_ms` tail. Total audible note length = attack + decay + duration + release."
+    description = "Length of the sustain phase in seconds. The note holds at \
+                   `sustain` level for this long, between the `attack_ms` + \
+                   `decay_ms` ramp-up and the `release_ms` tail. Total audible \
+                   note length = attack + decay + duration + release."
   )]
   pub duration: f64,
 
@@ -53,7 +56,8 @@ pub struct Patch {
     min = 0.0,
     max = 3.0,
     step = 0.01,
-    description = "Relative weight of the triangle oscillator. Hollow, flute-like."
+    description = "Relative weight of the triangle oscillator. Hollow, \
+                   flute-like."
   )]
   pub tri_ratio: f64,
 
@@ -61,7 +65,8 @@ pub struct Patch {
     min = 0.0,
     max = 3.0,
     step = 0.01,
-    description = "Relative weight of the sawtooth oscillator. Bright, buzzy edge."
+    description = "Relative weight of the sawtooth oscillator. Bright, buzzy \
+                   edge."
   )]
   pub saw_ratio: f64,
 
@@ -69,7 +74,8 @@ pub struct Patch {
     min = 0.0,
     max = 3.0,
     step = 0.01,
-    description = "Relative weight of the square oscillator. Hollow, reedy tone."
+    description = "Relative weight of the square oscillator. Hollow, reedy \
+                   tone."
   )]
   pub square_ratio: f64,
 
@@ -77,7 +83,10 @@ pub struct Patch {
     min = 0.0,
     max = 500.0,
     step = 1.0,
-    description = "Ramp-up time from silence to full amplitude, in milliseconds. First phase of the ADSR envelope; `decay_ms`, `duration`, and `release_ms` follow. Low = snappy click, high = soft swell."
+    description = "Ramp-up time from silence to full amplitude, in \
+                   milliseconds. First phase of the ADSR envelope; `decay_ms`, \
+                   `duration`, and `release_ms` follow. Low = snappy click, \
+                   high = soft swell."
   )]
   pub attack_ms: f64,
 
@@ -85,7 +94,9 @@ pub struct Patch {
     min = 0.0,
     max = 2000.0,
     step = 1.0,
-    description = "Ramp-down time in milliseconds, from the attack peak down to the `sustain` level. Runs between `attack_ms` and `duration`."
+    description = "Ramp-down time in milliseconds, from the attack peak down \
+                   to the `sustain` level. Runs between `attack_ms` and \
+                   `duration`."
   )]
   pub decay_ms: f64,
 
@@ -93,7 +104,10 @@ pub struct Patch {
     min = 0.0,
     max = 1000.0,
     step = 1.0,
-    description = "Ramp-down time in milliseconds, from the `sustain` level to silence. Final phase of the envelope, after `attack_ms` + `decay_ms` + `duration`. Low = staccato, high = lingering tail."
+    description = "Ramp-down time in milliseconds, from the `sustain` level to \
+                   silence. Final phase of the envelope, after `attack_ms` + \
+                   `decay_ms` + `duration`. Low = staccato, high = lingering \
+                   tail."
   )]
   pub release_ms: f64,
 
@@ -101,7 +115,10 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
-    description = "Body amplitude (0–1) held during the `duration` phase, between the end of `decay_ms` and the start of `release_ms`. 1 = full level (flat envelope top), lower = quieter sustained tone."
+    description = "Body amplitude (0–1) held during the `duration` phase, \
+                   between the end of `decay_ms` and the start of \
+                   `release_ms`. 1 = full level (flat envelope top), lower = \
+                   quieter sustained tone."
   )]
   pub sustain: f64,
 
@@ -109,7 +126,8 @@ pub struct Patch {
     min = 0.5,
     max = 4.0,
     step = 0.01,
-    description = "Pitch bend at note onset. 1.0 = none, <1 = downward, >1 = upward chirp."
+    description = "Pitch bend at note onset. 1.0 = none, <1 = downward, >1 = \
+                   upward chirp."
   )]
   pub chirp_ratio: f64,
 
@@ -123,7 +141,8 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
-    description = "Wet/dry reverb blend. 0 = fully dry, 1 = fully wet."
+    description = "Wet/dry reverb blend. 0 = fully dry, 1 = fully wet. Runs \
+                   through a fixed medium hall; 0.1-0.3 is a typical room."
   )]
   pub reverb_mix: f64,
 
@@ -131,7 +150,8 @@ pub struct Patch {
     min = 0.01,
     max = 1.0,
     step = 0.01,
-    description = "Delay time in seconds. Short = slapback, long = distinct repeats."
+    description = "Delay time in seconds. Short = slapback, long = distinct \
+                   repeats."
   )]
   pub echo_delay: f64,
 
@@ -147,7 +167,8 @@ pub struct Patch {
     min = 0.05,
     max = 2.0,
     step = 0.01,
-    description = "Pitch-tracking ladder filter cutoff scaler. 1.0 = full brightness, lower = darker tone."
+    description = "Pitch-tracking ladder filter cutoff scaler. 1.0 = full \
+                   brightness, lower = darker tone."
   )]
   pub brightness: f64,
 
@@ -155,7 +176,8 @@ pub struct Patch {
     min = 0.1,
     max = 5.0,
     step = 0.01,
-    description = "Filter Q scaler. 1.0 = default resonance, lower = smoother rolloff, higher = nasal peak."
+    description = "Filter Q scaler. 1.0 = default resonance, lower = smoother \
+                   rolloff, higher = nasal peak."
   )]
   pub resonance: f64,
 
@@ -163,7 +185,8 @@ pub struct Patch {
     min = 0.0,
     max = 2000.0,
     step = 1.0,
-    description = "Highpass filter cutoff in Hz. 0 = off, higher = cuts more low frequencies."
+    description = "Highpass filter cutoff in Hz. 0 = off, higher = cuts more \
+                   low frequencies."
   )]
   pub highpass: f64,
 
@@ -174,7 +197,8 @@ pub struct Patch {
     max = 18000.0,
     step = 1.0,
     logarithmic,
-    description = "Lowpass filter cutoff in Hz. 18000 = off (fully open), lower = cuts more high frequencies."
+    description = "Lowpass filter cutoff in Hz. 18000 = off (fully open), \
+                   lower = cuts more high frequencies."
   )]
   pub lowpass: f64,
 
@@ -182,9 +206,21 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
-    description = "Sub-oscillator mix at one octave below. 0 = off, higher = deeper body."
+    description = "Sub-oscillator mix at one octave below. 0 = off, higher = \
+                   deeper body."
   )]
   pub sub_octave: f64,
+
+  #[patch_param(
+    min = 0.0,
+    max = 1.0,
+    step = 0.01,
+    description = "Where in its cycle the sub-octave starts relative to the \
+                   main oscillators, in turns. With drive above 1 this shifts \
+                   which partials the saturation emphasises; 0 is the neutral \
+                   alignment."
+  )]
+  pub sub_phase: f64,
 
   #[patch_param(
     min = 0.0,
@@ -198,7 +234,8 @@ pub struct Patch {
     min = 0.0,
     max = 12.0,
     step = 0.01,
-    description = "Vibrato depth (semitones). Large values produce FM sidebands."
+    description = "Vibrato depth (semitones). Large values produce FM \
+                   sidebands."
   )]
   pub vibrato_depth: f64,
 
@@ -254,7 +291,8 @@ pub struct Patch {
     min = 0.0,
     max = 8.0,
     step = 0.01,
-    description = "FM modulator frequency as a ratio of the carrier. 1.0 = unison, 2.0 = octave."
+    description = "FM modulator frequency as a ratio of the carrier. 1.0 = \
+                   unison, 2.0 = octave."
   )]
   pub fm_ratio: f64,
 
@@ -262,7 +300,11 @@ pub struct Patch {
     min = 0.0,
     max = 10.0,
     step = 0.1,
-    description = "FM modulation index. 0 = clean, higher = richer metallic warble."
+    description = "FM modulation index. 0 = clean, higher = richer metallic \
+                   warble. Above 1 the modulator swings the carrier through \
+                   zero, where it clamps, and the modulator is drawn at \
+                   control rate (about 500 Hz), so high settings give a gritty \
+                   lo-fi grain rather than clean FM sidebands."
   )]
   pub fm_depth: f64,
 
@@ -270,7 +312,8 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
-    description = "Lo-fi sample rate reduction. 0 = full fidelity, higher = crunchier."
+    description = "Lo-fi sample rate reduction. 0 = full fidelity, higher = \
+                   crunchier."
   )]
   pub downsample: f64,
 
@@ -278,7 +321,9 @@ pub struct Patch {
     min = -5.0,
     max = 5.0,
     step = 0.01,
-    description = "Seconds added to content duration for loop repeat timing. Positive = silence between repetitions, negative = overlapping re-triggers via crossfade."
+    description = "Seconds added to content duration for loop repeat timing. \
+                   Positive = silence between repetitions, negative = \
+                   overlapping re-triggers via crossfade."
   )]
   pub gap: f64,
 
@@ -286,7 +331,8 @@ pub struct Patch {
     min = -100.0,
     max = 100.0,
     step = 1.0,
-    description = "Pitch offset in cents applied to all oscillators. Creates chorus-like thickness."
+    description = "Pitch offset in cents applied to all oscillators. Creates \
+                   chorus-like thickness."
   )]
   pub detune: f64,
 
@@ -294,7 +340,8 @@ pub struct Patch {
     min = -1.0,
     max = 1.0,
     step = 0.01,
-    description = "Offset added to waveform harshness. Positive shifts sine toward saw, negative does the reverse."
+    description = "Offset added to waveform harshness. Positive shifts sine \
+                   toward saw, negative does the reverse."
   )]
   pub harshness_offset: f64,
 }
@@ -322,6 +369,7 @@ impl Default for Patch {
       highpass: 0.0,
       lowpass: 18000.0,
       sub_octave: 0.0,
+      sub_phase: 0.0,
       vibrato_rate: 0.0,
       vibrato_depth: 0.0,
       tremolo_rate: 0.0,
@@ -481,7 +529,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 34);
+    assert_eq!(Patch::PARAMS.len(), 35);
   }
 
   #[test]

@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod config;
 pub mod continuous;
+mod downsample;
 pub mod heartbeat;
 pub mod heartbeat_config;
 pub mod library;
