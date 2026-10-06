@@ -3662,6 +3662,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sonify-health-fit"
+version = "0.39.0"
+dependencies = [
+ "clap",
+ "fundsp",
+ "rust-template-foundation",
+ "serde",
+ "sonify-health-lib",
+ "tap",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "sonify-health-lib"
 version = "0.39.0"
 dependencies = [

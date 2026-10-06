@@ -43,6 +43,7 @@
     "cli": { "release-binary": true },
     "server": { "release-binary": true },
     "lib": { "release-binary": false },
-    "voice-derive": { "release-binary": false }
+    "voice-derive": { "release-binary": false },
+    "fit": { "release-binary": true }
   }
 }

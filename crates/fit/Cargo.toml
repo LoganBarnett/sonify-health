@@ -1,0 +1,46 @@
+[package]
+name = "sonify-health-fit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Developer tool for fitting sonify-health patches to recorded sounds"
+# A binary, shipped with each release like the CLI (see its `release-binary`
+# flag in rust-template.json), so it has no crates.io audience.
+publish = false
+
+[[bin]]
+name = "sonify-health-fit"
+path = "src/main.rs"
+
+[dependencies]
+# The patch model and the heartbeat graph the daemon plays, which every render
+# here goes through so that what is measured is what the daemon sounds like.
+sonify-health-lib = { workspace = true }
+# Config plumbing: the MergeConfig derive and the #[foundation_main] entry
+# attribute plus CLI logging init.
+rust-template-foundation = { workspace = true, features = ["cli"] }
+# Parses the subcommands and their flags.
+clap = { workspace = true }
+# The Wave buffer rendered audio is collected into, and its WAV encoder.
+fundsp = { workspace = true }
+# Required by the `MergeConfig` derive — the generated `ConfigFileRaw` carries
+# `#[derive(serde::Deserialize)]`, so serde must be visible to this crate even
+# though its own source does not `use` it directly.
+serde = { workspace = true }
+# Derives the semantic error enums, one per module plus ApplicationError.
+thiserror = { workspace = true }
+# Emits the diagnostics in the command handlers.
+tracing = { workspace = true }
+# Enables method chaining and reduces superfluous local variables that only
+# exist to name intermediate results.  Prefer .tap() over temporary variables
+# when it improves readability.
+tap = { workspace = true }
+
+[dev-dependencies]
+# Scratch directories the integration tests render into.
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
