@@ -3,6 +3,11 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.41.0
+** Added
 1. Patches have a new ~sub_phase~ parameter: where the sub-octave starts in its
    cycle relative to the main oscillators, which shapes the tone once ~drive~ is
    above 1.  No action needed.
@@ -43,7 +48,6 @@
    gained a ~sub_phase~ field, so literal constructions without
    ~..Default::default()~ must add it, and ~continuous_graph~ takes a noise seed
    as its last argument.
-** Maintenance
 * v0.40.0
 ** Added
 1. A new tool, ~sonify-health-fit~, searches for the patch parameters that
