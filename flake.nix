@@ -48,6 +48,10 @@
           "rustfmt"
         ];
       };
+      # The binaries shipped as release artifacts: every package helper below
+      # fans out over this map, so it mirrors the `release-binary = true`
+      # entries in rust-template.json.  A workspace binary that is not released
+      # stays out of it and runs through cargo in the dev shell.
       crates = {
         cli = {
           name = "sonify-health-cli";
@@ -58,6 +62,11 @@
           name = "sonify-health-server";
           binary = "sonify-health-server";
           description = "Infrastructure sonification daemon";
+        };
+        fit = {
+          name = "sonify-health-fit";
+          binary = "sonify-health-fit";
+          description = "Fits sonify-health patches to recorded sounds";
         };
       };
       commonArgs = {

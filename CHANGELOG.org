@@ -3,6 +3,10 @@
 
 * Upcoming
 ** Added
+1. A new tool, ~sonify-health-fit~, searches for the patch parameters that
+   reproduce a recorded tone, measuring every candidate through the synthesis
+   graph the daemon plays; releases attach it as a prebuilt binary beside the
+   daemon and the CLI.  No action needed.
 ** Fixes
 ** Breaking
 ** Maintenance

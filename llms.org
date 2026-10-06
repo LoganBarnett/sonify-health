@@ -309,6 +309,13 @@ assuming the work can survive independently.
 In the event that you can't resolve these notions, halt and ask the operator for
 direction.
 
+*** Staging New Files
+
+Stage files with ~git add --intent-to-add ...~.  Nix flakes needs files to be
+staged for it to see them.  We use staged files as a means of organtic review
+(staged means reviewed).  ~--intent-to-add~ gives Flakes the visibility needed
+while allowing the file to appear as "unreviewed".
+
 ** Code
 
 *** Initialisms

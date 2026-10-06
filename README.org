@@ -86,7 +86,8 @@ curl --fail --location --proto '=https' --tlsv1.2 \
 #+end_src
 
 Swap =sonify-health-server= for =sonify-health= to fetch the preview/print CLI
-instead.
+instead, or for =sonify-health-fit= to fetch the patch-fitting tool, which
+searches for the patch parameters that reproduce a recorded tone.
 
 The Linux builds come in two flavours: =-linux-gnu= (selected above) for
 mainstream distributions, and a fully static =-linux-musl= that runs on any
@@ -144,17 +145,18 @@ The binaries are at =target/release/sonify-health-server= (the daemon) and
 The flake has no default package, so name the one you want:
 
 #+begin_src sh :results none :exports code
-nix build .#server   # or .#cli
+nix build .#server   # or .#cli, or .#fit
 #+end_src
 
 The =result= symlink contains =bin/sonify-health-server= (or =bin/sonify-health=
-for the CLI).
+for the CLI, or =bin/sonify-health-fit= for the fitting tool).
 
 ** Nix run (without installing)
 
 #+begin_src sh :results none :exports code
 nix run .#server   # the daemon
 nix run .#cli      # the preview/print CLI
+nix run .#fit      # the patch-fitting tool
 #+end_src
 
 * Nix flake exports
@@ -164,8 +166,9 @@ configurations:
 
 - =packages.${system}.server= — the =sonify-health-server= daemon.
 - =packages.${system}.cli= — the =sonify-health= preview/print CLI.
-- =apps.${system}.server= / =apps.${system}.cli= — runnable app entry points
-  (=nix run .#server= / =nix run .#cli=).
+- =packages.${system}.fit= — the =sonify-health-fit= patch-fitting tool.
+- =apps.${system}.server= / =apps.${system}.cli= / =apps.${system}.fit= —
+  runnable app entry points (=nix run .#server= and so on).
 - =devShells.${system}.default= — development shell with Rust toolchain, Elm,
   formatters, and task runner.
 - =nixosModules.server= — NixOS service module.
