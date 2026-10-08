@@ -9,6 +9,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput)
 import Http
 import Json.Decode as Decode
+import MetricHistory
 import Ports
 import Process
 import Protocol exposing (..)
@@ -1261,7 +1262,7 @@ handleServerMsg msg model =
                         |> Maybe.withDefault []
 
                 updated =
-                    List.take 99 (existing ++ [ value ])
+                    MetricHistory.push value existing
             in
             ( { model
                 | heartbeats =

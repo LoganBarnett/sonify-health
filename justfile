@@ -9,8 +9,12 @@ build-elm:
 build-rust:
     cargo build --workspace
 
-# Run all tests (Elm compile check + Rust test suite + clippy).
-test: build-elm test-rust lint-rust
+# Run all tests.
+test: build-elm test-elm test-rust lint-rust
+
+# Run the Elm unit tests.
+test-elm:
+    cd frontend && elm-test
 
 # Run the Rust test suite.
 test-rust:
