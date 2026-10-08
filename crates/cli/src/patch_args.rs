@@ -48,6 +48,10 @@ pub struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   sustain: Option<f64>,
 
+  /// Override the envelope curve (bend of the ramps; 1 = straight).
+  #[arg(long, help_heading = "Patch overrides")]
+  envelope_curve: Option<f64>,
+
   /// Override chirp frequency ratio.
   #[arg(long, help_heading = "Patch overrides")]
   chirp_ratio: Option<f64>,
@@ -83,6 +87,18 @@ pub struct CliPatchOverrides {
   /// Override lowpass filter cutoff (Hz).
   #[arg(long, help_heading = "Patch overrides")]
   lowpass: Option<f64>,
+
+  /// Override the EQ band centre frequency (Hz).
+  #[arg(long, help_heading = "Patch overrides")]
+  eq_hz: Option<f64>,
+
+  /// Override the EQ band gain (dB; 0 = off).
+  #[arg(long, allow_hyphen_values = true, help_heading = "Patch overrides")]
+  eq_db: Option<f64>,
+
+  /// Override the EQ band width (Q).
+  #[arg(long, help_heading = "Patch overrides")]
+  eq_q: Option<f64>,
 
   /// Override sub-octave mix.
   #[arg(long, help_heading = "Patch overrides")]
@@ -120,6 +136,10 @@ pub struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   noise_mix: Option<f64>,
 
+  /// Override hiss (white noise added after the filter).
+  #[arg(long, help_heading = "Patch overrides")]
+  hiss: Option<f64>,
+
   /// Override crush (bitcrush intensity).
   #[arg(long, help_heading = "Patch overrides")]
   crush: Option<f64>,
@@ -144,6 +164,10 @@ pub struct CliPatchOverrides {
   #[arg(long, help_heading = "Patch overrides")]
   detune: Option<f64>,
 
+  /// Override voice spread (cents between two copies of the main voice).
+  #[arg(long, help_heading = "Patch overrides")]
+  spread: Option<f64>,
+
   /// Override harshness offset (-1 to 1).
   #[arg(long, help_heading = "Patch overrides")]
   harshness_offset: Option<f64>,
@@ -162,6 +186,7 @@ impl CliPatchOverrides {
       decay_ms: self.decay_ms,
       release_ms: self.release_ms,
       sustain: self.sustain,
+      envelope_curve: self.envelope_curve,
       chirp_ratio: self.chirp_ratio,
       stereo_pan: self.stereo_pan,
       reverb_mix: self.reverb_mix,
@@ -171,6 +196,9 @@ impl CliPatchOverrides {
       resonance: self.resonance,
       highpass: self.highpass,
       lowpass: self.lowpass,
+      eq_hz: self.eq_hz,
+      eq_db: self.eq_db,
+      eq_q: self.eq_q,
       sub_octave: self.sub_octave,
       sub_phase: self.sub_phase,
       vibrato_rate: self.vibrato_rate,
@@ -180,12 +208,14 @@ impl CliPatchOverrides {
       amplitude: self.amplitude,
       drive: self.drive,
       noise_mix: self.noise_mix,
+      hiss: self.hiss,
       crush: self.crush,
       fm_ratio: self.fm_ratio,
       fm_depth: self.fm_depth,
       downsample: self.downsample,
       gap: self.gap,
       detune: self.detune,
+      spread: self.spread,
       harshness_offset: self.harshness_offset,
     }
   }

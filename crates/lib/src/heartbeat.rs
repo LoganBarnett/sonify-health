@@ -2,9 +2,10 @@ use crate::downsample::exact_hold_hz;
 use crate::patch::Patch;
 use fundsp::net::Net;
 use fundsp::prelude32::{
-  dc, dcblock, delay, envelope, feedback, follow, highpass_hz, lfo, lowpass_hz,
-  moog, multipass, pan, pass, pink, reverb_stereo, saw, shape, sine, square,
-  triangle, var, An, AudioNode, AudioUnit, Crush, Tanh, U0, U1, U2,
+  bell_hz, busi, db_amp, dc, dcblock, delay, envelope, feedback, follow,
+  highpass_hz, lfo, lowpass_hz, moog, mul, multipass, pan, pass, pink,
+  reverb_stereo, saw, shape, sine, square, triangle, var, white, An, AudioNode,
+  AudioUnit, Crush, Tanh, U0, U1, U2,
 };
 use fundsp::shared::Shared;
 use std::time::Duration;
@@ -26,6 +27,14 @@ pub const MAX_CUTOFF: f32 = 18000.0;
 /// `CUTOFF_RATE_FRACTION` of any real device rate that a highpass stage never
 /// needs rate-aware handling.
 pub const MAX_HIGHPASS: f32 = 2000.0;
+
+/// Largest boost or cut of the EQ band in dB; equals the `eq_db` parameter's
+/// bounds in patch.rs (enforced by a test there).
+pub const MAX_EQ_DB: f32 = 24.0;
+
+/// Widest voice spread in cents; equals the `spread` parameter's `max` in
+/// patch.rs (enforced by a test there).
+pub const MAX_SPREAD_CENTS: f32 = 100.0;
 
 /// Fraction of the sample rate above which a cutoff cannot be realized:
 /// fundsp's filters compute `tan(pi * cutoff / rate)`, which is only meaningful
@@ -59,10 +68,59 @@ pub(crate) fn lowpass_cutoff(patch: &Patch, sample_rate: f64) -> Option<f32> {
   (cutoff < cutoff_ceiling(sample_rate)).then_some(cutoff.max(20.0))
 }
 
-/// Append the engaged filter stages to a mono chain.  A disengaged filter
-/// contributes no node at all, so "off" is a true bypass.
+/// `value` held to `lo..=hi`, with a non-finite value reading as `fallback`.
+/// Config files carry values past `set_param`'s clamping, and a NaN would
+/// poison a filter's state.
+fn bounded(value: f64, lo: f32, hi: f32, fallback: f32) -> f32 {
+  let value = value as f32;
+  if value.is_finite() {
+    value.clamp(lo, hi)
+  } else {
+    fallback
+  }
+}
+
+/// One parametric EQ band in the form fundsp's bell takes: centre in Hz, Q,
+/// and linear amplitude gain.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EqBand {
+  pub hz: f32,
+  pub q: f32,
+  pub gain: f32,
+}
+
+impl EqBand {
+  /// The centre stays under the device's stable ceiling for the same reason
+  /// the lowpass cutoff does.
+  pub(crate) fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
+    EqBand {
+      hz: bounded(patch.eq_hz, 20.0, cutoff_ceiling(sample_rate), 20.0),
+      q: bounded(patch.eq_q, 0.1, 10.0, 1.0),
+      gain: db_amp(bounded(patch.eq_db, -MAX_EQ_DB, MAX_EQ_DB, 0.0)),
+    }
+  }
+
+  /// Unity gain gives `m1 = m2 = 0` in fundsp's state-variable filter, an
+  /// exact passthrough, so a 0 dB band contributes no node and "off" is a
+  /// true bypass.
+  pub(crate) fn engaged(&self) -> bool {
+    self.gain != 1.0
+  }
+
+  /// The band as a graph stage, or `None` while it is a bypass.
+  pub(crate) fn stage(&self) -> Option<Net> {
+    self
+      .engaged()
+      .then(|| Net::wrap(Box::new(bell_hz(self.hz, self.q, self.gain))))
+  }
+}
+
+/// Append the engaged filter stages to a mono chain.  The EQ band precedes the
+/// band limits so those have the last word; a disengaged stage contributes no
+/// node, so "off" is a true bypass.
 fn with_filter_stages(mono: Net, patch: &Patch, sample_rate: f64) -> Net {
   [
+    EqBand::from_patch(patch, sample_rate).stage(),
     highpass_cutoff(patch).map(|hz| Net::wrap(Box::new(highpass_hz(hz, 0.7)))),
     lowpass_cutoff(patch, sample_rate)
       .map(|hz| Net::wrap(Box::new(lowpass_hz(hz, 0.7)))),
@@ -87,6 +145,12 @@ pub(crate) const OSCILLATOR_PHASE: f32 = 0.0;
 /// sounding together would otherwise share one sequence, so each adds its
 /// index.
 pub(crate) const NOISE_SEED_BASE: u64 = 1;
+
+/// Seed base of the hiss source; each note adds its noise index.  Pink is
+/// filtered white, so a hiss seed equal to a pink seed (`NOISE_SEED_BASE` plus
+/// the index) would correlate the two sources, and notes sounding together
+/// would otherwise share one hiss sequence.
+pub(crate) const HISS_SEED_BASE: u64 = 1 << 32;
 
 /// Room size, in metres, of the hall every patch's reverb runs through.
 pub(crate) const REVERB_ROOM_M: f32 = 10.0;
@@ -130,6 +194,84 @@ pub(crate) fn waveform_weights(patch: &Patch) -> (f32, f32, f32, f32) {
     (patch.saw_ratio as f32 * norm + h).max(0.0),
     patch.square_ratio as f32 * norm,
   )
+}
+
+/// Spread between the two main voices in cents, held to the parameter's
+/// bounds.
+pub(crate) fn spread_cents(patch: &Patch) -> f32 {
+  bounded(patch.spread, 0.0, MAX_SPREAD_CENTS, 0.0)
+}
+
+/// Level of the hiss source, held to the parameter's bounds.
+pub(crate) fn hiss_level(patch: &Patch) -> f32 {
+  bounded(patch.hiss, 0.0, 1.0, 0.0)
+}
+
+/// Pitch ratio of spread voice `voice` (0 = lower, 1 = upper), each half the
+/// spread away from the pitch.  At zero cents both ratios are exactly 1.0 and
+/// `a * 0.5 + a * 0.5 == a` in f32, so the default sums to the single voice.
+pub(crate) fn spread_voice_ratio(cents: f32, voice: u64) -> f32 {
+  let sign = if voice == 0 { -1.0 } else { 1.0 };
+  2.0_f32.powf(sign * cents / 2400.0)
+}
+
+/// Bend exponent of the envelope ramps, or `None` for straight lines.
+/// `powf(x, 1.0) == x` is not guaranteed in f32 and the fit tool compares
+/// renders bit for bit, so a curve of 1 reads as `None` and the linear arms
+/// keep their plain expressions.
+pub(crate) fn envelope_curve(patch: &Patch) -> Option<f32> {
+  let curve = bounded(patch.envelope_curve, 0.25, 4.0, 1.0);
+  (curve != 1.0).then_some(curve)
+}
+
+/// The amplitude envelope of a one-shot note, in seconds from its start.
+/// Continuous playback has no envelope, so `curve` has no effect there.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Adsr {
+  pub attack: f32,
+  pub decay: f32,
+  pub sustain: f32,
+  /// Seconds held at `sustain` between the decay and the release.
+  pub body: f32,
+  pub release: f32,
+  /// Bend of the ramps; see `envelope_curve`.
+  pub curve: Option<f32>,
+}
+
+impl Adsr {
+  /// Level in 0..=1 at `t` seconds after the note starts.  A curve raises the
+  /// attack's progress, and the decay's and release's remaining fraction, to
+  /// its power, so above 1 the attack lingers before swelling and the falls
+  /// start fast then trail off; below 1 the reverse.
+  pub(crate) fn level(&self, t: f32) -> f32 {
+    let Adsr {
+      attack,
+      decay,
+      sustain,
+      body,
+      release,
+      curve,
+    } = *self;
+    if attack > 0.0 && t < attack {
+      curve.map_or(t / attack, |c| (t / attack).powf(c))
+    } else if decay > 0.0 && t < attack + decay {
+      curve.map_or(1.0 + (sustain - 1.0) * (t - attack) / decay, |c| {
+        sustain + (1.0 - sustain) * (1.0 - (t - attack) / decay).powf(c)
+      })
+    } else {
+      let body_end = attack + decay + body;
+      if t <= body_end {
+        sustain
+      } else if release > 0.0 {
+        curve.map_or(
+          (sustain * (body_end + release - t) / release).max(0.0),
+          |c| sustain * ((body_end + release - t) / release).max(0.0).powf(c),
+        )
+      } else {
+        0.0
+      }
+    }
+  }
 }
 
 /// The four waveforms, each started at `phase` and scaled by its weight,
@@ -259,6 +401,16 @@ fn note_graph(
   let fm_ratio = patch.fm_ratio as f32;
   let fm_depth = patch.fm_depth as f32;
   let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
+  let spread = spread_cents(patch);
+  let hiss = hiss_level(patch);
+  let adsr = Adsr {
+    attack,
+    decay,
+    sustain: sustain_level,
+    body: dur,
+    release,
+    curve: envelope_curve(patch),
+  };
 
   // Frequency LFO with offset gating.
   let freq_env = lfo(move |t: f32| {
@@ -284,21 +436,7 @@ fn note_graph(
     if t < offset || t >= tail_end {
       return 0.0;
     }
-    let local_t = t - offset;
-    let level = if attack > 0.0 && local_t < attack {
-      local_t / attack
-    } else if decay > 0.0 && local_t < attack + decay {
-      1.0 + (sustain_level - 1.0) * (local_t - attack) / decay
-    } else {
-      let body_end = attack + decay + dur;
-      if local_t <= body_end {
-        sustain_level
-      } else if release > 0.0 {
-        (sustain_level * (body_end + release - local_t) / release).max(0.0)
-      } else {
-        0.0
-      }
-    };
+    let level = adsr.level(t - offset);
     let trem = (1.0
       - tremolo_depth
         * (1.0 - (std::f64::consts::TAU * tremolo_rate * t as f64).sin())
@@ -306,11 +444,16 @@ fn note_graph(
     level * amp * trem
   });
 
+  // Two copies of the main bank at half weight, a half spread below and above
+  // the pitch.
   let main_osc = freq_env
-    >> oscillator_bank(
-      OSCILLATOR_PHASE,
-      (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
-    );
+    >> busi::<U2, _, _>(move |voice| {
+      mul(spread_voice_ratio(spread, voice))
+        >> (oscillator_bank(
+          OSCILLATOR_PHASE,
+          (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
+        ) * 0.5)
+    });
 
   // Sub-octave oscillator with offset gating.
   let sub_freq_env = lfo(move |t: f32| {
@@ -355,8 +498,14 @@ fn note_graph(
   // of -0.0068 against an RMS of 0.011 on a driven saw with a sub-octave), and
   // the continuous graph already blocks it; the same stage here keeps the two
   // graphs equivalent.
+  //
+  // Noise mixed before the ladder can only add rumble under a dark filter, and
+  // noise outside the envelope would sound between notes, so hiss joins after
+  // the ladder and under the envelope.
   let mono = (driven | cutoff | q_val)
-    >> (moog() * amp_env * ext_vol)
+    >> ((moog() + (white().seed(HISS_SEED_BASE + noise_seed) * hiss))
+      * amp_env
+      * ext_vol)
     >> dcblock()
     >> shape(Crush(crush_levels))
     >> exact_hold_hz(ds_rate);
@@ -413,6 +562,8 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
   let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
   let dur = patch.duration as f32;
   let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
+  let spread = spread_cents(patch);
+  let hiss = hiss_level(patch);
 
   let drive = (patch.drive as f32).max(0.01);
   let drive_norm = 1.0 / drive.tanh();
@@ -431,10 +582,13 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
     (freq + fm_mod).max(0.01)
   });
   let main_osc = freq_source
-    >> oscillator_bank(
-      OSCILLATOR_PHASE,
-      (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
-    );
+    >> busi::<U2, _, _>(move |voice| {
+      mul(spread_voice_ratio(spread, voice))
+        >> (oscillator_bank(
+          OSCILLATOR_PHASE,
+          (dc(sine_w), dc(tri_w), dc(saw_w), dc(square_w)),
+        ) * 0.5)
+    });
 
   let sub_half = freq * 0.5;
   let sub_fm_freq = sub_half * fm_ratio;
@@ -456,24 +610,15 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
   );
   let q_val = dc((0.5 * patch.resonance as f32 * 0.2).min(0.95));
 
-  let sustain_level = patch.sustain as f32;
-  let env = envelope(move |t: f32| {
-    let level = if attack > 0.0 && t < attack {
-      t / attack
-    } else if decay > 0.0 && t < attack + decay {
-      1.0 + (sustain_level - 1.0) * (t - attack) / decay
-    } else {
-      let body_end = attack + decay + dur;
-      if t <= body_end {
-        sustain_level
-      } else if release > 0.0 {
-        (sustain_level * (body_end + release - t) / release).max(0.0)
-      } else {
-        0.0
-      }
-    };
-    level * amp
-  });
+  let adsr = Adsr {
+    attack,
+    decay,
+    sustain: patch.sustain as f32,
+    body: dur,
+    release,
+    curve: envelope_curve(patch),
+  };
+  let env = envelope(move |t: f32| adsr.level(t) * amp);
 
   let echo_delay = patch.echo_delay as f32;
   let echo_mix = patch.echo_mix as f32;
@@ -482,7 +627,8 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
     >> (shape(Tanh(drive)) * drive_norm)
     >> (pass() + (pink().seed(NOISE_SEED_BASE) * noise_mix));
   let mono = (driven | cutoff | q_val)
-    >> (moog() * env)
+    >> ((moog() + (white().seed(HISS_SEED_BASE + NOISE_SEED_BASE) * hiss))
+      * env)
     >> dcblock()
     >> shape(Crush(crush_levels))
     >> exact_hold_hz(ds_rate);
@@ -1161,6 +1307,224 @@ mod tests {
     assert!(
       (with.as_secs_f64() - without.as_secs_f64() - REVERB_TAIL_SECS).abs()
         < 1e-10
+    );
+  }
+
+  #[test]
+  fn config_values_past_the_bounds_are_held() {
+    let with_spread = |spread| Patch {
+      spread,
+      ..Default::default()
+    };
+    assert_eq!(spread_cents(&with_spread(f64::NAN)), 0.0);
+    assert_eq!(spread_cents(&with_spread(-5.0)), 0.0);
+    assert_eq!(spread_cents(&with_spread(500.0)), MAX_SPREAD_CENTS);
+    assert_eq!(
+      hiss_level(&Patch {
+        hiss: 3.0,
+        ..Default::default()
+      }),
+      1.0
+    );
+  }
+
+  #[test]
+  fn spread_voice_ratio_is_unity_at_zero() {
+    assert_eq!(spread_voice_ratio(0.0, 0), 1.0);
+    assert_eq!(spread_voice_ratio(0.0, 1), 1.0);
+    let lower = spread_voice_ratio(100.0, 0);
+    let upper = spread_voice_ratio(100.0, 1);
+    assert!((lower * upper - 1.0).abs() < 1e-6);
+    assert!((upper - 2f32.powf(50.0 / 1200.0)).abs() < 1e-6);
+  }
+
+  #[test]
+  fn eq_band_bypasses_at_zero_db() {
+    let band = |patch: Patch| EqBand::from_patch(&patch, 44100.0);
+    assert!(!band(Patch::default()).engaged());
+    assert!(band(Patch::default()).stage().is_none());
+    let boosted = band(Patch {
+      eq_db: 6.0,
+      ..Default::default()
+    });
+    assert!(boosted.engaged());
+    assert!((boosted.gain - 1.995).abs() < 0.01);
+    assert!(!band(Patch {
+      eq_db: f64::NAN,
+      ..Default::default()
+    })
+    .engaged());
+    let high = band(Patch {
+      eq_hz: 30000.0,
+      ..Default::default()
+    });
+    assert_eq!(high.hz, cutoff_ceiling(44100.0));
+  }
+
+  #[test]
+  fn eq_cut_attenuates_note_graph() {
+    let tone = Patch {
+      freq: 440.0,
+      duration: 0.3,
+      attack_ms: 10.0,
+      release_ms: 50.0,
+      reverb_mix: 0.0,
+      eq_hz: 440.0,
+      ..Default::default()
+    };
+    let plain = note_body_mean_square(&tone);
+    let cut = note_body_mean_square(&Patch {
+      eq_db: -24.0,
+      ..tone.clone()
+    });
+    let boosted = note_body_mean_square(&Patch {
+      eq_db: 12.0,
+      ..tone
+    });
+    assert!(
+      cut < plain * 0.25,
+      "eq_db=-24 at the fundamental left {cut:.6} against {plain:.6}"
+    );
+    assert!(
+      boosted > plain * 4.0,
+      "eq_db=12 at the fundamental gave {boosted:.6} against {plain:.6}"
+    );
+  }
+
+  #[test]
+  fn envelope_curve_one_is_linear() {
+    assert_eq!(envelope_curve(&Patch::default()), None);
+    assert_eq!(
+      envelope_curve(&Patch {
+        envelope_curve: f64::NAN,
+        ..Default::default()
+      }),
+      None
+    );
+    assert_eq!(
+      envelope_curve(&Patch {
+        envelope_curve: 9.0,
+        ..Default::default()
+      }),
+      Some(4.0)
+    );
+
+    let (attack, decay, sustain, body, release) =
+      (0.02f32, 0.05f32, 0.4f32, 0.1f32, 0.15f32);
+    let adsr = Adsr {
+      attack,
+      decay,
+      sustain,
+      body,
+      release,
+      curve: None,
+    };
+    let plain = |t: f32| {
+      if t < attack {
+        t / attack
+      } else if t < attack + decay {
+        1.0 + (sustain - 1.0) * (t - attack) / decay
+      } else if t <= attack + decay + body {
+        sustain
+      } else {
+        (sustain * (attack + decay + body + release - t) / release).max(0.0)
+      }
+    };
+    for i in 0..400 {
+      let t = i as f32 * 0.001;
+      assert_eq!(adsr.level(t).to_bits(), plain(t).to_bits(), "t = {t}");
+    }
+  }
+
+  #[test]
+  fn envelope_curve_above_one_delays_the_attack() {
+    let straight = Adsr {
+      attack: 0.1,
+      decay: 0.0,
+      sustain: 0.5,
+      body: 0.2,
+      release: 0.1,
+      curve: None,
+    };
+    let bent = Adsr {
+      curve: Some(2.0),
+      ..straight
+    };
+    assert!((straight.level(0.05) - 0.5).abs() < 1e-6);
+    assert!((bent.level(0.05) - 0.25).abs() < 1e-6);
+    assert_eq!(bent.level(0.2), 0.5);
+    // Halfway through the release the straight ramp is at half the sustain;
+    // the bent one has already fallen to a quarter.
+    assert!((straight.level(0.35) - 0.25).abs() < 1e-5);
+    assert!((bent.level(0.35) - 0.125).abs() < 1e-5);
+  }
+
+  #[test]
+  fn spread_produces_beating() {
+    let tone = Patch {
+      freq: 440.0,
+      duration: 0.5,
+      attack_ms: 0.0,
+      decay_ms: 0.0,
+      release_ms: 0.0,
+      reverb_mix: 0.0,
+      ..Default::default()
+    };
+    // Peak of each 10 ms window after the first five, in which the ladder and
+    // the DC blocker settle.  Spread 20 at 440 Hz beats at 5.08 Hz, so a 10 ms
+    // window near a null peaks well under the loudest one; a 50 ms window
+    // would not, because a null can sit at a window's edge.
+    let window_peaks = |patch: Patch| -> Vec<f32> {
+      left_channel(&single(patch), 0.45)
+        .chunks(441)
+        .skip(5)
+        .map(|window| window.iter().fold(0.0f32, |m, s| m.max(s.abs())))
+        .collect()
+    };
+    let swing = |peaks: &[f32]| {
+      let min = peaks.iter().copied().fold(f32::MAX, f32::min);
+      let max = peaks.iter().copied().fold(0.0f32, f32::max);
+      min / max
+    };
+    let steady = swing(&window_peaks(tone.clone()));
+    let beating = swing(&window_peaks(Patch {
+      spread: 20.0,
+      ..tone
+    }));
+    assert!(steady > 0.9, "a single voice swung to {steady:.3}");
+    assert!(beating < 0.5, "spread=20 swung only to {beating:.3}");
+  }
+
+  #[test]
+  fn hiss_passes_a_dark_ladder() {
+    let dark = Patch {
+      freq: 440.0,
+      duration: 0.3,
+      attack_ms: 0.0,
+      release_ms: 0.0,
+      reverb_mix: 0.0,
+      brightness: 0.08,
+      highpass: 2000.0,
+      ..Default::default()
+    };
+    let floor = note_body_mean_square(&dark);
+    let hissing = note_body_mean_square(&Patch {
+      hiss: 0.3,
+      ..dark.clone()
+    });
+    let breathy = note_body_mean_square(&Patch {
+      noise_mix: 0.3,
+      ..dark
+    });
+    assert!(
+      hissing > floor * 10.0,
+      "hiss=0.3 above a 2 kHz highpass gave {hissing:.6} against a floor of \
+       {floor:.6}"
+    );
+    assert!(
+      breathy < floor * 2.0,
+      "noise_mix=0.3 under a dark ladder gave {breathy:.6} against a floor \
+       of {floor:.6}"
     );
   }
 }

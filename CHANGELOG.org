@@ -3,9 +3,27 @@
 
 * Upcoming
 ** Added
+1. Patches gain four controls: a parametric EQ band (~eq_hz~, ~eq_db~, ~eq_q~),
+   an ~envelope_curve~ that bends the attack, decay, and release ramps, a
+   ~spread~ that doubles the main voice into two detuned copies, and a ~hiss~ of
+   white noise added after the filter.  No action needed.
+2. A new example, ~examples/llm-coding-agents.toml~, sonifies Claude Code
+   session activity with a drone fit to the Iron Seed ~Slash~ sample that grows
+   with the number of busy sessions.  It needs ~jq~ on the daemon's path.
 ** Fixes
+1. The dashboard's metric sparklines keep moving: once a heartbeat had 99 points
+   the newest poll was dropped instead of the oldest, so every sparkline froze
+   about three minutes after the page loaded.  No action needed.
 ** Breaking
+1. For library consumers: ~Patch~ and ~PatchOverrides~ gained six fields and
+   ~ContinuousControls~ five, so literal constructions without
+   ~..Default::default()~ must add them.
+2. A patch whose ~fm_depth~ is above 0 may sound slightly different, as it
+   already did whenever a note was added or a filter engaged.  No action needed.
 ** Maintenance
+1. The Elm frontend has a unit-test suite (~elm-test~, run by ~just test~ and
+   provided by the dev shell), starting with the sparkline history.  No action
+   needed.
 * v0.41.0
 ** Added
 1. Patches have a new ~sub_phase~ parameter: where the sub-octave starts in its

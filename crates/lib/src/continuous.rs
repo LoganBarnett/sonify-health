@@ -1,13 +1,15 @@
 use crate::downsample::exact_hold_hz;
 use crate::heartbeat::{
-  cutoff_ceiling, highpass_cutoff, lowpass_cutoff, oscillator_bank, pitch_hz,
-  reverb_stage, waveform_weights, OSCILLATOR_PHASE,
+  cutoff_ceiling, highpass_cutoff, hiss_level, lowpass_cutoff, oscillator_bank,
+  pitch_hz, reverb_stage, spread_cents, spread_voice_ratio, waveform_weights,
+  EqBand, HISS_SEED_BASE, OSCILLATOR_PHASE,
 };
 use crate::patch::Patch;
 use fundsp::net::Net;
 use fundsp::prelude32::{
-  dc, dcblock, delay, feedback, follow, highpass_q, lfo, lowpass_q, map, moog,
-  pan, pass, pink, shared, var, An, AudioNode, AudioUnit, Frame, U0, U1,
+  bell, busi, dc, dcblock, delay, feedback, follow, highpass_q, lfo, lowpass_q,
+  map, moog, pan, pass, pink, shared, var, white, An, AudioNode, AudioUnit,
+  Frame, U0, U1, U2,
 };
 use fundsp::shared::Shared;
 
@@ -41,6 +43,13 @@ pub struct ContinuousControls {
   pub noise_mix: Shared,
   pub drive: Shared,
   pub crush: Shared,
+  /// Spread between the two main voices in cents.
+  pub spread: Shared,
+  pub hiss: Shared,
+  pub eq_hz: Shared,
+  pub eq_q: Shared,
+  /// Linear amplitude gain of the EQ band, the form fundsp's bell takes.
+  pub eq_gain: Shared,
 }
 
 impl ContinuousControls {
@@ -48,6 +57,7 @@ impl ContinuousControls {
   pub fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
     let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
     let (cutoff, q) = filter_params(patch, sample_rate);
+    let eq = EqBand::from_patch(patch, sample_rate);
 
     ContinuousControls {
       freq: shared(pitch_hz(patch)),
@@ -70,6 +80,11 @@ impl ContinuousControls {
       noise_mix: shared(patch.noise_mix as f32),
       drive: shared(patch.drive as f32),
       crush: shared(patch.crush as f32),
+      spread: shared(spread_cents(patch)),
+      hiss: shared(hiss_level(patch)),
+      eq_hz: shared(eq.hz),
+      eq_q: shared(eq.q),
+      eq_gain: shared(eq.gain),
     }
   }
 
@@ -78,6 +93,7 @@ impl ContinuousControls {
   pub fn update_from_patch(&self, patch: &Patch, sample_rate: f64) {
     let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
     let (cutoff, q) = filter_params(patch, sample_rate);
+    let eq = EqBand::from_patch(patch, sample_rate);
 
     self.freq.set_value(pitch_hz(patch));
     self.sine_w.set_value(sine_w);
@@ -101,6 +117,11 @@ impl ContinuousControls {
     self.noise_mix.set_value(patch.noise_mix as f32);
     self.drive.set_value(patch.drive as f32);
     self.crush.set_value(patch.crush as f32);
+    self.spread.set_value(spread_cents(patch));
+    self.hiss.set_value(hiss_level(patch));
+    self.eq_hz.set_value(eq.hz);
+    self.eq_q.set_value(eq.q);
+    self.eq_gain.set_value(eq.gain);
   }
 }
 
@@ -222,8 +243,16 @@ pub fn continuous_graph(
       as f32
   });
 
+  // Two copies of the main bank at half weight, a half spread below and above
+  // the pitch.  The ratio multiplies the modulated pitch signal, so the
+  // modulation rides along and a live edit sweeps through the smoother.
   let main_osc = modulated_pitch(controls, 1.0)
-    >> oscillator_bank(OSCILLATOR_PHASE, weights());
+    >> busi::<U2, _, _>(|voice| {
+      let ratio = var(&controls.spread)
+        >> follow(smooth)
+        >> map(move |c: &Frame<f32, U1>| spread_voice_ratio(c[0], voice));
+      (pass() * ratio) >> (oscillator_bank(OSCILLATOR_PHASE, weights()) * 0.5)
+    });
   let sub_mix = var(&controls.sub_octave) >> follow(smooth);
   let sub_osc = (modulated_pitch(controls, 0.5)
     >> oscillator_bank(OSCILLATOR_PHASE + structural.sub_phase, weights()))
@@ -239,6 +268,16 @@ pub fn continuous_graph(
 
   // Noise mix.
   let noise_mix_smooth = var(&controls.noise_mix) >> follow(smooth);
+  let hiss_smooth = var(&controls.hiss) >> follow(smooth);
+
+  // A bell at unity gain is an exact passthrough, so the EQ band is always
+  // present and reads its smoothed controls rather than being a structural
+  // stage whose engagement would need a rebuild.
+  let eq_stage = (pass()
+    | (var(&controls.eq_hz) >> follow(smooth))
+    | (var(&controls.eq_q) >> follow(smooth))
+    | (var(&controls.eq_gain) >> follow(smooth)))
+    >> bell();
 
   // Filter.
   let cutoff_smooth = var(&controls.filter_cutoff) >> follow(smooth);
@@ -267,10 +306,14 @@ pub fn continuous_graph(
     >> drive_map
     >> (pass() + (pink().seed(noise_seed) * noise_mix_smooth));
   let mono = (signal | cutoff_smooth | q_smooth)
-    >> (moog() * amp_smooth * trem_mod * ext_vol)
+    >> ((moog() + (white().seed(HISS_SEED_BASE + noise_seed) * hiss_smooth))
+      * amp_smooth
+      * trem_mod
+      * ext_vol)
     >> dcblock()
     >> crush_map
-    >> exact_hold_hz(ds_rate);
+    >> exact_hold_hz(ds_rate)
+    >> eq_stage;
   // Filter stages are topological: a bypassed filter contributes no node (see
   // `StructuralParams`), and an engaged one reads its smoothed Shared cutoff so
   // live edits sweep.  `follow()` snaps on its first sample, so a fresh graph
@@ -391,6 +434,11 @@ mod tests {
       amplitude: 0.8,
       highpass: 120.0,
       lowpass: 4000.0,
+      spread: 20.0,
+      hiss: 0.3,
+      eq_hz: 300.0,
+      eq_db: 6.0,
+      eq_q: 2.0,
       ..Default::default()
     };
     let controls = ContinuousControls::from_patch(&lo, 44100.0);
@@ -406,6 +454,11 @@ mod tests {
     assert!((controls.amplitude.value() - 0.8).abs() < 0.01);
     assert!((controls.highpass.value() - 120.0).abs() < 0.01);
     assert!((controls.lowpass.value() - 4000.0).abs() < 0.01);
+    assert!((controls.spread.value() - 20.0).abs() < 0.01);
+    assert!((controls.hiss.value() - 0.3).abs() < 0.01);
+    assert!((controls.eq_hz.value() - 300.0).abs() < 0.01);
+    assert!((controls.eq_q.value() - 2.0).abs() < 0.01);
+    assert!((controls.eq_gain.value() - 1.995).abs() < 0.01);
   }
 
   /// Render half a second of a graph after a quarter-second warmup and return
@@ -512,6 +565,18 @@ mod tests {
       ..lo.clone()
     };
     assert_ne!(a, StructuralParams::from_patch(&turned, 44100.0));
+
+    // Spread, hiss, and the EQ band read smoothed controls, so editing them
+    // needs no rebuild.
+    let smoothed = Patch {
+      spread: 20.0,
+      hiss: 0.3,
+      eq_hz: 300.0,
+      eq_db: 6.0,
+      eq_q: 2.0,
+      ..lo.clone()
+    };
+    assert_eq!(a, StructuralParams::from_patch(&smoothed, 44100.0));
   }
 
   #[test]
@@ -626,6 +691,111 @@ mod tests {
       difference < 0.03,
       "a 0.5 Hz highpass stage changed the render by {:.1}% RMS",
       difference * 100.0
+    );
+  }
+
+  #[test]
+  fn continuous_eq_cut_attenuates() {
+    let tone = Patch {
+      freq: 440.0,
+      reverb_mix: 0.0,
+      eq_hz: 440.0,
+      ..Default::default()
+    };
+    let plain = rendered_mean_square(&tone);
+    let cut = rendered_mean_square(&Patch {
+      eq_db: -24.0,
+      ..tone.clone()
+    });
+    let boosted = rendered_mean_square(&Patch {
+      eq_db: 12.0,
+      ..tone
+    });
+    assert!(
+      cut < plain * 0.25,
+      "eq_db=-24 at the fundamental left {cut:.6} against {plain:.6}"
+    );
+    assert!(
+      boosted > plain * 4.0,
+      "eq_db=12 at the fundamental gave {boosted:.6} against {plain:.6}"
+    );
+  }
+
+  #[test]
+  fn continuous_eq_at_zero_db_is_transparent() {
+    let plain = settled_left_channel(&Patch::default(), 0.25);
+    let parked = settled_left_channel(
+      &Patch {
+        eq_hz: 300.0,
+        eq_q: 5.0,
+        ..Default::default()
+      },
+      0.25,
+    );
+    // The band's `v0 + 0 * v1` turns a -0.0 into +0.0, which is not a change
+    // in the signal, so the renders are compared with `==` rather than
+    // `to_bits`.
+    assert!(plain == parked, "a 0 dB band changed the render");
+  }
+
+  #[test]
+  fn continuous_spread_changes_output() {
+    let tone = Patch {
+      freq: 440.0,
+      reverb_mix: 0.0,
+      ..Default::default()
+    };
+    let one_voice = settled_left_channel(&tone, 0.25);
+    let two_voices = settled_left_channel(
+      &Patch {
+        spread: 20.0,
+        ..tone
+      },
+      0.25,
+    );
+    let rms = |s: &[f32]| {
+      (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+    };
+    let diff: Vec<f32> = one_voice
+      .iter()
+      .zip(&two_voices)
+      .map(|(a, b)| a - b)
+      .collect();
+    let difference = rms(&diff) / rms(&one_voice);
+    assert!(
+      difference > 0.1,
+      "spread=20 changed the render by only {:.1}% RMS",
+      difference * 100.0
+    );
+  }
+
+  #[test]
+  fn continuous_hiss_passes_a_dark_ladder() {
+    let dark = Patch {
+      freq: 440.0,
+      reverb_mix: 0.0,
+      brightness: 0.08,
+      highpass: 2000.0,
+      ..Default::default()
+    };
+    let floor = rendered_mean_square(&dark);
+    let hissing = rendered_mean_square(&Patch {
+      hiss: 0.3,
+      ..dark.clone()
+    });
+    let breathy = rendered_mean_square(&Patch {
+      noise_mix: 0.3,
+      ..dark
+    });
+    assert!(
+      hissing > floor * 10.0,
+      "hiss=0.3 above a 2 kHz highpass gave {hissing:.6} against a floor of \
+       {floor:.6}"
+    );
+    assert!(
+      breathy < floor * 2.0,
+      "noise_mix=0.3 under a dark ladder gave {breathy:.6} against a floor \
+       of {floor:.6}"
     );
   }
 }

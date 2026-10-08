@@ -70,6 +70,10 @@ impl Dimension {
 /// Crush runs after the amplitude envelope, so a coarse setting sounds
 /// different at every level a gradient passes through.  Its range stops where
 /// that becomes audible at the nominal amplitude.
+///
+/// Two spread voices beat, so what a steady-tone window holds depends on where
+/// in the beat it falls; `spread` stays out.  The envelope curve only shapes
+/// the ramps the settling time discards, so it stays out too.
 pub const SPACE: &[Dimension] = &[
   Dimension::linear("sine_ratio", 0.0, 1.0),
   Dimension::linear("tri_ratio", 0.0, 1.0),
@@ -83,6 +87,10 @@ pub const SPACE: &[Dimension] = &[
   Dimension::linear("crush", 0.0, 0.45),
   Dimension::linear("downsample", 0.0, 0.9),
   Dimension::logarithmic("lowpass", 200.0, 8000.0),
+  Dimension::logarithmic("eq_hz", 60.0, 6000.0),
+  Dimension::linear("eq_db", -18.0, 18.0),
+  Dimension::logarithmic("eq_q", 0.3, 6.0),
+  Dimension::linear("hiss", 0.0, 0.5),
 ];
 
 /// Amplitude every candidate is rendered at.
