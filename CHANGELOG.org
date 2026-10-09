@@ -3,6 +3,11 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.42.0
+** Added
 1. Patches gain four controls: a parametric EQ band (~eq_hz~, ~eq_db~, ~eq_q~),
    an ~envelope_curve~ that bends the attack, decay, and release ramps, a
    ~spread~ that doubles the main voice into two detuned copies, and a ~hiss~ of
