@@ -271,6 +271,23 @@
           };
         }
         // {
+          # Bundles Elm tests into a `nix flake check`.
+          elmTests = pkgs.stdenv.mkDerivation {
+            name = "sonify-health-elm-tests";
+            src = ./frontend;
+            nativeBuildInputs = [
+              pkgs.elmPackages.elm
+              pkgs.elmPackages.elm-test
+              pkgs.nodejs
+            ];
+            configurePhase = pkgs.elmPackages.fetchElmDeps {
+              elmPackages = import ./frontend/elm-srcs.nix;
+              elmVersion = "0.19.1";
+              registryDat = ./frontend/registry.dat;
+            };
+            buildPhase = "elm-test";
+            installPhase = "touch $out";
+          };
           darwinServiceEvaluates = foundation.lib.mkDarwinServiceEvalCheck {
             inherit pkgs;
             nix-darwin = foundation.inputs.nix-darwin;
@@ -347,6 +364,7 @@
             # Elm frontend toolchain.
             pkgs.elmPackages.elm
             pkgs.elmPackages.elm-format
+            pkgs.elmPackages.elm-test
             pkgs.elm2nix
             # Task runner.
             pkgs.just
