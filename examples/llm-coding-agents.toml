@@ -1,0 +1,161 @@
+[[heartbeats]]
+command = """
+cat ~/.claude/sessions/*.json 2>/dev/null |
+  jq --slurp 'map(select(.status == "busy")) | length / 8'
+"""
+crossfade_ms = 6.0
+cycle_offset_secs = 0.0
+cycle_secs = 15.0
+name = "agents-busy"
+phrase_gap = 0.0
+playback = "continuous"
+poll_interval_secs = 2.0
+repeat_rate = 1.0
+result_mode = "stdout"
+tiers = []
+
+[[heartbeats.notes]]
+offset = 0.0
+volume = 1.0
+
+[heartbeats.notes.transition]
+patches = [
+    "agents-busy-baseline",
+    "agents-busy-discordant",
+]
+type = "gradient"
+
+[[heartbeats.notes.transition.segments]]
+intensity = 2.0
+strategy = "linear"
+
+[[heartbeats]]
+command = """
+cat ~/.claude/sessions/*.json 2>/dev/null |
+  jq --slurp 'map(select(.status == "waiting")) | length / 8'
+"""
+crossfade_ms = 6.0
+cycle_offset_secs = 0.0
+cycle_secs = 15.0
+name = "agents-waiting"
+phrase_gap = 0.0
+playback = "loop"
+poll_interval_secs = 2.0
+repeat_rate = 1.0
+result_mode = "stdout"
+tiers = []
+
+[[heartbeats.notes]]
+offset = 0.0
+volume = 0.0
+
+[heartbeats.notes.transition]
+patches = [
+    "agents-waiting-none",
+    "agents-waiting-many",
+]
+type = "gradient"
+
+[[heartbeats.notes.transition.segments]]
+intensity = 3.0
+strategy = "ease-out"
+
+[patches.agents-busy-baseline]
+amplitude = 1.0
+attack_ms = 500.0
+brightness = 0.65
+chirp_ratio = 1.0
+crush = 0.31
+decay_ms = 0.0
+detune = 68.0
+downsample = 0.12
+drive = 2.115
+duration = 3.4
+echo_delay = 0.19
+echo_mix = 0.5
+envelope_curve = 1.0
+eq_db = 17.758
+eq_hz = 252.274
+eq_q = 2.885
+fm_depth = 2.5
+fm_ratio = 1.72
+freq = 33.0
+gap = 1.0
+harshness_offset = 0.0
+highpass = 20.0
+hiss = 0.0
+lowpass = 2909.069
+noise_mix = 0.0
+release_ms = 1000.0
+resonance = 4.929
+reverb_mix = 0.17
+saw_ratio = 0.81
+sine_ratio = 0.073
+spread = 11.6
+square_ratio = 0.33
+stereo_pan = 0.0
+sub_octave = 1.0
+sub_phase = 0.719
+sustain = 1.0
+tremolo_depth = 0.0
+tremolo_rate = 0.0
+tri_ratio = 0.144
+vibrato_depth = 0.0
+vibrato_rate = 0.0
+
+[patches.agents-busy-discordant]
+brightness = 1.69
+downsample = 0.48
+freq = 66.0
+overrides = "agents-busy-baseline"
+spread = 100.0
+
+[patches.agents-busy-silent]
+amplitude = 0.0
+overrides = "agents-busy-baseline"
+
+[patches.agents-waiting-many]
+overrides = "agents-waiting-none"
+
+[patches.agents-waiting-none]
+amplitude = 0.0
+attack_ms = 5.0
+brightness = 1.0
+chirp_ratio = 2.0
+crush = 0.0
+decay_ms = 0.0
+detune = 0.0
+downsample = 0.0
+drive = 1.0
+duration = 0.3
+echo_delay = 0.25
+echo_mix = 0.0
+envelope_curve = 1.0
+eq_db = 0.0
+eq_hz = 1000.0
+eq_q = 1.0
+fm_depth = 1.5
+fm_ratio = 2.0
+freq = 880.0
+gap = 3.0
+harshness_offset = 0.0
+highpass = 0.0
+hiss = 0.0
+lowpass = 18000.0
+noise_mix = 0.0
+release_ms = 400.0
+resonance = 1.0
+reverb_mix = 0.4
+saw_ratio = 0.0
+sine_ratio = 0.6
+spread = 0.0
+square_ratio = 0.0
+stereo_pan = 0.0
+sub_octave = 0.0
+sub_phase = 0.0
+sustain = 1.0
+tremolo_depth = 0.0
+tremolo_rate = 0.0
+tri_ratio = 0.4
+vibrato_depth = 0.0
+vibrato_rate = 0.0

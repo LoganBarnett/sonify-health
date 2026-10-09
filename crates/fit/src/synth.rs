@@ -78,6 +78,7 @@ mod tests {
   fn the_same_patch_renders_the_same_frames() {
     let patch = Patch {
       noise_mix: 0.5,
+      hiss: 0.3,
       ..Default::default()
     };
     assert_eq!(frames(patch.clone(), 8_192), frames(patch, 8_192));

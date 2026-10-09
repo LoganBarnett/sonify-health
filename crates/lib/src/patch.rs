@@ -115,12 +115,25 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
-    description = "Body amplitude (0–1) held during the `duration` phase, \
+    description = "Body amplitude (0-1) held during the `duration` phase, \
                    between the end of `decay_ms` and the start of \
                    `release_ms`. 1 = full level (flat envelope top), lower = \
                    quieter sustained tone."
   )]
   pub sustain: f64,
+
+  #[patch_param(
+    min = 0.25,
+    max = 4.0,
+    step = 0.01,
+    logarithmic,
+    description = "Bend of the attack, decay, and release ramps. 1 = straight \
+                   lines; above 1 the attack lingers near silence before \
+                   swelling and decay and release fall fast then trail off; \
+                   below 1 the reverse. No effect in continuous playback, \
+                   which has no envelope."
+  )]
+  pub envelope_curve: f64,
 
   #[patch_param(
     min = 0.5,
@@ -201,6 +214,38 @@ pub struct Patch {
                    lower = cuts more high frequencies."
   )]
   pub lowpass: f64,
+
+  // The attribute only accepts literals, so the `eq_hz` and `eq_db` bounds
+  // duplicate the constants in heartbeat.rs; a test asserts the sync.
+  #[patch_param(
+    min = 20.0,
+    max = 18000.0,
+    step = 1.0,
+    logarithmic,
+    description = "Centre frequency of a single parametric EQ band; `eq_db` \
+                   sets the boost or cut and `eq_q` the width."
+  )]
+  pub eq_hz: f64,
+
+  #[patch_param(
+    min = -24.0,
+    max = 24.0,
+    step = 0.1,
+    description = "Gain of the EQ band in dB. 0 = off, positive = a resonant \
+                   bump, negative = a notch. A large boost on a loud patch \
+                   exceeds full scale, so lower `amplitude` to compensate."
+  )]
+  pub eq_db: f64,
+
+  #[patch_param(
+    min = 0.1,
+    max = 10.0,
+    step = 0.01,
+    logarithmic,
+    description = "Width of the EQ band. Q 1.4 spans an octave; lower = \
+                   broader, higher = narrower."
+  )]
+  pub eq_q: f64,
 
   #[patch_param(
     min = 0.0,
@@ -283,6 +328,15 @@ pub struct Patch {
     min = 0.0,
     max = 1.0,
     step = 0.01,
+    description = "White noise added after the ladder filter, so it stays \
+                   bright however dark the tone; `lowpass` still caps it."
+  )]
+  pub hiss: f64,
+
+  #[patch_param(
+    min = 0.0,
+    max = 1.0,
+    step = 0.01,
     description = "Bitcrush intensity. 0 = clean, higher = grungier."
   )]
   pub crush: f64,
@@ -336,6 +390,18 @@ pub struct Patch {
   )]
   pub detune: f64,
 
+  // The attribute only accepts literals, so the upper bound duplicates the
+  // constant in heartbeat.rs; a test asserts the sync.
+  #[patch_param(
+    min = 0.0,
+    max = 100.0,
+    step = 0.1,
+    description = "Cents between two copies of the main oscillators, detuned \
+                   symmetrically around the pitch. 5-20 thickens, higher \
+                   beats audibly. The sub-octave is not spread."
+  )]
+  pub spread: f64,
+
   #[patch_param(
     min = -1.0,
     max = 1.0,
@@ -359,6 +425,7 @@ impl Default for Patch {
       decay_ms: 0.0,
       release_ms: 150.0,
       sustain: 1.0,
+      envelope_curve: 1.0,
       chirp_ratio: 1.0,
       stereo_pan: 0.0,
       reverb_mix: 0.2,
@@ -368,6 +435,9 @@ impl Default for Patch {
       resonance: 1.0,
       highpass: 0.0,
       lowpass: 18000.0,
+      eq_hz: 1000.0,
+      eq_db: 0.0,
+      eq_q: 1.0,
       sub_octave: 0.0,
       sub_phase: 0.0,
       vibrato_rate: 0.0,
@@ -377,12 +447,14 @@ impl Default for Patch {
       amplitude: 0.3,
       drive: 1.0,
       noise_mix: 0.0,
+      hiss: 0.0,
       crush: 0.0,
       fm_ratio: 0.0,
       fm_depth: 0.0,
       downsample: 0.0,
       gap: 0.0,
       detune: 0.0,
+      spread: 0.0,
       harshness_offset: 0.0,
     }
   }
@@ -529,7 +601,7 @@ mod tests {
         meta.name
       );
     }
-    assert_eq!(Patch::PARAMS.len(), 35);
+    assert_eq!(Patch::PARAMS.len(), 41);
   }
 
   #[test]
@@ -546,6 +618,14 @@ mod tests {
     assert_eq!(patch.get_param("highpass"), Some(2000.0));
     patch.set_param("lowpass", 1.0);
     assert_eq!(patch.get_param("lowpass"), Some(20.0));
+    patch.set_param("eq_db", 100.0);
+    assert_eq!(patch.get_param("eq_db"), Some(24.0));
+    patch.set_param("eq_db", -100.0);
+    assert_eq!(patch.get_param("eq_db"), Some(-24.0));
+    patch.set_param("envelope_curve", 10.0);
+    assert_eq!(patch.get_param("envelope_curve"), Some(4.0));
+    patch.set_param("envelope_curve", 0.0);
+    assert_eq!(patch.get_param("envelope_curve"), Some(0.25));
   }
 
   #[test]
@@ -570,6 +650,15 @@ mod tests {
     assert!(lowpass.logarithmic);
     let highpass = meta("highpass");
     assert_eq!(highpass.max, f64::from(crate::heartbeat::MAX_HIGHPASS));
+    let eq_hz = meta("eq_hz");
+    assert_eq!(eq_hz.max, f64::from(crate::heartbeat::MAX_CUTOFF));
+    assert_eq!(eq_hz.min, 20.0);
+    assert!(eq_hz.logarithmic);
+    let eq_db = meta("eq_db");
+    assert_eq!(eq_db.max, f64::from(crate::heartbeat::MAX_EQ_DB));
+    assert_eq!(eq_db.min, -f64::from(crate::heartbeat::MAX_EQ_DB));
+    let spread = meta("spread");
+    assert_eq!(spread.max, f64::from(crate::heartbeat::MAX_SPREAD_CENTS));
   }
 
   #[test]
