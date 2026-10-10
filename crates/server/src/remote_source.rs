@@ -23,7 +23,10 @@ use fundsp::prelude32::shared;
 use futures::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use serde::Deserialize;
-use sonify_health_lib::config::{OverrideInfo, SliderRanges};
+use sonify_health_lib::config::{
+  patch_with_violations, warn_limit_violations, ConfigError, OverrideInfo,
+  SliderRanges,
+};
 use sonify_health_lib::{
   HeartbeatConfig, NoteConfig, Patch, Playback, ResultMode, TierConfig,
   Transition,
@@ -161,6 +164,31 @@ impl WireHeartbeat {
 // ---------------------------------------------------------------------------
 // Mirror application
 // ---------------------------------------------------------------------------
+
+/// The snapshot with every patch held to its hard limits, each named after
+/// the remote that sent it.  Every value moved is logged; under `strict` the
+/// first one rejects the snapshot.
+fn limit_snapshot(
+  source_name: &str,
+  snapshot: WireStateSnapshot,
+  strict: bool,
+) -> Result<WireStateSnapshot, ConfigError> {
+  let library = snapshot
+    .library
+    .into_iter()
+    .map(|(name, patch)| {
+      patch_with_violations(&format!("{source_name}/{name}"), &patch, strict)
+        .map(|(limited, violations)| {
+          warn_limit_violations(&violations);
+          (name, limited)
+        })
+    })
+    .collect::<Result<HashMap<_, _>, _>>()?;
+  Ok(WireStateSnapshot {
+    library,
+    ..snapshot
+  })
+}
 
 /// Apply a full state snapshot to a Remote Source's mirror,
 /// replacing the patch library, heartbeat configs, slider ranges,
@@ -400,11 +428,28 @@ async fn handle_text_message(
     "state" => {
       let snapshot: WireStateSnapshot = serde_json::from_value(raw.clone())
         .map_err(|e| format!("invalid state snapshot: {e}"))?;
-      apply_state_snapshot(source, snapshot);
-      debug!(source = %source_name, "Mirrored full state snapshot");
-      // Rebroadcast a local snapshot so any frontend connected to
-      // this instance sees the freshly mirrored remote state.
-      let _ = preview.broadcast_tx.send(preview.state_snapshot());
+      match limit_snapshot(source_name, snapshot, preview.strict_limits) {
+        Ok(snapshot) => {
+          apply_state_snapshot(source, snapshot);
+          debug!(source = %source_name, "Mirrored full state snapshot");
+          // Rebroadcast a local snapshot so any frontend connected to
+          // this instance sees the freshly mirrored remote state.  A send
+          // fails only when no local client is connected.
+          if preview.broadcast_tx.send(preview.state_snapshot()).is_err() {
+            debug!(
+              source = %source_name,
+              "No local client to receive the mirrored snapshot"
+            );
+          }
+        }
+        // An error here would drop the connection, and the reconnect would
+        // deliver the same snapshot again, so strict mode keeps the previous
+        // mirror and stays connected for the next one.
+        Err(error) => warn!(
+          source = %source_name,
+          "Ignoring the remote's state snapshot: {error}"
+        ),
+      }
       Ok(())
     }
     "metric_changed" => {
@@ -513,6 +558,31 @@ mod tests {
       "overrides": {},
     })
     .to_string()
+  }
+
+  /// The sample snapshot with its one patch's reverb mix past the hard limit.
+  fn snapshot_past_a_limit() -> WireStateSnapshot {
+    let mut snapshot: WireStateSnapshot =
+      serde_json::from_str(&sample_snapshot_json()).unwrap();
+    if let Some(sine) = snapshot.library.get_mut("sine") {
+      sine.reverb_mix = 1.5;
+    }
+    snapshot
+  }
+
+  #[test]
+  fn a_remote_value_past_a_hard_limit_is_held_at_the_limit() {
+    let limited = limit_snapshot("remote", snapshot_past_a_limit(), false)
+      .expect("a lenient snapshot loads");
+    assert_eq!(limited.library["sine"].reverb_mix, 1.0);
+  }
+
+  #[test]
+  fn a_strict_subscriber_rejects_a_remote_value_past_a_hard_limit() {
+    let error = limit_snapshot("remote", snapshot_past_a_limit(), true)
+      .expect_err("a strict snapshot is rejected")
+      .to_string();
+    assert!(error.contains("remote/sine"), "{error}");
   }
 
   #[test]

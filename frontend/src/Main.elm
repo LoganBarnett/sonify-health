@@ -3556,16 +3556,27 @@ viewParamSlider model patchName patchValues maybeOverride meta =
                 ]
                 []
         , input
-            [ type_ "number"
-            , class "num-input"
-            , Html.Attributes.min (String.fromFloat meta.min)
-            , Html.Attributes.max (String.fromFloat meta.max)
-            , step (String.fromFloat meta.step)
-            , value (String.fromFloat val)
-            , onInput (SetPatchParam patchName meta.name)
-            ]
+            ([ type_ "number", class "num-input" ]
+                ++ numberInputBounds meta
+                ++ [ step (String.fromFloat meta.step)
+                   , value (String.fromFloat val)
+                   , onInput (SetPatchParam patchName meta.name)
+                   ]
+            )
             []
         , resetBtn
+        ]
+
+
+{-| The number box's bounds: the parameter's hard limits rather than its
+slider range, so a value typed past the slider is kept. A side with no hard
+limit gets no attribute.
+-}
+numberInputBounds : PatchParamMeta -> List (Attribute msg)
+numberInputBounds meta =
+    List.filterMap identity
+        [ Maybe.map (String.fromFloat >> Html.Attributes.min) meta.limitMin
+        , Maybe.map (String.fromFloat >> Html.Attributes.max) meta.limitMax
         ]
 
 

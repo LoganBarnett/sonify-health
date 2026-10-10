@@ -1,8 +1,8 @@
 use crate::downsample::exact_hold_hz;
 use crate::heartbeat::{
-  cutoff_ceiling, highpass_cutoff, hiss_level, lowpass_cutoff, oscillator_bank,
-  pitch_hz, reverb_stage, spread_cents, spread_voice_ratio, waveform_weights,
-  EqBand, HISS_SEED_BASE, OSCILLATOR_PHASE,
+  cutoff_ceiling, highpass_cutoff, lowpass_cutoff, oscillator_bank, pitch_hz,
+  reverb_stage, spread_voice_ratio, waveform_weights, EqBand, HISS_SEED_BASE,
+  OSCILLATOR_PHASE,
 };
 use crate::patch::Patch;
 use fundsp::net::Net;
@@ -53,8 +53,10 @@ pub struct ContinuousControls {
 }
 
 impl ContinuousControls {
-  /// Initialize all `Shared` values from a patch snapshot.
+  /// Initialize all `Shared` values from a patch snapshot, held to its hard
+  /// limits.
   pub fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
+    let patch = &patch.limited().0;
     let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
     let (cutoff, q) = filter_params(patch, sample_rate);
     let eq = EqBand::from_patch(patch, sample_rate);
@@ -74,14 +76,14 @@ impl ContinuousControls {
       fm_depth: shared(patch.fm_depth as f32),
       filter_cutoff: shared(cutoff),
       filter_q: shared(q),
-      highpass: shared(highpass_shared_value(patch)),
+      highpass: shared(highpass_shared_value(patch, sample_rate)),
       lowpass: shared(lowpass_shared_value(patch, sample_rate)),
       amplitude: shared(patch.amplitude as f32),
       noise_mix: shared(patch.noise_mix as f32),
       drive: shared(patch.drive as f32),
       crush: shared(patch.crush as f32),
-      spread: shared(spread_cents(patch)),
-      hiss: shared(hiss_level(patch)),
+      spread: shared(patch.spread as f32),
+      hiss: shared(patch.hiss as f32),
       eq_hz: shared(eq.hz),
       eq_q: shared(eq.q),
       eq_gain: shared(eq.gain),
@@ -89,8 +91,10 @@ impl ContinuousControls {
   }
 
   /// Write new values into all `Shared` controls.  The graph's
-  /// `follow()` nodes smooth the transition at the audio rate.
+  /// `follow()` nodes smooth the transition at the audio rate.  The patch is
+  /// held to its hard limits first.
   pub fn update_from_patch(&self, patch: &Patch, sample_rate: f64) {
+    let patch = &patch.limited().0;
     let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
     let (cutoff, q) = filter_params(patch, sample_rate);
     let eq = EqBand::from_patch(patch, sample_rate);
@@ -109,7 +113,9 @@ impl ContinuousControls {
     self.fm_depth.set_value(patch.fm_depth as f32);
     self.filter_cutoff.set_value(cutoff);
     self.filter_q.set_value(q);
-    self.highpass.set_value(highpass_shared_value(patch));
+    self
+      .highpass
+      .set_value(highpass_shared_value(patch, sample_rate));
     self
       .lowpass
       .set_value(lowpass_shared_value(patch, sample_rate));
@@ -117,8 +123,8 @@ impl ContinuousControls {
     self.noise_mix.set_value(patch.noise_mix as f32);
     self.drive.set_value(patch.drive as f32);
     self.crush.set_value(patch.crush as f32);
-    self.spread.set_value(spread_cents(patch));
-    self.hiss.set_value(hiss_level(patch));
+    self.spread.set_value(patch.spread as f32);
+    self.hiss.set_value(patch.hiss as f32);
     self.eq_hz.set_value(eq.hz);
     self.eq_q.set_value(eq.q);
     self.eq_gain.set_value(eq.gain);
@@ -137,8 +143,8 @@ fn filter_params(patch: &Patch, sample_rate: f64) -> (f32, f32) {
 /// floor while the stage is bypassed.  The floor only sounds during the poll
 /// interval between a live edit crossing the bypass boundary and the structural
 /// rebuild that removes the stage.
-fn highpass_shared_value(patch: &Patch) -> f32 {
-  highpass_cutoff(patch).unwrap_or(1.0)
+fn highpass_shared_value(patch: &Patch, sample_rate: f64) -> f32 {
+  highpass_cutoff(patch, sample_rate).unwrap_or(1.0)
 }
 
 /// Value for the lowpass `Shared`: the effective cutoff, or the stable ceiling
@@ -169,7 +175,9 @@ pub struct StructuralParams {
 }
 
 impl StructuralParams {
+  /// The structural parameters of a patch held to its hard limits.
   pub fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
+    let patch = &patch.limited().0;
     StructuralParams {
       echo_delay: patch.echo_delay as f32,
       echo_mix: patch.echo_mix as f32,
@@ -177,7 +185,7 @@ impl StructuralParams {
       stereo_pan: patch.stereo_pan as f32,
       downsample: patch.downsample as f32,
       sub_phase: patch.sub_phase as f32,
-      highpass_bypassed: highpass_cutoff(patch).is_none(),
+      highpass_bypassed: highpass_cutoff(patch, sample_rate).is_none(),
       lowpass_bypassed: lowpass_cutoff(patch, sample_rate).is_none(),
     }
   }
@@ -259,10 +267,11 @@ pub fn continuous_graph(
     * sub_mix;
 
   // Drive via map() closure reading Shared, since shape(Tanh(..))
-  // bakes the drive value at construction.
+  // bakes the drive value at construction.  The Shared only ever holds a
+  // limited drive, which stays above zero.
   let drive_s = controls.drive.clone();
   let drive_map = map(move |x: &Frame<f32, U1>| {
-    let d = drive_s.value().max(0.01);
+    let d = drive_s.value();
     (x[0] * d).tanh() / d.tanh()
   });
 
@@ -359,7 +368,7 @@ pub fn continuous_graph_with_notes(
   let mut all_structural = Vec::with_capacity(patches.len());
 
   let mut iter = patches.iter().enumerate().map(|(index, (patch, volume))| {
-    let mut p = patch.clone();
+    let mut p = patch.limited().0;
     p.amplitude *= *volume;
     let controls = ContinuousControls::from_patch(&p, sample_rate);
     let structural = StructuralParams::from_patch(&p, sample_rate);

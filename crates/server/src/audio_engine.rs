@@ -1360,10 +1360,17 @@ fn play_oneshot_once(
 
 /// Sleep for `dur` in ~100 ms increments, checking `running` flag.
 fn sleep_checking(running: &AtomicBool, dur: Duration) {
-  let deadline = Instant::now() + dur;
-  while Instant::now() < deadline && running.load(Ordering::Relaxed) {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    thread::sleep(remaining.min(Duration::from_millis(100)));
+  // A note too long to represent saturates at `Duration::MAX`, and adding
+  // that to an `Instant` panics, so a deadline past `Instant`'s range waits
+  // until shutdown instead.
+  let deadline = Instant::now().checked_add(dur);
+  let step = Duration::from_millis(100);
+  while deadline.is_none_or(|d| Instant::now() < d)
+    && running.load(Ordering::Relaxed)
+  {
+    let remaining =
+      deadline.map_or(step, |d| d.saturating_duration_since(Instant::now()));
+    thread::sleep(remaining.min(step));
   }
 }
 

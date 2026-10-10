@@ -1,3 +1,6 @@
+use sonify_health_lib::config::{
+  patch_with_violations, warn_limit_violations, ConfigError,
+};
 use sonify_health_lib::{Patch, PatchLibrary, PatchOverrides};
 
 /// CLI patch overrides shared by the `preview` and `print`
@@ -220,13 +223,25 @@ impl CliPatchOverrides {
     }
   }
 
-  /// Resolve the named patch from the library and apply CLI
-  /// overrides.
-  pub fn resolve_patch(&self, library: &PatchLibrary) -> Patch {
-    library
-      .get(&self.patch_name)
-      .cloned()
-      .unwrap_or_default()
-      .with_overrides(&self.patch_overrides())
+  /// Resolve the named patch from the library and apply CLI overrides, held
+  /// to the hard limits the same way a config file's patches are.
+  pub fn resolve_patch(
+    &self,
+    library: &PatchLibrary,
+    strict: bool,
+  ) -> Result<Patch, ConfigError> {
+    patch_with_violations(
+      &self.patch_name,
+      &library
+        .get(&self.patch_name)
+        .cloned()
+        .unwrap_or_default()
+        .with_overrides(&self.patch_overrides()),
+      strict,
+    )
+    .map(|(patch, violations)| {
+      warn_limit_violations(&violations);
+      patch
+    })
   }
 }

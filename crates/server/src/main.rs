@@ -13,7 +13,9 @@
 
 use rust_template_foundation::main as foundation_main;
 use rust_template_foundation::{Server, ServerError};
-use sonify_health_lib::config::ConfigError as LibConfigError;
+use sonify_health_lib::config::{
+  warn_limit_violations, ConfigError as LibConfigError,
+};
 use sonify_health_server::audio_engine::{self, AudioEngineError};
 use sonify_health_server::config::{Config, ConfigError};
 use sonify_health_server::frontend::Frontend;
@@ -64,6 +66,8 @@ pub async fn main(
   config: Config,
   server: Server,
 ) -> Result<ExitCode, ApplicationError> {
+  warn_limit_violations(&config.limit_violations);
+
   // rustls 0.23 requires a process-level CryptoProvider to be
   // selected before the first TLS handshake; without one the first
   // outbound `wss://` connection panics with "Could not
@@ -96,18 +100,21 @@ pub async fn main(
     std::fs::metadata(p).is_ok_and(|m| !m.permissions().readonly())
   });
 
-  let preview = Arc::new(PreviewState::new(
-    config.library.clone(),
-    config.overrides.clone(),
-    config.heartbeats.clone(),
-    Arc::clone(&muted),
-    Arc::clone(&running),
-    metrics.clone(),
-    config.slider_ranges.clone(),
-    config.config_path_resolved.clone(),
-    config_writable,
-    config.headless,
-  ));
+  let preview = Arc::new(
+    PreviewState::new(
+      config.library.clone(),
+      config.overrides.clone(),
+      config.heartbeats.clone(),
+      Arc::clone(&muted),
+      Arc::clone(&running),
+      metrics.clone(),
+      config.slider_ranges.clone(),
+      config.config_path_resolved.clone(),
+      config_writable,
+      config.headless,
+    )
+    .with_strict_limits(config.strict_limits),
+  );
 
   // Declare each Remote Source up-front so the connector spawn loop
   // below picks them up, and apply the user's `playback_enabled`

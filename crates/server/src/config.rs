@@ -10,10 +10,11 @@ use rust_template_foundation::logging::{LogFormat, LogLevel};
 use rust_template_foundation::server::runner::{ServerApp, ServerRunConfig};
 use rust_template_foundation::{CliApp, MergeConfig};
 use sonify_health_lib::config::{
-  ConfigError as LibConfigError, OverrideInfo, RemoteSourceConfig, SliderRanges,
+  ConfigError as LibConfigError, OverrideInfo, PatchLimitViolation,
+  RemoteSourceConfig, SliderRanges,
 };
 use sonify_health_lib::{
-  builtin_library, HeartbeatConfig, Patch, PatchLibrary, PatchOverrides,
+  builtin_library, load_library, HeartbeatConfig, LoadedLibrary, PatchLibrary,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -104,8 +105,19 @@ pub struct Config {
   #[merge_config(default = "false")]
   pub headless: bool,
 
+  /// Fail to load when a patch value breaks a hard limit, instead of
+  /// holding it at the limit with a warning.  Also governs dashboard imports
+  /// and remote snapshots.
+  #[merge_config(default = "false")]
+  pub strict_limits: bool,
+
   #[merge_config(skip)]
   pub library: PatchLibrary,
+
+  /// Patch values the hard limits moved while loading.  Configuration is
+  /// read before logging starts, so `main` logs these once it has.
+  #[merge_config(skip)]
+  pub limit_violations: Vec<PatchLimitViolation>,
 
   #[merge_config(skip)]
   pub overrides: HashMap<String, OverrideInfo>,
@@ -135,14 +147,21 @@ impl Config {
     cli: &CliRaw,
     file: &ConfigFileRaw,
   ) -> Result<PatchLibrary, LibConfigError> {
-    build_library_and_overrides(cli, file).map(|(lib, _)| lib)
+    loaded_library(cli, file).map(|loaded| loaded.library)
   }
 
   fn resolve_overrides(
     cli: &CliRaw,
     file: &ConfigFileRaw,
   ) -> Result<HashMap<String, OverrideInfo>, LibConfigError> {
-    build_library_and_overrides(cli, file).map(|(_, ovr)| ovr)
+    loaded_library(cli, file).map(|loaded| loaded.overrides)
+  }
+
+  fn resolve_limit_violations(
+    cli: &CliRaw,
+    file: &ConfigFileRaw,
+  ) -> Result<Vec<PatchLimitViolation>, LibConfigError> {
+    loaded_library(cli, file).map(|loaded| loaded.limit_violations)
   }
 
   fn resolve_heartbeats(
@@ -307,83 +326,18 @@ impl ServerApp for Config {
   }
 }
 
-fn build_library_and_overrides(
+/// The patch library this config describes.
+fn loaded_library(
   cli: &CliRaw,
   file: &ConfigFileRaw,
-) -> Result<(PatchLibrary, HashMap<String, OverrideInfo>), LibConfigError> {
-  let mut library = builtin_library();
-  let mut override_entries: Vec<(String, String, toml::Value)> = Vec::new();
-
-  for (name, mut table) in file.extra.patches.clone() {
-    if let Some(base_val) =
-      table.as_table_mut().and_then(|t| t.remove("overrides"))
-    {
-      let base = base_val
-        .as_str()
-        .ok_or_else(|| {
-          LibConfigError::Validation(format!(
-            "patch {name:?}: 'overrides' must be a string"
-          ))
-        })?
-        .to_string();
-      override_entries.push((name, base, table));
-    } else {
-      let patch: Patch =
-        table
-          .try_into()
-          .map_err(|source| LibConfigError::PatchParse {
-            name: name.clone(),
-            source: Box::new(source),
-          })?;
-      library.insert(name, patch);
-    }
-  }
-
-  for path in &cli.extra.patch_library {
-    let contents = std::fs::read_to_string(path).map_err(|source| {
-      LibConfigError::PatchLibraryRead {
-        path: path.clone(),
-        source,
-      }
-    })?;
-    let extra: HashMap<String, Patch> =
-      toml::from_str(&contents).map_err(|source| {
-        LibConfigError::PatchLibraryParse {
-          path: path.clone(),
-          source: Box::new(source),
-        }
-      })?;
-    for (name, patch) in extra {
-      library.insert(name, patch);
-    }
-  }
-
-  let mut overrides = HashMap::new();
-  for (name, base, table) in override_entries {
-    if !library.contains_key(&base) {
-      return Err(LibConfigError::OverrideBaseMissing { name, base });
-    }
-    if overrides.contains_key(&base) {
-      return Err(LibConfigError::OverrideChained { name, base });
-    }
-    let parsed: PatchOverrides =
-      table
-        .try_into()
-        .map_err(|source| LibConfigError::PatchParse {
-          name: name.clone(),
-          source: Box::new(source),
-        })?;
-    let delta: HashMap<String, f64> = parsed
-      .to_fields()
-      .into_iter()
-      .map(|(k, v)| (k.to_string(), v))
-      .collect();
-    let resolved = library[&base].clone().with_overrides(&parsed);
-    library.insert(name.clone(), resolved);
-    overrides.insert(name, OverrideInfo { base, delta });
-  }
-
-  Ok((library, overrides))
+) -> Result<LoadedLibrary, LibConfigError> {
+  // The library resolves before the merged `Config` exists, so the flag is
+  // read from the raw layers in the merge's own order: the CLI wins.
+  load_library(
+    &file.extra.patches,
+    &cli.extra.patch_library,
+    cli.strict_limits.or(file.strict_limits).unwrap_or(false),
+  )
 }
 
 // ── save-back serializers used by the websocket save_config handler ─

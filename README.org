@@ -423,33 +423,55 @@ silently dropped) — a reconnect is the right response.
 
 * Configuration
 
-Copy =config.example.toml= to =config.toml=.  All fields are optional; the
-daemon runs with sensible defaults.
+The daemon's options, each with the environment variable that also sets it:
 
-Top-level keys:
+#+name: server-help
+#+begin_src sh :results output verbatim :exports code
+sonify-health-server --help
+#+end_src
 
-- =log_level= / =log_format= — logging control.
-- =listen= — web server bind address.
-- =audio_device= — audio output device name (default: system default).
-- =headless= — when true, skip the audio device entirely.  Pollers and the
-  WebSocket stay live; no audio is produced.  Default false.  See
-  /Multi-instance setup/ above.
-- =[patches]= — named patch definitions for the sound library.
-- =[[sources]]= — remote ~sonify-health~ instances to subscribe to.  Each entry sets
-  =name=, =url=, and an optional =playback_enabled= (default false).
+#+RESULTS: server-help
+#+begin_example
+Infrastructure sonification daemon
 
-Each =[[heartbeats]]= entry defines a probe and one or more notes.  The =playback=
-field selects the mode (=clock=, =loop=, or =continuous=; defaults to =clock=).
-The =result_mode= field determines how the command output is read:
+Usage: sonify-health-server [OPTIONS]
 
-- =exit-code= — exit code 0/1/2 maps to discrete thresholds.
-- =stdout= — command prints a metric value (0.0–1.0) to stdout.
+Options:
+      --log-level <LOG_LEVEL>
+          Log level (trace, debug, info, warn, error) [env: sonify_health_log_level=]
+      --log-format <LOG_FORMAT>
+          Log format (text, json) [env: sonify_health_log_format=]
+  -c, --config <CONFIG>
+          Path to configuration file [env: sonify_health_config=]
+      --listen <LISTEN>
+          Address to listen on: host:port for TCP, /path/to.sock for Unix socket, or sd-listen to inherit from systemd [env: sonify_health_listen=]
+      --base-url <BASE_URL>
+          Base URL of this service (e.g. https://sonify.example.com), used by foundation to construct the OIDC redirect URI and shared with the OIDC handlers [env: sonify_health_base_url=]
+      --audio-device [<AUDIO_DEVICE>]
+          Audio device substring for output device selection.  Match is case-insensitive against both cpal's device ID and description [env: sonify_health_audio_device=]
+      --headless <HEADLESS>
+          Run without opening an audio device.  Pollers, WebSocket state, frontend, and metrics keep working; intended for speakerless servers whose state will be rendered by another instance subscribed to this one [env: sonify_health_headless=] [possible values: true, false]
+      --strict-limits <STRICT_LIMITS>
+          Fail to load when a patch value breaks a hard limit, instead of holding it at the limit with a warning.  Also governs dashboard imports and remote snapshots [env: sonify_health_strict_limits=] [possible values: true, false]
+      --patch-library <PATCH_LIBRARY>
+          Path to a TOML file of patch definitions.  May be repeated; last-in wins for overlapping patch names.  The main config file always wins over CLI-supplied patch libraries
+      --source <NAME=URL>
+          Declare a Remote Source as `name=url`.  May be repeated. Sources from the config file's `[[sources]]` array and these CLI flags are merged; names must be unique across the merged set, and `localhost` is reserved for the Local Source
+      --oidc-issuer <OIDC_ISSUER>
+          OIDC issuer URL for provider discovery [env: OIDC_ISSUER=]
+      --oidc-client-id <OIDC_CLIENT_ID>
+          OIDC client ID [env: OIDC_CLIENT_ID=]
+      --oidc-client-secret-file <OIDC_CLIENT_SECRET_FILE>
+          Path to a file containing the OIDC client secret [env: OIDC_CLIENT_SECRET_FILE=]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+#+end_example
 
-Each note within a heartbeat carries a =transition= that maps the probe metric
-to patches:
-
-- =discrete= — selects the first state whose =threshold= exceeds the metric.
-- =gradient= — interpolates between adjacent patches.
+[[file:config.example.toml][config.example.toml]] documents every config-file field, including the patches,
+heartbeats, and remote sources that only a file can describe.  Copy it to
+=config.toml= and edit.
 
 * Gotchas
 

@@ -81,8 +81,8 @@ fn known_parameter_names() -> String {
 }
 
 /// `base` with every assignment applied in order, so a later assignment to
-/// the same parameter wins.  Each value is clamped to its parameter's declared
-/// range.
+/// the same parameter wins.  Each value is held to its parameter's hard
+/// limits; a value past the slider range is kept.
 pub fn patch_with_params(
   base: Patch,
   params: &[ParamAssignment],
@@ -120,7 +120,7 @@ fn warn_if_clamped(patch: &Patch, param: &ParamAssignment) {
       name = %param.name,
       requested = param.value,
       applied,
-      "Patch parameter clamped to its declared range"
+      "Patch parameter held at its hard limit"
     );
   }
 }
@@ -197,11 +197,14 @@ mod tests {
   }
 
   #[test]
-  fn clamps_to_the_declared_range() {
-    let patch =
-      patch_with_params(Patch::default(), &[assignment("freq", 50_000.0)])
-        .unwrap();
-    assert_eq!(patch.freq, 12_000.0);
+  fn holds_to_the_hard_limits_but_not_the_slider() {
+    let patch = patch_with_params(
+      Patch::default(),
+      &[assignment("freq", 50_000.0), assignment("attack_ms", -5.0)],
+    )
+    .unwrap();
+    assert_eq!(patch.freq, 50_000.0);
+    assert_eq!(patch.attack_ms, 0.0);
   }
 
   #[test]

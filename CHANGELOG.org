@@ -3,9 +3,33 @@
 
 * Upcoming
 ** Added
+1. The dashboard's number box beside each patch slider accepts values past the
+   slider, up to the parameter's hard limits.  No action needed.
+2. ~strict_limits~ (~--strict-limits true~, or ~strictLimits~ in the Nix
+   modules) turns a patch value past a hard limit into a startup error, a
+   rejected import, or a skipped remote snapshot.  No action needed.
 ** Fixes
+1. Gradients and the dashboard no longer pull a patch value back inside its
+   slider's range, so the medbay and reactor examples' cpu patches now play as
+   written.  Listen again to any patch tuned past a slider, since it now sounds
+   as its config says.
+2. A meaningless patch value, such as a negative attack or a reverb mix above 1,
+   is held at a hard limit with a startup warning instead of reaching the synth
+   unchecked.  Read the warnings for any value it moves.
+3. A note time too long to represent no longer panics the playback thread.  No
+   action needed.
+4. ~highpass~ above 2000 Hz is honoured, up to the output device's limit.  No
+   action needed.
+5. An override whose base is itself an override now always fails as a chained
+   override, where it sometimes reported a missing base.  No action needed.
 ** Breaking
+1. For library consumers: ~PatchParamMeta~ gained ~default~, ~limit_min~,
+   ~limit_max~, and ~positive~, and ~set_param~ holds a value to the hard limits
+   rather than the slider's range.  Literal constructions of ~PatchParamMeta~
+   must add the fields.
 ** Maintenance
+1. The server and the CLI resolve patch libraries through one loader in the
+   library crate, ~load_library~, instead of two copies.  No action needed.
 * v0.43.0
 ** Fixes
 1. The dashboard's metric sparklines keep moving: once a heartbeat had 99 points
@@ -23,7 +47,7 @@
    white noise added after the filter.  No action needed.
 2. A new example, ~examples/llm-coding-agents.toml~, sonifies Claude Code
    session activity with a drone fit to the Iron Seed ~Slash~ sample that grows
-   with the number of busy sessions.  It needs ~jq~ on the daemon's path.
+   with the number of open sessions.  It needs ~jq~ on the daemon's path.
 ** Fixes
 ** Breaking
 1. For library consumers: ~Patch~ and ~PatchOverrides~ gained six fields and

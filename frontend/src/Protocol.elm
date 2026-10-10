@@ -46,6 +46,7 @@ module Protocol exposing
     , encodeSetRemotePlaybackEnabled
     , encodeSetTiers
     , encodeTriggerHeartbeat
+    , patchParamMetaDecoder
     )
 
 import Dict exposing (Dict)
@@ -53,6 +54,10 @@ import Json.Decode as D
 import Json.Encode as E
 
 
+{-| One patch parameter's metadata. `min` and `max` bound the slider, to
+taste; `limitMin` and `limitMax` are the hard limits the server holds a value
+to, and `Nothing` means unbounded on that side.
+-}
 type alias PatchParamMeta =
     { name : String
     , description : String
@@ -60,6 +65,8 @@ type alias PatchParamMeta =
     , max : Float
     , step : Float
     , logarithmic : Bool
+    , limitMin : Maybe Float
+    , limitMax : Maybe Float
     }
 
 
@@ -477,14 +484,16 @@ defaultSliderRangesProtocol =
 
 patchParamMetaDecoder : D.Decoder PatchParamMeta
 patchParamMetaDecoder =
-    D.map6
-        (\n d mn mx s lg ->
+    D.map8
+        (\n d mn mx s lg lmn lmx ->
             { name = n
             , description = d
             , min = mn
             , max = mx
             , step = s
             , logarithmic = lg
+            , limitMin = lmn
+            , limitMax = lmx
             }
         )
         (D.field "name" D.string)
@@ -493,6 +502,16 @@ patchParamMetaDecoder =
         (D.field "max" D.float)
         (D.field "step" D.float)
         (D.field "logarithmic" D.bool)
+        (optionalLimit "limit_min")
+        (optionalLimit "limit_max")
+
+
+{-| A hard limit the server sends as a number, or as `null` (or not at all)
+when the parameter is unbounded on that side.
+-}
+optionalLimit : String -> D.Decoder (Maybe Float)
+optionalLimit key =
+    D.maybe (D.field key D.float)
 
 
 libraryDecoder : D.Decoder (Dict String (Dict String Float))

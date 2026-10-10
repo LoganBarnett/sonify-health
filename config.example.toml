@@ -12,12 +12,26 @@ listen = "127.0.0.1:3000"  # Web server bind address (daemon mode)
 # heartbeats from elsewhere.  Default false.
 # headless = false
 
+# A patch value past its dashboard slider is kept.  One past a hard
+# limit, where the value stops meaning anything (a negative attack
+# time, a reverb mix above 1), is held at the limit with a warning that
+# names the patch.  Set this to stop startup instead; it also rejects a
+# dashboard import or a remote snapshot that breaks a limit.  Default
+# false.
+# strict_limits = false
+
 # Custom patch definitions.  Each key is a patch name.
 # [patches.warm]
 # freq = 220.0
 # sine_ratio = 0.9
 # attack_ms = 60.0
 # release_ms = 300.0
+#
+# A patch can derive from another and change only the fields it names.
+# The base cannot itself be an override.
+# [patches.warm-bright]
+# overrides = "warm"
+# brightness = 1.6
 
 # Each [[heartbeats]] entry defines a probe command and one or more
 # notes that map its metric to patches from the library.  A command is
