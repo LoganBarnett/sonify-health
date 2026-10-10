@@ -29,7 +29,7 @@ pub struct RenderArgs {
   pub sample_rate: u32,
 
   /// Set a patch parameter over the default patch, as NAME=VALUE.  May be
-  /// repeated; a value outside the parameter's range is clamped to it.
+  /// repeated; a value past the parameter's hard limits is held at them.
   #[arg(long = "param", value_name = "NAME=VALUE")]
   pub params: Vec<ParamAssignment>,
 }

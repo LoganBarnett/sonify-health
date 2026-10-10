@@ -21,6 +21,9 @@
     // lib.optionalAttrs cfg.headless {
       headless = true;
     }
+    // lib.optionalAttrs cfg.strictLimits {
+      strict_limits = true;
+    }
     // lib.optionalAttrs (cfg.sources != []) {
       sources =
         map (s: {
@@ -248,6 +251,19 @@ in {
         rendered remotely by another sonify-health instance subscribed
         to this one.  Mutually compatible with audioDevice (audioDevice
         is simply ignored when headless = true).
+      '';
+    };
+
+    strictLimits = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      example = true;
+      description = ''
+        Fail to start when a patch value breaks a hard limit, a value
+        that is meaningless rather than merely past the dashboard
+        slider.  When false, such a value is held at the limit and a
+        warning names the patch and the parameter.  Also rejects
+        dashboard imports and remote snapshots that break one.
       '';
     };
 

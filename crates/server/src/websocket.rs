@@ -9,7 +9,9 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
-use sonify_health_lib::config::OverrideInfo;
+use sonify_health_lib::config::{
+  patch_with_violations, warn_limit_violations, OverrideInfo,
+};
 use sonify_health_lib::heartbeat_config::{
   default_crossfade_ms, default_volume,
 };
@@ -114,14 +116,17 @@ fn handle_client_message(
     "set_patch_param" => {
       let patch_name = msg.get("patch_name").and_then(|v| v.as_str())?;
       let param = msg.get("param").and_then(|v| v.as_str())?;
-      let value = msg.get("value").and_then(|v| v.as_f64())?;
-      {
+      let requested = msg.get("value").and_then(|v| v.as_f64())?;
+      // `set_param` holds the value to its hard limits, so every client is
+      // told the value it kept rather than the one requested.
+      let value = {
         let mut lib = local.library.write();
         let patch = lib.get_mut(patch_name)?;
-        if !patch.set_param(param, value) {
+        if !patch.set_param(param, requested) {
           return None;
         }
-      }
+        patch.get_param(param)?
+      };
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "patch_param_changed",
@@ -342,14 +347,17 @@ fn handle_client_message(
     "set_patch_param_and_play" => {
       let patch_name = msg.get("patch_name").and_then(|v| v.as_str())?;
       let param = msg.get("param").and_then(|v| v.as_str())?;
-      let value = msg.get("value").and_then(|v| v.as_f64())?;
-      {
+      let requested = msg.get("value").and_then(|v| v.as_f64())?;
+      // `set_param` holds the value to its hard limits, so every client is
+      // told the value it kept rather than the one requested.
+      let value = {
         let mut lib = local.library.write();
         let patch = lib.get_mut(patch_name)?;
-        if !patch.set_param(param, value) {
+        if !patch.set_param(param, requested) {
           return None;
         }
-      }
+        patch.get_param(param)?
+      };
       let _ = preview.broadcast_tx.send(
         json!({
           "type": "patch_param_changed",
@@ -639,7 +647,9 @@ fn handle_client_message(
 
     "import_config" => {
       let text = msg.get("text").and_then(|v| v.as_str())?;
-      match parse_import(text) {
+      match parse_import(text)
+        .and_then(|patches| limit_import(patches, preview.strict_limits))
+      {
         Ok(patches) => {
           let mut lib = local.library.write();
           for (name, patch) in patches {
@@ -1119,6 +1129,25 @@ fn rename_in_transition(
   }
 }
 
+/// The imported patches held to their hard limits.  Under `strict` the first
+/// value past a limit rejects the whole import, and its message is the reply.
+fn limit_import(
+  patches: Vec<(String, Patch)>,
+  strict: bool,
+) -> Result<Vec<(String, Patch)>, String> {
+  patches
+    .into_iter()
+    .map(|(name, patch)| {
+      patch_with_violations(&name, &patch, strict)
+        .map(|(limited, violations)| {
+          warn_limit_violations(&violations);
+          (name, limited)
+        })
+        .map_err(|error| error.to_string())
+    })
+    .collect()
+}
+
 /// Auto-detect format and parse patches from imported text.
 fn parse_import(text: &str) -> Result<Vec<(String, Patch)>, String> {
   let trimmed = text.trim();
@@ -1212,6 +1241,49 @@ mod tests {
     handle_client_message(&preview, &msg);
 
     assert_eq!(get_param(&preview, "sine", "freq"), new_val);
+  }
+
+  /// The broadcast a client sees after setting `param` to `value`, and the
+  /// value the library kept.
+  fn set_and_watch(param: &str, value: f64) -> (serde_json::Value, f64) {
+    let preview = test_preview();
+    let mut rx = preview.broadcast_tx.subscribe();
+    let msg = json!({
+      "type": "set_patch_param",
+      "patch_name": "sine",
+      "param": param,
+      "value": value,
+    })
+    .to_string();
+    handle_client_message(&preview, &msg);
+    let changed = std::iter::from_fn(|| rx.try_recv().ok())
+      .filter_map(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+      .find(|m| m["type"] == "patch_param_changed")
+      .expect("a patch_param_changed broadcast");
+    (changed, get_param(&preview, "sine", param))
+  }
+
+  #[test]
+  fn a_value_past_the_slider_is_kept_and_echoed() {
+    let (changed, kept) = set_and_watch("attack_ms", 3000.0);
+    assert_eq!(kept, 3000.0);
+    assert_eq!(changed["value"], 3000.0);
+  }
+
+  #[test]
+  fn a_value_past_a_hard_limit_echoes_what_was_kept() {
+    let (changed, kept) = set_and_watch("attack_ms", -5.0);
+    assert_eq!(kept, 0.0);
+    assert_eq!(changed["value"], 0.0);
+  }
+
+  #[test]
+  fn a_strict_import_rejects_a_value_past_a_hard_limit() {
+    let patches = parse_import("[slow]\nattack_ms = -5.0\n").unwrap();
+    let lenient = limit_import(patches.clone(), false).unwrap();
+    assert_eq!(lenient[0].1.attack_ms, 0.0);
+    let strict = limit_import(patches, true).unwrap_err();
+    assert!(strict.contains("attack_ms"), "{strict}");
   }
 
   /// `play_patch` auditions without editing, so it must leave the

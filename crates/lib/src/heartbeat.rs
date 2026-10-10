@@ -22,36 +22,31 @@ pub struct ResolvedNote {
 /// patch.rs (enforced by a test there), where the top of the range means "off".
 pub const MAX_CUTOFF: f32 = 18000.0;
 
-/// Maximum highpass cutoff in Hz; equals the `highpass` parameter's `max` in
-/// patch.rs (enforced by a test there).  Sits far enough below
-/// `CUTOFF_RATE_FRACTION` of any real device rate that a highpass stage never
-/// needs rate-aware handling.
-pub const MAX_HIGHPASS: f32 = 2000.0;
-
-/// Largest boost or cut of the EQ band in dB; equals the `eq_db` parameter's
-/// bounds in patch.rs (enforced by a test there).
-pub const MAX_EQ_DB: f32 = 24.0;
-
-/// Widest voice spread in cents; equals the `spread` parameter's `max` in
-/// patch.rs (enforced by a test there).
-pub const MAX_SPREAD_CENTS: f32 = 100.0;
-
 /// Fraction of the sample rate above which a cutoff cannot be realized:
 /// fundsp's filters compute `tan(pi * cutoff / rate)`, which is only meaningful
 /// below Nyquist (rate / 2); 0.45 leaves headroom before the asymptote.
 const CUTOFF_RATE_FRACTION: f64 = 0.45;
 
-/// Highest stable filter cutoff in Hz at the given sample rate.
+/// Highest stable filter cutoff in Hz at the given sample rate.  This is the
+/// device-dependent hard limit on `highpass` and `eq_hz`, which patch.rs cannot
+/// declare statically.
+pub(crate) fn rate_ceiling(sample_rate: f64) -> f32 {
+  (CUTOFF_RATE_FRACTION * sample_rate) as f32
+}
+
+/// The rate ceiling, capped at the lowpass slider's top so that position is
+/// "off" on every common device.  It also caps the pitch-tracking ladder.
 pub(crate) fn cutoff_ceiling(sample_rate: f64) -> f32 {
-  MAX_CUTOFF.min((CUTOFF_RATE_FRACTION * sample_rate) as f32)
+  MAX_CUTOFF.min(rate_ceiling(sample_rate))
 }
 
 /// Effective highpass cutoff in Hz, or `None` when the filter is off.  `0 =
 /// off` means the filter stage is absent from the graph rather than parked at
 /// an inaudible sentinel cutoff, so "off" is bit-exact on every device.  The
 /// comparison also routes a NaN value to off.
-pub(crate) fn highpass_cutoff(patch: &Patch) -> Option<f32> {
-  (patch.highpass > 0.0).then_some((patch.highpass as f32).min(MAX_HIGHPASS))
+pub(crate) fn highpass_cutoff(patch: &Patch, sample_rate: f64) -> Option<f32> {
+  (patch.highpass > 0.0)
+    .then_some((patch.highpass as f32).min(rate_ceiling(sample_rate)))
 }
 
 /// Effective lowpass cutoff in Hz, or `None` when the filter is off.  Off sits
@@ -60,24 +55,10 @@ pub(crate) fn highpass_cutoff(patch: &Patch) -> Option<f32> {
 /// stage renders the setting exactly.  On 44.1/48 kHz devices the ceiling is
 /// `MAX_CUTOFF`, making the slider's top position a true bypass; only degraded
 /// low-rate devices (Bluetooth HFP, 22.05/16 kHz) pull it lower.  The
-/// comparison routes a NaN value to off; the 20 Hz floor matches the
-/// parameter's `min` in patch.rs, guarding values that arrive through config
-/// files, which bypass `set_param`'s clamping.
+/// comparison routes a NaN value to off.
 pub(crate) fn lowpass_cutoff(patch: &Patch, sample_rate: f64) -> Option<f32> {
   let cutoff = patch.lowpass as f32;
-  (cutoff < cutoff_ceiling(sample_rate)).then_some(cutoff.max(20.0))
-}
-
-/// `value` held to `lo..=hi`, with a non-finite value reading as `fallback`.
-/// Config files carry values past `set_param`'s clamping, and a NaN would
-/// poison a filter's state.
-fn bounded(value: f64, lo: f32, hi: f32, fallback: f32) -> f32 {
-  let value = value as f32;
-  if value.is_finite() {
-    value.clamp(lo, hi)
-  } else {
-    fallback
-  }
+  (cutoff < cutoff_ceiling(sample_rate)).then_some(cutoff)
 }
 
 /// One parametric EQ band in the form fundsp's bell takes: centre in Hz, Q,
@@ -90,13 +71,13 @@ pub(crate) struct EqBand {
 }
 
 impl EqBand {
-  /// The centre stays under the device's stable ceiling for the same reason
-  /// the lowpass cutoff does.
+  /// The band for a patch already held to its hard limits.  The centre's
+  /// upper limit is the device's rate ceiling.
   pub(crate) fn from_patch(patch: &Patch, sample_rate: f64) -> Self {
     EqBand {
-      hz: bounded(patch.eq_hz, 20.0, cutoff_ceiling(sample_rate), 20.0),
-      q: bounded(patch.eq_q, 0.1, 10.0, 1.0),
-      gain: db_amp(bounded(patch.eq_db, -MAX_EQ_DB, MAX_EQ_DB, 0.0)),
+      hz: (patch.eq_hz as f32).min(rate_ceiling(sample_rate)),
+      q: patch.eq_q as f32,
+      gain: db_amp(patch.eq_db as f32),
     }
   }
 
@@ -121,7 +102,8 @@ impl EqBand {
 fn with_filter_stages(mono: Net, patch: &Patch, sample_rate: f64) -> Net {
   [
     EqBand::from_patch(patch, sample_rate).stage(),
-    highpass_cutoff(patch).map(|hz| Net::wrap(Box::new(highpass_hz(hz, 0.7)))),
+    highpass_cutoff(patch, sample_rate)
+      .map(|hz| Net::wrap(Box::new(highpass_hz(hz, 0.7)))),
     lowpass_cutoff(patch, sample_rate)
       .map(|hz| Net::wrap(Box::new(lowpass_hz(hz, 0.7)))),
   ]
@@ -187,24 +169,13 @@ pub(crate) fn waveform_weights(patch: &Patch) -> (f32, f32, f32, f32) {
   } else {
     1.0
   } as f32;
-  let h = (patch.harshness_offset as f32).clamp(-1.0, 1.0);
+  let h = patch.harshness_offset as f32;
   (
-    (patch.sine_ratio as f32 * norm * (1.0 - h)).max(0.0),
+    patch.sine_ratio as f32 * norm * (1.0 - h),
     patch.tri_ratio as f32 * norm,
     (patch.saw_ratio as f32 * norm + h).max(0.0),
     patch.square_ratio as f32 * norm,
   )
-}
-
-/// Spread between the two main voices in cents, held to the parameter's
-/// bounds.
-pub(crate) fn spread_cents(patch: &Patch) -> f32 {
-  bounded(patch.spread, 0.0, MAX_SPREAD_CENTS, 0.0)
-}
-
-/// Level of the hiss source, held to the parameter's bounds.
-pub(crate) fn hiss_level(patch: &Patch) -> f32 {
-  bounded(patch.hiss, 0.0, 1.0, 0.0)
 }
 
 /// Pitch ratio of spread voice `voice` (0 = lower, 1 = upper), each half the
@@ -220,7 +191,7 @@ pub(crate) fn spread_voice_ratio(cents: f32, voice: u64) -> f32 {
 /// renders bit for bit, so a curve of 1 reads as `None` and the linear arms
 /// keep their plain expressions.
 pub(crate) fn envelope_curve(patch: &Patch) -> Option<f32> {
-  let curve = bounded(patch.envelope_curve, 0.25, 4.0, 1.0);
+  let curve = patch.envelope_curve as f32;
   (curve != 1.0).then_some(curve)
 }
 
@@ -310,7 +281,7 @@ pub(crate) fn reverb_stage(mix: f32) -> Option<Net> {
 /// Total wall-clock duration of a multi-note heartbeat.  Each note is
 /// independently timed from its offset, so the duration is the maximum across
 /// all notes of its envelope plus the echo and reverb tails it has engaged,
-/// plus a safety margin.
+/// plus a safety margin.  A length past `Duration`'s range saturates.
 pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
   if notes.is_empty() {
     return Duration::ZERO;
@@ -318,7 +289,7 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
   let max = notes
     .iter()
     .map(|n| {
-      let p = &n.patch;
+      let p = &n.patch.limited().0;
       let attack = p.attack_ms / 1000.0;
       let decay = p.decay_ms / 1000.0;
       let release = p.release_ms / 1000.0;
@@ -335,7 +306,7 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
       n.offset + attack + decay + p.duration + release + echo_tail + reverb_tail
     })
     .fold(0.0f64, f64::max);
-  Duration::from_secs_f64(max + 0.05)
+  saturating_secs(max + 0.05)
 }
 
 /// Content-only duration of a multi-note heartbeat: the maximum
@@ -345,7 +316,8 @@ pub fn heartbeat_notes_duration(notes: &[ResolvedNote]) -> Duration {
 /// letting the crossfade overlap sound with sound.  The per-note
 /// `gap` shifts repeat timing: positive adds silence between
 /// repetitions, negative causes overlapping re-triggers.  The
-/// result is clamped to a 0.05 s floor to prevent a tight loop.
+/// result is clamped to a 0.05 s floor to prevent a tight loop, and a
+/// length past `Duration`'s range saturates.
 pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
   if notes.is_empty() {
     return Duration::ZERO;
@@ -353,12 +325,20 @@ pub fn heartbeat_notes_content_duration(notes: &[ResolvedNote]) -> Duration {
   let max = notes
     .iter()
     .map(|n| {
-      let attack = n.patch.attack_ms / 1000.0;
-      let decay = n.patch.decay_ms / 1000.0;
-      n.offset + attack + decay + n.patch.duration + n.patch.gap
+      let p = &n.patch.limited().0;
+      let attack = p.attack_ms / 1000.0;
+      let decay = p.decay_ms / 1000.0;
+      n.offset + attack + decay + p.duration + p.gap
     })
     .fold(0.0f64, f64::max);
-  Duration::from_secs_f64(max.max(0.05))
+  saturating_secs(max.max(0.05))
+}
+
+/// `seconds` as a `Duration`.  A patch's times have no upper limit, and
+/// `Duration::from_secs_f64` panics past its range, so a note too long to
+/// represent lasts `Duration::MAX` instead.
+fn saturating_secs(seconds: f64) -> Duration {
+  Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX)
 }
 
 /// Build a complete stereo graph for a single note.  All synthesis
@@ -387,7 +367,7 @@ fn note_graph(
   let brightness = patch.brightness as f32;
   let resonance = patch.resonance as f32;
   let sub_mix = patch.sub_octave as f32;
-  let drive = (patch.drive as f32).max(0.01);
+  let drive = patch.drive as f32;
   let drive_norm = 1.0 / drive.tanh();
   let noise_mix = patch.noise_mix as f32;
   let crush_param = patch.crush as f32;
@@ -401,8 +381,8 @@ fn note_graph(
   let fm_ratio = patch.fm_ratio as f32;
   let fm_depth = patch.fm_depth as f32;
   let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
-  let spread = spread_cents(patch);
-  let hiss = hiss_level(patch);
+  let spread = patch.spread as f32;
+  let hiss = patch.hiss as f32;
   let adsr = Adsr {
     attack,
     decay,
@@ -524,14 +504,16 @@ fn note_graph(
 /// as a fully independent stereo graph with its own synthesis
 /// parameters, then summed via `Net`.  Per-note volume scales the
 /// note's amplitude.  The optional external volume `Shared`
-/// multiplies each note's output.
+/// multiplies each note's output.  Each patch is held to its hard limits
+/// first, so one built in code gets the same guarantees as one loaded from a
+/// config file.
 pub fn heartbeat_graph_with_notes(
   notes: &[ResolvedNote],
   external_volume: Option<&Shared>,
   sample_rate: f64,
 ) -> Box<dyn AudioUnit> {
   let mut iter = notes.iter().enumerate().map(|(index, n)| {
-    let mut p = n.patch.clone();
+    let mut p = n.patch.limited().0;
     p.amplitude *= n.volume;
     Net::wrap(note_graph(
       &p,
@@ -555,6 +537,7 @@ pub fn heartbeat_graph_with_notes(
 /// Build an audio graph for a single boop.  Duration and
 /// frequency come from the patch itself.
 pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
+  let patch = &patch.limited().0;
   let freq = pitch_hz(patch);
   let amp = patch.amplitude as f32;
   let attack = (patch.attack_ms / 1000.0) as f32;
@@ -562,10 +545,10 @@ pub fn boop_graph(patch: &Patch, sample_rate: f64) -> Box<dyn AudioUnit> {
   let release = (patch.release_ms / 1000.0).min(patch.duration * 0.5) as f32;
   let dur = patch.duration as f32;
   let (sine_w, tri_w, saw_w, square_w) = waveform_weights(patch);
-  let spread = spread_cents(patch);
-  let hiss = hiss_level(patch);
+  let spread = patch.spread as f32;
+  let hiss = patch.hiss as f32;
 
-  let drive = (patch.drive as f32).max(0.01);
+  let drive = patch.drive as f32;
   let drive_norm = 1.0 / drive.tanh();
   let noise_mix = patch.noise_mix as f32;
   let crush_param = patch.crush as f32;
@@ -930,19 +913,19 @@ mod tests {
     patch.lowpass = f64::NAN;
     assert_eq!(lowpass_cutoff(&patch, 44100.0), None);
     patch.lowpass = 0.0;
-    assert_eq!(lowpass_cutoff(&patch, 44100.0), Some(20.0));
+    assert_eq!(lowpass_cutoff(&patch, 44100.0), Some(0.0));
   }
 
   #[test]
   fn highpass_cutoff_bypasses_at_zero() {
     let mut patch = Patch::default();
-    assert_eq!(highpass_cutoff(&patch), None);
+    assert_eq!(highpass_cutoff(&patch, 44100.0), None);
     patch.highpass = 120.0;
-    assert_eq!(highpass_cutoff(&patch), Some(120.0));
+    assert_eq!(highpass_cutoff(&patch, 44100.0), Some(120.0));
     patch.highpass = f64::NAN;
-    assert_eq!(highpass_cutoff(&patch), None);
+    assert_eq!(highpass_cutoff(&patch, 44100.0), None);
     patch.highpass = 30000.0;
-    assert_eq!(highpass_cutoff(&patch), Some(MAX_HIGHPASS));
+    assert_eq!(highpass_cutoff(&patch, 44100.0), Some(rate_ceiling(44100.0)));
   }
 
   /// Render note_graph at various frequencies using the star-trek-ok patch
@@ -1140,8 +1123,9 @@ mod tests {
       saw_ratio: 1.0,
       ..Default::default()
     };
-    // The offset is clamped to -1, and a negative saw weight floors at zero.
-    assert_eq!(waveform_weights(&soft), (1.0, 0.0, 0.0, 0.0));
+    // The patch's hard limit holds the offset at -1, and a negative saw weight
+    // floors at zero.
+    assert_eq!(waveform_weights(&soft.limited().0), (1.0, 0.0, 0.0, 0.0));
   }
 
   #[test]
@@ -1311,20 +1295,30 @@ mod tests {
   }
 
   #[test]
-  fn config_values_past_the_bounds_are_held() {
-    let with_spread = |spread| Patch {
-      spread,
+  fn an_unrepresentably_long_note_saturates_instead_of_panicking() {
+    let notes = single(Patch {
+      attack_ms: 1e25,
       ..Default::default()
+    });
+    assert_eq!(heartbeat_notes_duration(&notes), Duration::MAX);
+    assert_eq!(heartbeat_notes_content_duration(&notes), Duration::MAX);
+  }
+
+  #[test]
+  fn graph_entry_holds_a_hand_built_patch_to_its_hard_limits() {
+    let at_the_limits = Patch {
+      reverb_mix: 1.0,
+      harshness_offset: -1.0,
+      ..flat_patch()
     };
-    assert_eq!(spread_cents(&with_spread(f64::NAN)), 0.0);
-    assert_eq!(spread_cents(&with_spread(-5.0)), 0.0);
-    assert_eq!(spread_cents(&with_spread(500.0)), MAX_SPREAD_CENTS);
+    let past_the_limits = Patch {
+      reverb_mix: 1.5,
+      harshness_offset: -3.0,
+      ..flat_patch()
+    };
     assert_eq!(
-      hiss_level(&Patch {
-        hiss: 3.0,
-        ..Default::default()
-      }),
-      1.0
+      left_channel(&single(at_the_limits), 0.1),
+      left_channel(&single(past_the_limits), 0.1)
     );
   }
 
@@ -1349,16 +1343,11 @@ mod tests {
     });
     assert!(boosted.engaged());
     assert!((boosted.gain - 1.995).abs() < 0.01);
-    assert!(!band(Patch {
-      eq_db: f64::NAN,
-      ..Default::default()
-    })
-    .engaged());
     let high = band(Patch {
       eq_hz: 30000.0,
       ..Default::default()
     });
-    assert_eq!(high.hz, cutoff_ceiling(44100.0));
+    assert_eq!(high.hz, rate_ceiling(44100.0));
   }
 
   #[test]
@@ -1394,20 +1383,6 @@ mod tests {
   #[test]
   fn envelope_curve_one_is_linear() {
     assert_eq!(envelope_curve(&Patch::default()), None);
-    assert_eq!(
-      envelope_curve(&Patch {
-        envelope_curve: f64::NAN,
-        ..Default::default()
-      }),
-      None
-    );
-    assert_eq!(
-      envelope_curve(&Patch {
-        envelope_curve: 9.0,
-        ..Default::default()
-      }),
-      Some(4.0)
-    );
 
     let (attack, decay, sustain, body, release) =
       (0.02f32, 0.05f32, 0.4f32, 0.1f32, 0.15f32);

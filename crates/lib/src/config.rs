@@ -4,11 +4,13 @@
 //! it has exactly one definition that both binaries' `MergeConfig`
 //! derives plug in via `extra_file`.
 
+use crate::patch::{LimitViolation, Patch};
 use crate::HeartbeatConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
+use tracing::warn;
 
 /// Tracks which patches are overrides (derived from a base patch
 /// with a sparse delta) so the UI can display inherited vs
@@ -107,6 +109,70 @@ pub enum ConfigError {
     #[source]
     source: Box<toml::de::Error>,
   },
+
+  #[error(
+    "Patch {patch:?} breaks a hard limit, which --strict-limits makes an \
+     error: {violation}"
+  )]
+  PatchLimit {
+    patch: String,
+    violation: LimitViolation,
+  },
+}
+
+/// A value past a hard limit, named by the patch that carried it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatchLimitViolation {
+  pub patch: String,
+  pub violation: LimitViolation,
+}
+
+impl std::fmt::Display for PatchLimitViolation {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "Patch {:?}: {}", self.patch, self.violation)
+  }
+}
+
+/// `patch` held to its hard limits, with each value that moved.  Under
+/// `strict` the first one fails instead.
+///
+/// A config file is read before logging starts, so a warning raised here would
+/// be lost.  The violations are returned instead, and callers pass them to
+/// `warn_limit_violations` once logging is up.
+pub fn patch_with_violations(
+  name: &str,
+  patch: &Patch,
+  strict: bool,
+) -> Result<(Patch, Vec<PatchLimitViolation>), ConfigError> {
+  let (limited, violations) = patch.limited();
+  let named = violations.into_iter().map(|violation| PatchLimitViolation {
+    patch: name.to_string(),
+    violation,
+  });
+  if strict {
+    named
+      .into_iter()
+      .next()
+      .map_or(Ok((limited, vec![])), |breach| {
+        Err(ConfigError::PatchLimit {
+          patch: breach.patch,
+          violation: breach.violation,
+        })
+      })
+  } else {
+    Ok((limited, named.collect()))
+  }
+}
+
+/// Logs one warning per value a hard limit moved.
+pub fn warn_limit_violations(violations: &[PatchLimitViolation]) {
+  violations.iter().for_each(|violation| {
+    warn!(
+      patch = %violation.patch,
+      parameter = violation.violation.param,
+      "{violation}"
+    )
+  });
 }
 
 /// One numeric range exposed to the UI for slider widgets.

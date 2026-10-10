@@ -39,6 +39,8 @@ cargo-husky = { version = "1", default-features = false, features = ["user-hooks
 serde_json = { workspace = true }
 # TOML fixtures for the config and patch-library tests.
 toml = { workspace = true }
+# Patch-library files for the library-loading tests.
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

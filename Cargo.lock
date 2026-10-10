@@ -3689,6 +3689,7 @@ dependencies = [
  "serde_json",
  "sonify-health-voice-derive",
  "tap",
+ "tempfile",
  "thiserror 2.0.18",
  "toml",
  "tracing",

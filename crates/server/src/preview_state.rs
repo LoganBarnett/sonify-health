@@ -230,6 +230,9 @@ pub struct PreviewState {
   /// or spawns play threads.  Surfaced in the state snapshot so a
   /// connected client knows the instance can't sound itself.
   pub headless: bool,
+  /// A dashboard import or a remote snapshot carrying a value past a hard
+  /// limit is rejected rather than held at the limit with a warning.
+  pub strict_limits: bool,
 }
 
 impl PreviewState {
@@ -284,6 +287,16 @@ impl PreviewState {
       broadcast_tx,
       probe_log_tx,
       headless,
+      strict_limits: false,
+    }
+  }
+
+  /// This state with `strict_limits` set, so only the daemon, which reads
+  /// the flag from its config, has to name it.
+  pub fn with_strict_limits(self, strict_limits: bool) -> Self {
+    Self {
+      strict_limits,
+      ..self
     }
   }
 
@@ -652,6 +665,8 @@ impl PreviewState {
           "max": m.max,
           "step": m.step,
           "logarithmic": m.logarithmic,
+          "limit_min": m.limit_min,
+          "limit_max": m.limit_max,
         })
       })
       .collect();

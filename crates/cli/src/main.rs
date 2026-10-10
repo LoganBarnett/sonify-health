@@ -23,6 +23,9 @@ enum ApplicationError {
   #[error("Unknown patch name: {0}")]
   UnknownPatch(String),
 
+  #[error("The patch's override flags break a hard limit: {0}")]
+  OverrideLimit(#[source] sonify_health_lib::config::ConfigError),
+
   #[error("Audio playback failed: {0}")]
   AudioPlayback(#[from] AudioError),
 
@@ -41,6 +44,7 @@ enum ApplicationError {
 // command dispatch.
 #[foundation_main]
 pub fn main(config: Config) -> Result<ExitCode, ApplicationError> {
+  sonify_health_lib::config::warn_limit_violations(&config.limit_violations);
   debug!(
     log_level = ?config.log_level,
     log_format = ?config.log_format,
@@ -53,7 +57,7 @@ pub fn main(config: Config) -> Result<ExitCode, ApplicationError> {
       run_preview(&config, patch, *continuous)?
     }
     Command::Print { format, patch } => {
-      run_print(&config, patch, format.clone())
+      run_print(&config, patch, format.clone())?
     }
   }
 
@@ -71,7 +75,9 @@ fn run_preview(
     return Err(ApplicationError::UnknownPatch(patch_args.patch_name.clone()));
   }
 
-  let patch = patch_args.resolve_patch(&config.library);
+  let patch = patch_args
+    .resolve_patch(&config.library, config.strict_limits)
+    .map_err(ApplicationError::OverrideLimit)?;
   debug!(?patch, "Resolved patch");
   info!(
     patch_name = %patch_args.patch_name,
@@ -148,13 +154,16 @@ fn run_print(
   config: &Config,
   patch_args: &CliPatchOverrides,
   format: PrintFormat,
-) {
+) -> Result<(), ApplicationError> {
   let output = match format {
     PrintFormat::Toml => print::format_toml(&config.library),
     PrintFormat::Nix => print::format_nix(&config.library),
-    PrintFormat::Cli => {
-      print::format_cli(&patch_args.resolve_patch(&config.library))
-    }
+    PrintFormat::Cli => print::format_cli(
+      &patch_args
+        .resolve_patch(&config.library, config.strict_limits)
+        .map_err(ApplicationError::OverrideLimit)?,
+    ),
   };
   println!("{output}");
+  Ok(())
 }
