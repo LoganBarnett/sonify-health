@@ -3,6 +3,11 @@
 
 * Upcoming
 ** Added
+** Fixes
+** Breaking
+** Maintenance
+* v0.44.0
+** Added
 1. The dashboard's number box beside each patch slider accepts values past the
    slider, up to the parameter's hard limits.  No action needed.
 2. ~strict_limits~ (~--strict-limits true~, or ~strictLimits~ in the Nix
